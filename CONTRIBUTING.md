@@ -48,6 +48,29 @@ Fix focus order:
 
 Avoid mixing unrelated refactors with behavior changes unless the refactor is required to fix the issue safely.
 
+## Branch expectations
+
+JellyRip currently has two maintained lines:
+
+- `codex/non-ai-main` - deterministic non-AI baseline work
+- `codex/assist-layer-split` - assist, provider, diagnostic, and other
+  AI-assisted work
+
+Put baseline ripping and file-move fixes in `codex/non-ai-main` first.
+If the same fix is needed in the assist line, port it after the baseline
+version is correct.
+
+For anything AI-touched, keep the behavior bounded:
+
+- suggestions must be visible
+- suggestions must stay optional
+- suggestions must be reversible
+- explicit user input must win every time
+
+AI-assisted logic must not silently choose final rip targets, extras,
+episode numbering, metadata IDs, or move destinations without a manual
+confirmation layer.
+
 ## Development setup
 
 Requirements:

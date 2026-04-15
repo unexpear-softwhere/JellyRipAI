@@ -17,6 +17,21 @@ should be treated as non-final.
 - Quality target: practical and safe for testing,
   not yet stable enough to treat as finished software
 
+## Active Branches
+
+JellyRip is currently maintained as two separate lines:
+
+- `codex/non-ai-main` - the non-AI baseline. This line keeps the core
+  ripping, validation, organization, logging, and update workflows
+  without assistant or AI-driven features.
+- `codex/assist-layer-split` - the assist-feature line. This line
+  includes the baseline workflows plus assistant, provider, diagnostic,
+  and other AI-assisted features.
+
+Rule of thumb: deterministic core behavior belongs in the non-AI line
+first. Assistive features can suggest or prefill, but they must stay
+visible, optional, reversible, and weaker than explicit user input.
+
 ## What JellyRip Does
 
 - rips movie and TV discs with MakeMKV
@@ -42,6 +57,11 @@ should be treated as non-final.
 ```bash
 git clone https://github.com/unexpear/JellyRip.git
 cd JellyRip
+git fetch origin
+# non-AI baseline
+# git switch --track origin/codex/non-ai-main
+# assist/AI line
+git switch --track origin/codex/assist-layer-split
 pip install -r requirements.txt
 python main.py
 ```
@@ -153,6 +173,10 @@ This runs tests, checks version consistency, builds both executables,
 pushes code, and publishes a GitHub release with assets attached in the
 correct order. It also refuses to run from a dirty working tree or a
 branch other than `main`. Never create a release without assets.
+
+If you are working from one of the split lines above, update the release
+workflow before cutting a release instead of forcing the existing
+`main`-only script.
 
 ## Support and Reporting
 
