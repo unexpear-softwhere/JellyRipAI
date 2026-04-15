@@ -172,11 +172,8 @@ release.bat 1.0.16
 This runs tests, checks version consistency, builds both executables,
 pushes code, and publishes a GitHub release with assets attached in the
 correct order. It also refuses to run from a dirty working tree or a
-branch other than `main`. Never create a release without assets.
-
-If you are working from one of the split lines above, update the release
-workflow before cutting a release instead of forcing the existing
-`main`-only script.
+branch other than `codex/non-ai-main`. Official releases should be cut
+from the canonical non-AI line. Never create a release without assets.
 
 ## Support and Reporting
 

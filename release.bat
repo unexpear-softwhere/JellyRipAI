@@ -13,6 +13,7 @@ if "%VERSION%"=="" (
     echo Example: release.bat 1.0.16
     exit /b 1
 )
+set "RELEASE_BRANCH=codex/non-ai-main"
 
 set "PYTHON_EXE=.venv\Scripts\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
@@ -33,8 +34,8 @@ if errorlevel 1 (
     echo ABORT: Could not determine current git branch.
     exit /b 1
 )
-if /I not "%CURRENT_BRANCH%"=="main" (
-    echo ABORT: Releases must be created from branch main. Current branch: %CURRENT_BRANCH%
+if /I not "%CURRENT_BRANCH%"=="%RELEASE_BRANCH%" (
+    echo ABORT: Releases must be created from branch %RELEASE_BRANCH%. Current branch: %CURRENT_BRANCH%
     exit /b 1
 )
 for /f "delims=" %%I in ('git status --porcelain --untracked-files=normal') do (
@@ -175,7 +176,7 @@ echo.
 
 REM ---- Step 7: Push code ----
 echo [7/8] Pushing to GitHub...
-git push origin main
+git push origin "%RELEASE_BRANCH%"
 if errorlevel 1 (
     echo ABORT: git push failed.
     exit /b 1
