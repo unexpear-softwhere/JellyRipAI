@@ -8,7 +8,14 @@ import tempfile
 import threading
 import urllib.error
 import webbrowser
-from shared.runtime import __version__
+from shared.runtime import (
+    APP_DISPLAY_NAME,
+    APP_RELEASE_REPO,
+    APP_RELEASE_TAG_PREFIX,
+    APP_UPDATER_ASSET_PREFERENCE,
+    APP_VARIANT,
+    __version__,
+)
 from utils.updater import (
     download_asset,
     fetch_latest_release,
@@ -24,7 +31,7 @@ def launch_downloaded_update(gui, downloaded_path):
         is_installer = os.path.basename(downloaded_path).lower().endswith("installer.exe")
         gui.controller.log(
             "A UAC permission prompt may appear.\n"
-            "JellyRip will now close so files can be replaced."
+            f"{APP_DISPLAY_NAME} will now close so files can be replaced."
         )
         gui.engine.abort()
         gui.after(500, gui.destroy)
@@ -55,7 +62,8 @@ def launch_downloaded_update(gui, downloaded_path):
         else:
             os.startfile(downloaded_path)
         # Best-effort cleanup after launch. Run detached so cleanup can
-        if update_dir and os.path.basename(update_dir).startswith("JellyRipUpdate_"):
+        expected_prefix = f"JellyRip{APP_VARIANT.upper()}Update_"
+        if update_dir and os.path.basename(update_dir).startswith(expected_prefix):
             safe_dir = update_dir.replace("'", "''")
             cleanup_cmd = (
                 f"for($i=0;$i -lt 120;$i++){{"
@@ -115,8 +123,10 @@ def check_for_updates(gui):
     def worker():
         try:
             release = fetch_latest_release(
-                "unexpear/JellyRip",
+                APP_RELEASE_REPO,
                 include_prereleases=True,
+                preferred_assets=APP_UPDATER_ASSET_PREFERENCE,
+                tag_prefix=APP_RELEASE_TAG_PREFIX,
             )
         except urllib.error.URLError as e:
             gui.controller.log(f"Update check failed: {e}")
@@ -181,7 +191,7 @@ def check_for_updates(gui):
             return
 
         asset_url = release.get("asset_url") or ""
-        asset_name = release.get("asset_name") or "JellyRip.exe"
+        asset_name = release.get("asset_name") or APP_UPDATER_ASSET_PREFERENCE[-1]
         page_url = release.get("html_url") or ""
 
         if not asset_url:
@@ -191,7 +201,9 @@ def check_for_updates(gui):
             gui.after(0, _finish_ready)
             return
 
-        update_dir = tempfile.mkdtemp(prefix="JellyRipUpdate_")
+        update_dir = tempfile.mkdtemp(
+            prefix=f"JellyRip{APP_VARIANT.upper()}Update_"
+        )
         destination = os.path.join(update_dir, asset_name)
 
         gui.set_status("Downloading update...")

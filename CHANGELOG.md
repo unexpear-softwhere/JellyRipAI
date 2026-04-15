@@ -9,6 +9,7 @@
 - Improved FFmpeg abort handling, copy-progress logging, and transcode validation for more reliable encode and packaging flows.
 - Restored the richer `JellyRip.spec` release configuration so packaged builds consistently carry version metadata, bundled FFmpeg assets, and runtime dependencies.
 - Aligned release metadata on the `1.0.16` line across the app runtime, installer, docs, tester worksheet, and release notes.
+- Carved out an AI-only release lane with separate `JellyRipAI.exe` and `JellyRipAIInstaller.exe` artifacts, an `ai-v*` GitHub tag channel, and isolated AI app/install identities so packaged AI builds do not collide with the main line.
 
 ### Fixed
 

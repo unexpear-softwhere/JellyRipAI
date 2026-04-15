@@ -10,10 +10,10 @@ should be treated as non-final.
 
 ## Project Status
 
-- Current unstable line: `v1.0.16` (latest unstable pre-release)
+- Current unstable line: `ai-v1.0.16` (latest unstable AI pre-release)
 - Platform target: Windows
 - Runtime target: Python 3.13+
-- Distribution target: standalone `JellyRip.exe` and optional installer
+- Distribution target: standalone `JellyRipAI.exe` and optional installer
 - Quality target: practical and safe for testing,
   not yet stable enough to treat as finished software
 
@@ -21,12 +21,12 @@ should be treated as non-final.
 
 JellyRip is currently maintained as two separate lines:
 
-- `codex/non-ai-main` - the non-AI baseline. This line keeps the core
-  ripping, validation, organization, logging, and update workflows
-  without assistant or AI-driven features.
-- `codex/assist-layer-split` - the assist-feature line. This line
-  includes the baseline workflows plus assistant, provider, diagnostic,
-  and other AI-assisted features.
+- `main` - the non-AI baseline. This line keeps the core ripping,
+  validation, organization, logging, and update workflows without
+  assistant or AI-driven features.
+- `ai` - the assist-feature line. This line includes the baseline
+  workflows plus assistant, provider, diagnostic, and other
+  AI-assisted features.
 
 Rule of thumb: deterministic core behavior belongs in the non-AI line
 first. Assistive features can suggest or prefill, but they must stay
@@ -48,10 +48,10 @@ Branch-specific documentation for the assist line:
 
 ### From GitHub release
 
-(recommended, currently `v1.0.16` unstable pre-release)
+(recommended, currently `ai-v1.0.16` unstable AI pre-release)
 
-1. Go to the [current unstable release page](https://github.com/unexpear/JellyRip/releases/tag/v1.0.16).
-2. Download `JellyRipInstaller.exe` (installer) or `JellyRip.exe` (standalone).
+1. Go to the [current unstable AI release page](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.16).
+2. Download `JellyRipAIInstaller.exe` (installer) or `JellyRipAI.exe` (standalone).
 3. If SmartScreen/Defender flags the file, whitelist the download folder
   first (common PyInstaller false positive).
 4. Run and open **Settings** to confirm MakeMKV and ffprobe paths before first rip.
@@ -62,10 +62,10 @@ Branch-specific documentation for the assist line:
 git clone https://github.com/unexpear/JellyRip.git
 cd JellyRip
 git fetch origin
-# non-AI baseline
-# git switch --track origin/codex/non-ai-main
+# main baseline
+# git switch --track origin/main
 # assist/AI line
-git switch --track origin/codex/assist-layer-split
+git switch --track origin/ai
 pip install -r requirements.txt
 python main.py
 ```
@@ -93,7 +93,7 @@ paths before the first rip.
 
 ## Configuration
 
-Settings are stored at `%APPDATA%\JellyRip\config.json` on Windows.
+Settings are stored at `%APPDATA%\JellyRipAI\config.json` on Windows.
 
 You can configure:
 
@@ -161,8 +161,8 @@ Commercial installer builds require an appropriate Inno Setup license.
 
 Expected outputs:
 
-- `dist/JellyRip.exe`
-- `dist/JellyRipInstaller.exe`
+- `dist/JellyRipAI.exe`
+- `dist/JellyRipAIInstaller.exe`
 - `dist\ffmpeg.exe`, `dist\ffprobe.exe`, and `dist\ffplay.exe`
 - `dist\FFmpeg-LICENSE.txt` and `dist\FFmpeg-README.txt`
 
@@ -178,8 +178,9 @@ release.bat 1.0.16
 This runs tests, checks version consistency, builds both executables,
 pushes code, and publishes a GitHub release with assets attached in the
 correct order. It also refuses to run from a dirty working tree or a
-branch other than `codex/non-ai-main`. Official releases should be cut
-from the canonical non-AI line. Never create a release without assets.
+branch other than `ai`. AI releases are tagged as `ai-vX.Y.Z` so they
+can coexist with the main branch's release assets. Never create a
+release without assets.
 
 ## Support and Reporting
 

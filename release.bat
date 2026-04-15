@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM  JellyRip release pipeline — enforces correct order:
+REM  JellyRip AI release pipeline — enforces correct order:
 REM    git-check -> tests -> build -> verify -> push -> publish
 REM
 REM  Usage:  release.bat 1.0.16
@@ -13,7 +13,8 @@ if "%VERSION%"=="" (
     echo Example: release.bat 1.0.16
     exit /b 1
 )
-set "RELEASE_BRANCH=codex/non-ai-main"
+set "RELEASE_BRANCH=ai"
+set "RELEASE_TAG=ai-v%VERSION%"
 
 set "PYTHON_EXE=.venv\Scripts\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
@@ -23,7 +24,7 @@ if not exist "%ISCC_EXE%" set ISCC_EXE=%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC
 
 echo.
 echo ========================================
-echo  JellyRip Release Pipeline v%VERSION%
+echo  JellyRip AI Release Pipeline v%VERSION%
 echo ========================================
 echo.
 
@@ -107,7 +108,7 @@ echo       All files show v%VERSION%.
 echo.
 
 REM ---- Step 4: Build exe ----
-echo [4/8] Building JellyRip.exe...
+echo [4/8] Building JellyRipAI.exe...
 if exist dist rmdir /s /q dist >nul 2>&1
 if exist build rmdir /s /q build >nul 2>&1
 %PYTHON_EXE% -m PyInstaller JellyRip.spec >nul 2>&1
@@ -115,8 +116,8 @@ if errorlevel 1 (
     echo ABORT: PyInstaller build failed.
     exit /b 1
 )
-if not exist dist\JellyRip.exe (
-    echo ABORT: dist\JellyRip.exe not found after build.
+if not exist dist\JellyRipAI.exe (
+    echo ABORT: dist\JellyRipAI.exe not found after build.
     exit /b 1
 )
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\stage_ffmpeg_bundle.ps1 >nul 2>&1
@@ -126,7 +127,7 @@ if errorlevel 1 (
 )
 for %%F in (dist\ffmpeg.exe dist\ffprobe.exe dist\ffplay.exe) do (
     if not exist %%F (
-        echo ABORT: %%F is missing; JellyRip releases intentionally bundle FFmpeg.
+        echo ABORT: %%F is missing; JellyRip AI releases intentionally bundle FFmpeg.
         exit /b 1
     )
 )
@@ -136,11 +137,11 @@ for %%F in (dist\FFmpeg-LICENSE.txt dist\FFmpeg-README.txt) do (
         exit /b 1
     )
 )
-echo       dist\JellyRip.exe built.
+echo       dist\JellyRipAI.exe built.
 echo.
 
 REM ---- Step 5: Build installer ----
-echo [5/8] Building JellyRipInstaller.exe...
+echo [5/8] Building JellyRipAIInstaller.exe...
 if not exist "%ISCC_EXE%" (
     echo ABORT: Inno Setup compiler not found.
     exit /b 1
@@ -150,24 +151,24 @@ if errorlevel 1 (
     echo ABORT: Installer build failed.
     exit /b 1
 )
-if not exist dist\JellyRipInstaller.exe (
-    echo ABORT: dist\JellyRipInstaller.exe not found after build.
+if not exist dist\JellyRipAIInstaller.exe (
+    echo ABORT: dist\JellyRipAIInstaller.exe not found after build.
     exit /b 1
 )
-echo       dist\JellyRipInstaller.exe built.
+echo       dist\JellyRipAIInstaller.exe built.
 echo.
 
 REM ---- Step 6: Verify build outputs ----
 echo [6/8] Verifying build outputs...
-for %%F in (dist\JellyRip.exe) do (
+for %%F in (dist\JellyRipAI.exe) do (
     if %%~zF LSS 1000000 (
-        echo ABORT: JellyRip.exe is suspiciously small (%%~zF bytes).
+        echo ABORT: JellyRipAI.exe is suspiciously small (%%~zF bytes).
         exit /b 1
     )
 )
-for %%F in (dist\JellyRipInstaller.exe) do (
+for %%F in (dist\JellyRipAIInstaller.exe) do (
     if %%~zF LSS 1000000 (
-        echo ABORT: JellyRipInstaller.exe is suspiciously small (%%~zF bytes).
+        echo ABORT: JellyRipAIInstaller.exe is suspiciously small (%%~zF bytes).
         exit /b 1
     )
 )
@@ -185,24 +186,24 @@ echo       Code pushed.
 echo.
 
 REM ---- Step 8: Create release with assets ----
-echo [8/8] Publishing release v%VERSION% with assets...
-gh release create v%VERSION% dist\JellyRip.exe dist\JellyRipInstaller.exe LICENSE THIRD_PARTY_NOTICES.md dist\FFmpeg-LICENSE.txt dist\FFmpeg-README.txt --title "JellyRip v%VERSION% (UNSTABLE)" --notes-file release_notes.txt --prerelease
+echo [8/8] Publishing release %RELEASE_TAG% with assets...
+gh release create %RELEASE_TAG% dist\JellyRipAI.exe dist\JellyRipAIInstaller.exe LICENSE THIRD_PARTY_NOTICES.md dist\FFmpeg-LICENSE.txt dist\FFmpeg-README.txt --title "JellyRip AI v%VERSION% (UNSTABLE)" --notes-file release_notes.txt --prerelease
 if errorlevel 1 (
     echo ABORT: gh release create failed.
     exit /b 1
 )
 echo.
 echo ========================================
-echo  Release v%VERSION% published!
+echo  Release %RELEASE_TAG% published!
 echo ========================================
 echo.
 echo  Assets:
-echo    - JellyRip.exe
-echo    - JellyRipInstaller.exe
+echo    - JellyRipAI.exe
+echo    - JellyRipAIInstaller.exe
 echo    - LICENSE
 echo    - THIRD_PARTY_NOTICES.md
 echo    - FFmpeg-LICENSE.txt
 echo    - FFmpeg-README.txt
 echo.
-echo  Verify: https://github.com/unexpear/JellyRip/releases/tag/v%VERSION%
+echo  Verify: https://github.com/unexpear/JellyRip/releases/tag/%RELEASE_TAG%
 echo.

@@ -30,11 +30,12 @@ def test_release_metadata_matches_current_version():
     assert f'#define MyAppVersion "{version}"' in installer_text
     assert "VersionInfoVersion={#MyAppVersion}" in installer_text
     assert "VersionInfoProductVersion={#MyAppVersion}" in installer_text
-    assert f"- Current unstable line: `v{version}`" in readme
-    assert f"(recommended, currently `v{version}` unstable pre-release)" in readme
+    assert f"- Current unstable line: `ai-v{version}`" in readme
+    assert f"(recommended, currently `ai-v{version}` unstable AI pre-release)" in readme
+    assert "Settings are stored at `%APPDATA%\\JellyRipAI\\config.json` on Windows." in readme
     assert f"v{version}" in _read("TESTERS.md")
-    assert f"v{version}" in _read("release_notes.txt")
-    assert f"v{version}" in _read("release_notes.md")
+    assert f"ai-v{version}" in _read("release_notes.txt")
+    assert f"ai-v{version}" in _read("release_notes.md")
     assert re.search(rf"^## \[{re.escape(version)}\] - ", changelog_text, re.MULTILINE)
 
 
@@ -45,6 +46,9 @@ def test_readme_points_to_spec_build_and_release_notes_txt():
     assert "pyinstaller JellyRip.spec" in readme
     assert "release_notes.txt" in readme
     assert f"release.bat {version}" in readme
+    assert "git switch --track origin/ai" in readme
+    assert "JellyRipAI.exe" in readme
+    assert "JellyRipAIInstaller.exe" in readme
 
 
 def test_release_script_checks_git_state_and_release_notes():
@@ -57,7 +61,11 @@ def test_release_script_checks_git_state_and_release_notes():
     assert "tools\\stage_ffmpeg_bundle.ps1" in release_script
     assert "LICENSE THIRD_PARTY_NOTICES.md dist\\FFmpeg-LICENSE.txt dist\\FFmpeg-README.txt" in release_script
     assert "dist\\ffmpeg.exe dist\\ffprobe.exe dist\\ffplay.exe" in release_script
-    assert "is missing; JellyRip releases intentionally bundle FFmpeg" in release_script
+    assert 'set "RELEASE_BRANCH=ai"' in release_script
+    assert 'set "RELEASE_TAG=ai-v%VERSION%"' in release_script
+    assert "dist\\JellyRipAI.exe" in release_script
+    assert "dist\\JellyRipAIInstaller.exe" in release_script
+    assert "JellyRip AI releases intentionally bundle FFmpeg" in release_script
     assert f"REM  Usage:  release.bat {version}" in release_script
     assert f"echo Example: release.bat {version}" in release_script
 
@@ -73,9 +81,13 @@ def test_release_metadata_tracks_license_notices():
     assert "THIRD_PARTY_NOTICES.md" in readme
     assert "2026-04-01-git-eedf8f0165-full_build-www.gyan.dev" in notices
     assert "https://github.com/FFmpeg/FFmpeg/commit/eedf8f0165" in notices
+    assert 'AppName={#MyAppName}' in installer
+    assert 'DefaultDirName={localappdata}\\Programs\\JellyRip AI' in installer
+    assert 'OutputBaseFilename=JellyRipAIInstaller' in installer
     assert 'Source: "..\\dist\\ffmpeg.exe"' in installer
     assert 'Source: "..\\dist\\ffprobe.exe"' in installer
     assert 'Source: "..\\dist\\ffplay.exe"' in installer
+    assert 'Source: "..\\dist\\JellyRipAI.exe"' in installer
     assert 'Source: "..\\LICENSE"' in installer
     assert 'Source: "..\\THIRD_PARTY_NOTICES.md"' in installer
     assert 'Source: "..\\dist\\FFmpeg-LICENSE.txt"' in installer
@@ -94,6 +106,9 @@ def test_spec_bundles_ffmpeg_intentionally():
     assert "binaries=FFMPEG_BINARIES" in spec
     assert "*FFMPEG_NOTICE_DATAS" in spec
     assert "THIRD_PARTY_NOTICES.md" in spec
+    assert 'APP_EXE_BASENAME = "JellyRipAI"' in spec
+    assert 'name=APP_EXE_BASENAME' in spec
+    assert 'StringStruct("OriginalFilename", APP_EXE_NAME)' in spec
     assert "ffmpeg.exe" in spec.lower()
     assert "ffprobe.exe" in spec.lower()
     assert "ffplay.exe" in spec.lower()
@@ -101,18 +116,19 @@ def test_spec_bundles_ffmpeg_intentionally():
     assert "Desktop/ffmpeg" not in spec
 
 
-def test_root_release_binary_is_not_tracked():
+def test_release_binaries_are_not_tracked():
     git_exe = shutil.which("git")
     if not git_exe:
         return
 
-    result = subprocess.run(
-        [git_exe, "ls-files", "--error-unmatch", "JellyRip.exe"],
-        cwd=REPO_ROOT,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
+    for path in ("JellyRip.exe", "JellyRipAI.exe"):
+        result = subprocess.run(
+            [git_exe, "ls-files", "--error-unmatch", path],
+            cwd=REPO_ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
 
-    assert result.returncode != 0, "JellyRip.exe should not be tracked in git"
+        assert result.returncode != 0, f"{path} should not be tracked in git"

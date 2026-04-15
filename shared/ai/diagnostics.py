@@ -5,9 +5,9 @@ Dual-layer logging:
   Layer B: System log (this module) — always writes, survives GUI failure
 
 System log location:
-  Windows: %LOCALAPPDATA%/JellyRip/logs/system.log
-  macOS:   ~/Library/Logs/JellyRip/system.log
-  Linux:   ~/.local/share/JellyRip/logs/system.log
+  Windows: %LOCALAPPDATA%/JellyRipAI/logs/system.log
+  macOS:   ~/Library/Logs/JellyRipAI/logs/system.log
+  Linux:   ~/.local/share/JellyRipAI/logs/system.log
 
 AI writes here even if the UI doesn't show it. The system log is
 append-only and rotated by size (max 5 MB, 3 backups).
@@ -21,6 +21,8 @@ import platform
 from logging.handlers import RotatingFileHandler
 from typing import Any, Optional
 
+from shared.runtime import APP_CONFIG_DIR_NAME
+
 
 def _system_log_dir() -> str:
     """Return the persistent log directory (created on first call)."""
@@ -33,7 +35,7 @@ def _system_log_dir() -> str:
         base = os.environ.get(
             "XDG_DATA_HOME", os.path.expanduser("~/.local/share")
         )
-    log_dir = os.path.join(base, "JellyRip", "logs")
+    log_dir = os.path.join(base, APP_CONFIG_DIR_NAME, "logs")
     os.makedirs(log_dir, exist_ok=True)
     return log_dir
 
@@ -42,7 +44,7 @@ class DiagnosticLogger:
     """Persistent system-level logger that survives GUI failure.
 
     Outputs to:
-      - %LOCALAPPDATA%/JellyRip/logs/system.log (always)
+      - %LOCALAPPDATA%/JellyRipAI/logs/system.log (always)
       - GUI panel callback (optional mirror, best-effort)
 
     All methods are safe to call from any thread and guaranteed

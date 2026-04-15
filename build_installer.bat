@@ -1,5 +1,5 @@
 @echo off
-REM Build JellyRip.exe and package JellyRipInstaller.exe with Inno Setup
+REM Build JellyRipAI.exe and package JellyRipAIInstaller.exe with Inno Setup
 
 set "PYTHON_EXE=.venv\Scripts\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
@@ -10,7 +10,7 @@ if not exist "%ISCC_EXE%" set ISCC_EXE=%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC
 if exist dist rmdir /s /q dist >nul 2>&1
 if exist build rmdir /s /q build >nul 2>&1
 
-echo Building JellyRip.exe...
+echo Building JellyRipAI.exe...
 %PYTHON_EXE% -m PyInstaller JellyRip.spec
 if errorlevel 1 (
     echo EXE build failed.
@@ -29,7 +29,7 @@ if not exist "%ISCC_EXE%" (
     exit /b 1
 )
 
-echo Building JellyRipInstaller.exe...
+echo Building JellyRipAIInstaller.exe...
 "%ISCC_EXE%" installer\JellyRip.iss
 if errorlevel 1 (
     echo Installer build failed.
@@ -38,8 +38,8 @@ if errorlevel 1 (
 
 echo.
 echo Build complete:
-echo   dist\JellyRip.exe
-echo   dist\JellyRipInstaller.exe
+echo   dist\JellyRipAI.exe
+echo   dist\JellyRipAIInstaller.exe
 echo   dist\ffmpeg.exe
 echo   dist\ffprobe.exe
 echo   dist\ffplay.exe

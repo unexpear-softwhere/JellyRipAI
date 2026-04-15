@@ -4,7 +4,7 @@ AI Diagnostics Manager for JellyRip.
 Central diagnostic bus that captures events at the lowest layers (subprocess,
 engine, controller) and fans out to:
   - GUI log panel (human-readable)
-  - System log (%LOCALAPPDATA%/JellyRip/logs/system.log — always writes,
+  - System log (%LOCALAPPDATA%/JellyRipAI/logs/system.log — always writes,
     survives GUI failure)
   - session.log (normal runtime log)
   - session.ai.log (AI diagnoses and suggested fixes)

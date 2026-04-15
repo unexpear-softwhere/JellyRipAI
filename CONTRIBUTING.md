@@ -52,11 +52,10 @@ Avoid mixing unrelated refactors with behavior changes unless the refactor is re
 
 JellyRip currently has two maintained lines:
 
-- `codex/non-ai-main` - deterministic non-AI baseline work
-- `codex/assist-layer-split` - assist, provider, diagnostic, and other
-  AI-assisted work
+- `main` - deterministic non-AI baseline work
+- `ai` - assist, provider, diagnostic, and other AI-assisted work
 
-Put baseline ripping and file-move fixes in `codex/non-ai-main` first.
+Put baseline ripping and file-move fixes in `main` first.
 If the same fix is needed in the assist line, port it after the baseline
 version is correct.
 
@@ -153,4 +152,4 @@ JellyRip is not trying to be a general media manager. The repo should stay biase
 - reliable disc ingestion
 - clear operator prompts
 - safe file movement into Jellyfin-compatible folders
-- practical Windows distribution through `JellyRip.exe`
+- practical Windows distribution through `JellyRipAI.exe`

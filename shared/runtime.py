@@ -27,6 +27,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 __version__ = "1.0.16"
+APP_VARIANT = "ai"
+APP_DISPLAY_NAME = "JellyRip AI"
+APP_EXE_BASENAME = "JellyRipAI"
+APP_EXE_NAME = f"{APP_EXE_BASENAME}.exe"
+APP_INSTALLER_NAME = f"{APP_EXE_BASENAME}Installer.exe"
+APP_CONFIG_DIR_NAME = "JellyRipAI"
+APP_LOCAL_INSTALL_DIR_NAME = "JellyRip AI"
+APP_RELEASE_REPO = "unexpear/JellyRip"
+APP_RELEASE_TAG_PREFIX = "ai-v"
+APP_AUMID = "JellyRip.AI.1"
+APP_UPDATER_ASSET_PREFERENCE = (
+    APP_INSTALLER_NAME,
+    APP_EXE_NAME,
+)
 
 ConfigScalar: TypeAlias = str | int | bool | float | dict[str, str]
 LogFn: TypeAlias = Callable[[str], None]
@@ -42,7 +56,7 @@ def _config_dir_path() -> str:
         base = os.environ.get(
             "XDG_CONFIG_HOME", os.path.expanduser("~/.config")
         )
-    return os.path.join(base, "JellyRip")
+    return os.path.join(base, APP_CONFIG_DIR_NAME)
 
 
 def get_config_dir(create: bool = True) -> str:

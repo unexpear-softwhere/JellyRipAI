@@ -84,14 +84,14 @@ def test_download_asset_detects_stall(monkeypatch, tmp_path):
 def test_fetch_latest_release_can_include_prereleases(monkeypatch):
     releases = [
         {
-            "tag_name": "v1.0.16",
-            "html_url": "https://example.invalid/v1.0.16",
+            "tag_name": "ai-v1.0.16",
+            "html_url": "https://example.invalid/ai-v1.0.16",
             "prerelease": True,
             "draft": False,
             "assets": [
                 {
-                    "name": "JellyRipInstaller.exe",
-                    "browser_download_url": "https://example.invalid/JellyRipInstaller.exe",
+                    "name": "JellyRipAIInstaller.exe",
+                    "browser_download_url": "https://example.invalid/JellyRipAIInstaller.exe",
                 }
             ],
         },
@@ -128,11 +128,13 @@ def test_fetch_latest_release_can_include_prereleases(monkeypatch):
     release = updater.fetch_latest_release(
         "unexpear/JellyRip",
         include_prereleases=True,
+        preferred_assets=("JellyRipAIInstaller.exe", "JellyRipAI.exe"),
+        tag_prefix="ai-v",
     )
 
-    assert release["tag"] == "v1.0.16"
+    assert release["tag"] == "ai-v1.0.16"
     assert release["version"] == "1.0.16"
-    assert release["asset_name"] == "JellyRipInstaller.exe"
+    assert release["asset_name"] == "JellyRipAIInstaller.exe"
     assert release["prerelease"] is True
 
 
@@ -181,3 +183,59 @@ def test_fetch_latest_release_skips_prereleases_by_default(monkeypatch):
     assert release["version"] == "1.0.11"
     assert release["asset_name"] == "JellyRip.exe"
     assert release["prerelease"] is False
+
+
+def test_fetch_latest_release_filters_channel_and_extracts_version(monkeypatch):
+    releases = [
+        {
+            "tag_name": "v1.0.20",
+            "html_url": "https://example.invalid/v1.0.20",
+            "prerelease": True,
+            "draft": False,
+            "assets": [
+                {
+                    "name": "JellyRipInstaller.exe",
+                    "browser_download_url": "https://example.invalid/JellyRipInstaller.exe",
+                }
+            ],
+        },
+        {
+            "tag_name": "ai-v1.0.18",
+            "html_url": "https://example.invalid/ai-v1.0.18",
+            "prerelease": True,
+            "draft": False,
+            "assets": [
+                {
+                    "name": "JellyRipAI.exe",
+                    "browser_download_url": "https://example.invalid/JellyRipAI.exe",
+                }
+            ],
+        },
+    ]
+
+    class _JsonResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return updater.json.dumps(releases).encode("utf-8")
+
+    monkeypatch.setattr(
+        updater.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: _JsonResponse(),
+    )
+
+    release = updater.fetch_latest_release(
+        "unexpear/JellyRip",
+        include_prereleases=True,
+        preferred_assets=("JellyRipAIInstaller.exe", "JellyRipAI.exe"),
+        tag_prefix="ai-v",
+    )
+
+    assert release["tag"] == "ai-v1.0.18"
+    assert release["version"] == "1.0.18"
+    assert release["asset_name"] == "JellyRipAI.exe"

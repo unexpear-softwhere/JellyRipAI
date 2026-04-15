@@ -1,6 +1,6 @@
 # AI Assist Branch
 
-JellyRip's `codex/assist-layer-split` line keeps the baseline ripping
+JellyRip's `ai` line keeps the baseline ripping
 workflows and adds an optional assistant layer on top. This document is
 the branch-specific map for that AI surface: what it does, where it
 lives, and which boundaries it is expected to respect.
@@ -110,7 +110,7 @@ Credential persistence lives in
 
 Current storage model:
 
-- file path: `%APPDATA%\\JellyRip\\ai_credentials.json`
+- file path: `%APPDATA%\\JellyRipAI\\ai_credentials.json`
 - Windows-first protection with DPAPI for sensitive values
 - plaintext fallback only when DPAPI is unavailable or fails
 - transparent migration of older plaintext entries on load
@@ -123,7 +123,7 @@ separate on purpose.
 The diagnostics manager fans out to several outputs:
 
 - GUI log mirror
-- persistent system log at `%LOCALAPPDATA%\\JellyRip\\logs\\system.log`
+- persistent system log at `%LOCALAPPDATA%\\JellyRipAI\\logs\\system.log`
 - `session.log`
 - `session.ai.log`
 - `session.state.json`

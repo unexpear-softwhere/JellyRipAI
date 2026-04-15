@@ -1,10 +1,10 @@
 @echo off
-REM Build JellyRip.exe from source using PyInstaller
+REM Build JellyRipAI.exe from source using PyInstaller
 
 set "PYTHON_EXE=.venv\Scripts\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 
-echo Building JellyRip.exe...
+echo Building JellyRipAI.exe...
 echo.
 
 REM Check if PyInstaller is installed
@@ -38,7 +38,7 @@ if errorlevel 1 (
 
 echo.
 echo Build complete! Output:
-echo   dist\JellyRip.exe
+echo   dist\JellyRipAI.exe
 echo   dist\ffmpeg.exe
 echo   dist\ffprobe.exe
 echo   dist\ffplay.exe

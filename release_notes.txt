@@ -1,11 +1,11 @@
-## JellyRip v1.0.16 Release Notes (UNSTABLE)
+## JellyRip AI v1.0.16 Release Notes (UNSTABLE)
 
 Release channel: unstable pre-release.
 
 ### Download
-- Direct download: https://github.com/unexpear/JellyRip/releases/download/v1.0.16/JellyRip.exe
-- Installer: https://github.com/unexpear/JellyRip/releases/download/v1.0.16/JellyRipInstaller.exe
-- Release page: https://github.com/unexpear/JellyRip/releases/tag/v1.0.16
+- Direct download: https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.16/JellyRipAI.exe
+- Installer: https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.16/JellyRipAIInstaller.exe
+- Release page: https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.16
 - All releases: https://github.com/unexpear/JellyRip/releases
 
 ### What's New in 1.0.16

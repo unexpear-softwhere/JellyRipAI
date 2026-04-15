@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from config import load_startup_config
-from shared.runtime import get_config_dir
+from shared.runtime import APP_AUMID, APP_DISPLAY_NAME, get_config_dir
 
 JellyRipperGUI = None
 
@@ -31,7 +31,7 @@ class _StartupWindow:
         root = None
         try:
             root = tk.Tk()
-            root.title("JellyRip")
+            root.title(APP_DISPLAY_NAME)
             root.configure(bg="#091321")
             root.resizable(False, False)
             root.protocol("WM_DELETE_WINDOW", lambda: None)
@@ -43,7 +43,7 @@ class _StartupWindow:
 
             title = tk.Label(
                 frame,
-                text="JellyRip",
+                text=APP_DISPLAY_NAME,
                 bg="#091321",
                 fg="#27b8ff",
                 font=("Segoe UI", 16, "bold"),
@@ -174,7 +174,7 @@ def _set_windows_app_user_model_id() -> None:
 
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "JellyRip.App.1"
+            APP_AUMID
         )
     except Exception as e:
         logging.warning("SetCurrentProcessExplicitAppUserModelID failed: %s", e)

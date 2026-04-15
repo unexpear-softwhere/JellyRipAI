@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 $ffmpegFileNames = @("ffmpeg.exe", "ffprobe.exe", "ffplay.exe")
 $searchRoots = New-Object System.Collections.Generic.List[string]
 $seenRoots = @{}
+$preferredDesktopRoot = Join-Path $HOME "Desktop\ffmpeg"
 
 function Add-SearchRoot {
     param([string]$Path)
@@ -30,6 +31,7 @@ function Add-SearchRoot {
     }
 }
 
+Add-SearchRoot -Path $preferredDesktopRoot
 Add-SearchRoot -Path $env:JELLYRIP_FFMPEG_DIR
 Add-SearchRoot -Path $env:FFMPEG_DIR
 Add-SearchRoot -Path (Join-Path $ProjectRoot "ffmpeg")

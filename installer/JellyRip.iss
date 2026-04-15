@@ -1,34 +1,34 @@
 ; Inno Setup script for JellyRip
 ; Compile with: ISCC installer\JellyRip.iss
 
-#define MyAppName "JellyRip"
+#define MyAppName "JellyRip AI"
 #define MyAppVersion "1.0.16"
 #define MyAppPublisher "unexpear"
 #define MyAppURL "https://github.com/unexpear/JellyRip"
-#define MyAppExeName "JellyRip.exe"
+#define MyAppExeName "JellyRipAI.exe"
 
 [Setup]
-AppId={{A3E2F5D5-5BA2-4A26-8C0A-4D88D22D87A8}
+AppId={{F76B42D9-4AD5-482F-BF8B-5F53D73F5D91}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}/releases
-DefaultDirName={localappdata}\Programs\JellyRip
+DefaultDirName={localappdata}\Programs\JellyRip AI
 DisableProgramGroupPage=yes
 VersionInfoVersion={#MyAppVersion}
 VersionInfoProductVersion={#MyAppVersion}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} Installer
 VersionInfoProductName={#MyAppName}
-VersionInfoOriginalFileName=JellyRipInstaller.exe
+VersionInfoOriginalFileName=JellyRipAIInstaller.exe
 UsePreviousAppDir=yes
 CloseApplications=yes
 CloseApplicationsFilter={#MyAppExeName}
 RestartApplications=no
 OutputDir=..\dist
-OutputBaseFilename=JellyRipInstaller
+OutputBaseFilename=JellyRipAIInstaller
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -43,7 +43,7 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 
 
 [Files]
-Source: "..\dist\JellyRip.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\JellyRipAI.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\ffmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\ffprobe.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\ffplay.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -53,11 +53,11 @@ Source: "..\dist\FFmpeg-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\FFmpeg-README.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\JellyRip"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\JellyRip"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autoprograms}\JellyRip AI"; Filename: "{app}\{#MyAppExeName}"
+Name: "{autodesktop}\JellyRip AI"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch JellyRip"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch JellyRip AI"; Flags: nowait postinstall skipifsilent
 
 [Code]
 { ---- Dependency detection ---- }
@@ -150,7 +150,7 @@ begin
         'However, the following required tools were not found on this PC:' + #13#10 + #13#10 +
         Msg + #13#10 +
         'Please install them before running JellyRip.' + #13#10 +
-        'Custom paths can be set in JellyRip  Settings > Paths.',
+        'Custom paths can be set in JellyRip AI  Settings > Paths.',
         mbInformation, MB_OK);
   end;
 end;
@@ -164,8 +164,8 @@ var
 begin
   if CurUninstallStep = usPostUninstall then
   begin
-    RoamingDir := ExpandConstant('{userappdata}\JellyRip');
-    LocalDir := ExpandConstant('{localappdata}\JellyRip');
+    RoamingDir := ExpandConstant('{userappdata}\JellyRipAI');
+    LocalDir := ExpandConstant('{localappdata}\JellyRipAI');
 
     if DirExists(RoamingDir) or DirExists(LocalDir) then
     begin

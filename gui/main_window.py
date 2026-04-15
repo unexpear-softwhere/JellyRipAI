@@ -97,6 +97,7 @@ else:
         def clear(self):          pass
 
 from shared.runtime import (
+    APP_DISPLAY_NAME,
     CONFIG_FILE,
     DEFAULTS,
     RIP_ATTEMPT_FLAGS,
@@ -448,7 +449,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         super().__init__()
         self.cfg   = cfg
         self._startup_context = dict(startup_context or {})
-        self.title(f"Raw Jelly Ripper v{__version__}")
+        self.title(f"{APP_DISPLAY_NAME} v{__version__}")
         self._theme = build_app_theme(self.cfg.get("opt_theme_overrides"))
         self.geometry("1360x940")
         self.minsize(1120, 820)
@@ -503,7 +504,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
 
         self._build_interface_v2()
         self._install_text_context_menu_bindings()
-        self.controller.log(f"Raw Jelly Ripper v{__version__} started")
+        self.controller.log(f"{APP_DISPLAY_NAME} v{__version__} started")
         self.controller.log("Choose a mode to begin")
         self._taskbar_progress = None
         self.after(500, self._init_taskbar)
@@ -768,6 +769,71 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 relief="flat",
             )
 
+    def _layout_ai_chat_action_row(self, width: int | None = None) -> None:
+        row = self.__dict__.get("ai_chat_action_row")
+        suggest_btn = self.__dict__.get("ai_chat_suggest_btn")
+        new_btn = self.__dict__.get("ai_chat_new_btn")
+        copy_btn = self.__dict__.get("ai_chat_copy_btn")
+        send_btn = self.__dict__.get("ai_chat_send_btn")
+        buttons = [suggest_btn, new_btn, copy_btn, send_btn]
+        if row is None or any(button is None for button in buttons):
+            return
+
+        raw_width = width
+        if raw_width is None or int(raw_width) <= 1:
+            try:
+                raw_width = int(row.winfo_width())
+            except Exception:
+                raw_width = 0
+        if int(raw_width) <= 1:
+            raw_width = max(0, int(self._ai_sidebar_width) - 36)
+
+        wide_layout = int(raw_width) >= 440
+        visible_columns = 4 if wide_layout else 2
+        uniform_name = "ai_actions_wide" if wide_layout else "ai_actions_narrow"
+        wraplength = max(72, int(raw_width / visible_columns) - 28)
+
+        for column in range(4):
+            row.grid_columnconfigure(column, weight=0, uniform="")
+        for column in range(visible_columns):
+            row.grid_columnconfigure(column, weight=1, uniform=uniform_name)
+        for grid_row in range(2):
+            row.grid_rowconfigure(grid_row, weight=0, minsize=0)
+
+        placements = (
+            [
+                (suggest_btn, 0, 0),
+                (new_btn, 0, 1),
+                (copy_btn, 0, 2),
+                (send_btn, 0, 3),
+            ]
+            if wide_layout else
+            [
+                (suggest_btn, 0, 0),
+                (new_btn, 0, 1),
+                (copy_btn, 1, 0),
+                (send_btn, 1, 1),
+            ]
+        )
+
+        for button in buttons:
+            button.grid_forget()
+            try:
+                button.configure(wraplength=wraplength, justify="center")
+            except Exception:
+                pass
+
+        for button, grid_row, column in placements:
+            xpad = (0, 6) if column < visible_columns - 1 else (0, 0)
+            ypad = (0, 6) if not wide_layout and grid_row == 0 else (0, 0)
+            button.grid(
+                row=grid_row,
+                column=column,
+                sticky="ew",
+                padx=xpad,
+                pady=ypad,
+            )
+
     def _remember_ai_sidebar_width(self, width: int | None = None) -> None:
         raw_width = width
         sidebar_frame = self.__dict__.get("ai_sidebar_frame")
@@ -846,6 +912,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             return
         self._remember_ai_sidebar_width(int(event.width))
         self._refresh_ai_chat_bubble_layout(int(event.width))
+        self._layout_ai_chat_action_row(int(event.width))
 
     def _on_ai_chat_canvas_configure(self, event) -> None:
         canvas = self.__dict__.get("ai_chat_canvas")
@@ -2740,8 +2807,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
 
         ai_send_row = tk.Frame(ai_input_section, bg=colors["surface_alt"])
         ai_send_row.pack(fill="x", pady=(6, 0))
-        for column in range(4):
-            ai_send_row.grid_columnconfigure(column, weight=1, uniform="ai_actions")
+        self.ai_chat_action_row = ai_send_row
 
         self.ai_chat_suggest_btn = tk.Button(
             ai_send_row,
@@ -2749,21 +2815,20 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             command=self._request_ai_sidebar_suggestion,
             **sidebar_action_button,
         )
-        self.ai_chat_suggest_btn.grid(row=0, column=0, sticky="ew", padx=(0, 6))
 
-        tk.Button(
+        self.ai_chat_new_btn = tk.Button(
             ai_send_row,
             text="New Chat",
             command=self._reset_ai_chat,
             **sidebar_action_button,
-        ).grid(row=0, column=1, sticky="ew", padx=6)
+        )
 
-        tk.Button(
+        self.ai_chat_copy_btn = tk.Button(
             ai_send_row,
             text="Copy Chat",
             command=self._copy_ai_chat_transcript,
             **sidebar_action_button,
-        ).grid(row=0, column=2, sticky="ew", padx=6)
+        )
 
         self.ai_chat_send_btn = tk.Button(
             ai_send_row,
@@ -2781,7 +2846,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             pady=6,
             cursor="hand2",
         )
-        self.ai_chat_send_btn.grid(row=0, column=3, sticky="ew", padx=(6, 0))
+        self._layout_ai_chat_action_row()
 
         transcript_frame.pack_forget()
         transcript_frame.pack(fill="both", expand=True, padx=10, pady=(8, 0))
@@ -8821,7 +8886,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         except Exception:
             self._taskbar_progress = None
 
-    def _notify_complete(self, title="Raw Jelly Ripper", message="Rip complete."):
+    def _notify_complete(self, title=APP_DISPLAY_NAME, message="Rip complete."):
         """Send a Windows toast notification and play a completion beep."""
         if sys.platform != "win32":
             return
@@ -9093,7 +9158,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
 
     def on_close(self):
         if messagebox.askokcancel(
-            "Exit", "Close Raw Jelly Ripper?", parent=self
+            "Exit", f"Close {APP_DISPLAY_NAME}?", parent=self
         ):
             self._remember_ai_sidebar_width()
             self._persist_config()

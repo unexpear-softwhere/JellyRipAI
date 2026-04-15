@@ -10,6 +10,8 @@ dist/ffplay.exe
 dist/ffprobe.exe
 dist/JellyRip.exe
 dist/JellyRipInstaller.exe
+dist/JellyRipAI.exe
+dist/JellyRipAIInstaller.exe
 
 # Python
 __pycache__/
@@ -30,6 +32,7 @@ htmlcov/
 !.vscode/settings.json
 !.vscode/launch.json
 !.vscode/extensions.json
+.profiles/
 .idea/
 *.swp
 *.swo

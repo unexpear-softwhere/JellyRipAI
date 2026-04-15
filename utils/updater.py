@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys as _sys
@@ -20,10 +21,18 @@ _ps_exe = (
 _POPEN_FLAGS = {"creationflags": 0x08000000} if _sys.platform == "win32" else {}
 
 
-def _normalize_version(value):
+def _extract_version_string(value):
     token = str(value or "").strip().lower()
+    match = re.search(r"(\d+(?:\.\d+)+)", token)
+    if match:
+        return match.group(1)
     if token.startswith("v"):
-        token = token[1:]
+        return token[1:]
+    return token
+
+
+def _normalize_version(value):
+    token = _extract_version_string(value)
     parts = []
     for piece in token.split("."):
         try:
@@ -45,6 +54,8 @@ def fetch_latest_release(
     timeout=8,
     *,
     include_prereleases=False,
+    preferred_assets=None,
+    tag_prefix="",
 ):
     """Fetch GitHub release metadata for the given repo."""
     if include_prereleases:
@@ -61,25 +72,34 @@ def fetch_latest_release(
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
 
+    expected_tag_prefix = str(tag_prefix or "").strip().lower()
+
+    def _matches_expected_channel(item):
+        if not isinstance(item, dict):
+            return False
+        if item.get("draft"):
+            return False
+        if not include_prereleases and item.get("prerelease"):
+            return False
+        if not expected_tag_prefix:
+            return True
+        tag_name = str(item.get("tag_name") or "").strip().lower()
+        return tag_name.startswith(expected_tag_prefix)
+
     if isinstance(payload, list):
         release = next(
             (
                 item
                 for item in payload
-                if isinstance(item, dict)
-                and not item.get("draft")
-                and (
-                    include_prereleases
-                    or not item.get("prerelease")
-                )
+                if _matches_expected_channel(item)
             ),
             {},
         )
     else:
-        release = payload if isinstance(payload, dict) else {}
+        release = payload if _matches_expected_channel(payload) else {}
 
     assets = release.get("assets") or []
-    preferred = ["JellyRipInstaller.exe", "JellyRip.exe"]
+    preferred = list(preferred_assets or ["JellyRipInstaller.exe", "JellyRip.exe"])
     chosen_asset = None
     for name in preferred:
         chosen_asset = next((a for a in assets if a.get("name") == name), None)
@@ -89,7 +109,7 @@ def fetch_latest_release(
         chosen_asset = assets[0]
 
     tag = str(release.get("tag_name") or "").strip()
-    normalized = tag[1:] if tag.lower().startswith("v") else tag
+    normalized = _extract_version_string(tag)
 
     return {
         "tag": tag,

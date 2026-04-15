@@ -77,3 +77,4 @@ def test_runtime_import_does_not_create_config_dir(monkeypatch):
 
     assert calls == []
     assert runtime.CONFIG_FILE.endswith("config.json")
+    assert "JellyRipAI" in runtime.CONFIG_FILE

@@ -19,9 +19,13 @@ from PyInstaller.utils.win32.versioninfo import (
 # PyInstaller executes the spec without defining __file__, so resolve
 # project-relative paths from the working directory used to launch it.
 PROJECT_ROOT = Path.cwd()
+APP_DISPLAY_NAME = "JellyRip AI"
+APP_EXE_BASENAME = "JellyRipAI"
+APP_EXE_NAME = f"{APP_EXE_BASENAME}.exe"
 FFMPEG_ENV_VARS = ("JELLYRIP_FFMPEG_DIR", "FFMPEG_DIR")
 FFMPEG_FILENAMES = ("ffmpeg.exe", "ffprobe.exe", "ffplay.exe")
 FFMPEG_NOTICE_FILENAMES = ("LICENSE", "README.txt")
+PREFERRED_FFMPEG_ROOT = Path.home() / "Desktop" / "ffmpeg"
 
 
 def _configure_tcl_tk_environment() -> None:
@@ -97,11 +101,11 @@ def _build_version_info(version: str) -> VSVersionInfo:
                         "040904B0",
                         [
                             StringStruct("CompanyName", "unexpear"),
-                            StringStruct("FileDescription", "JellyRip"),
+                            StringStruct("FileDescription", APP_DISPLAY_NAME),
                             StringStruct("FileVersion", version),
-                            StringStruct("InternalName", "JellyRip"),
-                            StringStruct("OriginalFilename", "JellyRip.exe"),
-                            StringStruct("ProductName", "JellyRip"),
+                            StringStruct("InternalName", APP_EXE_BASENAME),
+                            StringStruct("OriginalFilename", APP_EXE_NAME),
+                            StringStruct("ProductName", APP_DISPLAY_NAME),
                             StringStruct("ProductVersion", version),
                         ],
                     )
@@ -120,6 +124,7 @@ def _add_search_root(roots: list[Path], root: Path) -> None:
 
 def _search_roots() -> list[Path]:
     roots: list[Path] = []
+    _add_search_root(roots, PREFERRED_FFMPEG_ROOT)
     for env_name in FFMPEG_ENV_VARS:
         raw = os.environ.get(env_name, "").strip()
         if raw:
@@ -162,8 +167,9 @@ def _find_bundle_file(filename: str) -> str:
 
     search_hint = (
         f"Could not find {filename} from the FFmpeg build required by JellyRip.spec.\n"
-        "Set JELLYRIP_FFMPEG_DIR (or FFMPEG_DIR) to the Gyan FFmpeg full build "
-        "folder, or place the extracted build under .\\ffmpeg\\ or ..\\ffmpeg\\."
+        "Place the Gyan FFmpeg full build under %USERPROFILE%\\Desktop\\ffmpeg, "
+        "set JELLYRIP_FFMPEG_DIR (or FFMPEG_DIR), or place the extracted build "
+        "under .\\ffmpeg\\ or ..\\ffmpeg\\."
     )
     raise SystemExit(search_hint)
 
@@ -221,7 +227,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="JellyRip",
+    name=APP_EXE_BASENAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
