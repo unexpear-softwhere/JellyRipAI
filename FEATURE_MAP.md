@@ -62,6 +62,29 @@ and code search.
 - **Config defaults/validation:**
   - `config.py`, `controller/controller.py`
 
+## AI Assistant, Providers, and Diagnostics
+
+- **AI sidebar chat and mode selector:**
+  - `gui/main_window.py`: AI mode UI, sidebar chat, snapshot-based help,
+    provider selection, and request routing
+
+- **AI provider connection dialog:**
+  - `gui/ai_provider_dialog.py`: provider setup, model selection,
+    connectivity tests, and active cloud-provider selection
+
+- **Provider registry and adapters:**
+  - `shared/ai/provider_registry.py`
+  - `shared/ai/providers/`
+
+- **AI credential storage:**
+  - `shared/ai/credential_store.py`: DPAPI-backed credential persistence
+
+- **AI diagnostics and durable system logging:**
+  - `shared/ai_diagnostics.py`: diagnostics manager, event capture,
+    backend routing, advisory AI analysis
+  - `shared/ai/diagnostics.py`: persistent system log and GUI-safe
+    mirroring
+
 ## Update & Download Logic
 
 - **Update check/download:**

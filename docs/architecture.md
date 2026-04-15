@@ -58,6 +58,25 @@ Responsibilities:
 
 These modules should remain reusable and narrowly scoped.
 
+### AI Assist Layer
+
+Files:
+
+- `gui/ai_provider_dialog.py`
+- `shared/ai/`
+- `shared/ai_diagnostics.py`
+
+Responsibilities:
+
+- provider setup and connection testing
+- AI sidebar chat and operator-facing assistant UX
+- advisory diagnostics and failure summaries
+- credential persistence and provider resolution
+
+This layer is intentionally downstream of the core rip pipeline. It may
+observe state, summarize failures, and suggest next steps, but it should
+not become a hidden control path for deterministic ripping behavior.
+
 ## Runtime entrypoints
 
 - `main.py` - primary entrypoint for development and packaging
@@ -81,5 +100,7 @@ The test suite is behavior-first.
 - `tests/test_behavior_guards.py` protects workflow and regression behavior
 - `tests/test_imports.py` protects import boundaries and GUI import safety
 - `tests/test_parsing.py` protects parsing and helper correctness
+- `tests/test_ai_chat_sidebar.py` and `tests/test_ai_provider_dialog.py`
+  protect the AI branch UI behavior
 
 Hardware-driven paths still require manual validation, which is why `TESTERS.md` remains part of the repo.

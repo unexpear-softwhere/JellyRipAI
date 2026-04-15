@@ -13,6 +13,7 @@ That is intentional for this project type because the main workflow is running a
 - `gui/` - tkinter interface
 - `utils/` - helper modules
 - `shared/` - shared runtime defaults and cross-module constants
+- `shared/ai/` - provider registry, credential storage, and provider adapters
 - `tests/` - automated regression coverage
 - `docs/` - repository and architecture documentation
 - `installer/` - installer definition assets
@@ -49,6 +50,8 @@ Ignored:
 - `CHANGELOG.md` - curated release history
 - `TESTERS.md` - manual validation worksheet
 - `docs/architecture.md` - code structure and design boundaries
+- `docs/ai-assist-branch.md` - AI branch-specific behavior, boundaries,
+  provider stack, and diagnostics map
 - `docs/repository-layout.md` - repo organization rationale
 
 ## When to restructure further

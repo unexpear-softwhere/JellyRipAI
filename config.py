@@ -380,7 +380,10 @@ def save_config(cfg: Mapping[str, object] | AppConfig) -> None:
 
 
 def validate_makemkvcon(path: str | PathLike[str] | None) -> ToolValidationResult:
-    return _run_probe(path, ["-r", "--version"])
+    # MakeMKV's documented automation example for enumerating drives is
+    # `makemkvcon -r --cache=1 info disc:9999`; Windows builds do not
+    # support `--version`.
+    return _run_probe(path, ["-r", "--cache=1", "info", "disc:9999"])
 
 
 def _resolve_ffprobe_from_dir(dirpath: str | PathLike[str] | None) -> str | None:

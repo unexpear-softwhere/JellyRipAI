@@ -32,6 +32,10 @@ Rule of thumb: deterministic core behavior belongs in the non-AI line
 first. Assistive features can suggest or prefill, but they must stay
 visible, optional, reversible, and weaker than explicit user input.
 
+Branch-specific documentation for the assist line:
+
+- [docs/ai-assist-branch.md](docs/ai-assist-branch.md)
+
 ## What JellyRip Does
 
 - rips movie and TV discs with MakeMKV
@@ -114,6 +118,8 @@ You can configure:
 - [shared](shared) - shared runtime defaults and constants
 - [tests](tests) - automated regression coverage
 - [docs/architecture.md](docs/architecture.md) - architecture overview
+- [docs/ai-assist-branch.md](docs/ai-assist-branch.md) - AI branch
+  feature map, provider stack, diagnostics behavior, and branch rules
 - [docs/repository-layout.md](docs/repository-layout.md) - repository layout rationale
 
 ### Testing

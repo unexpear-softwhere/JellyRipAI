@@ -118,6 +118,29 @@ def test_validate_ffmpeg_accepts_modern_build(monkeypatch, tmp_path):
     assert reason == ""
 
 
+def test_validate_makemkvcon_uses_documented_drive_probe(monkeypatch, tmp_path):
+    makemkvcon = tmp_path / "makemkvcon.exe"
+    makemkvcon.write_text("x", encoding="utf-8")
+    seen = {}
+
+    class _Result:
+        returncode = 0
+        stdout = b"DRV:0,2,999,1,\"Drive\",\"Disc\",\"F:\""
+        stderr = b""
+
+    def _fake_run(command, **kwargs):
+        seen["command"] = command
+        return _Result()
+
+    monkeypatch.setattr(config.subprocess, "run", _fake_run)
+
+    ok, reason = config.validate_makemkvcon(str(makemkvcon))
+
+    assert ok is True
+    assert reason == ""
+    assert seen["command"][1:] == ["-r", "--cache=1", "info", "disc:9999"]
+
+
 def test_should_keep_current_tool_path_when_new_is_invalid():
     def validator(path):
         return (path == "good.exe", "bad")
