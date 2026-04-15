@@ -1,4 +1,4 @@
-# JellyRip AI v1.0.16 Release Notes
+# JellyRip AI v1.0.17 Release Notes
 
 ## Release Channel
 
@@ -6,12 +6,12 @@ Unstable pre-release.
 
 ## Download
 
-- Direct download: [JellyRipAI.exe](https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.16/JellyRipAI.exe)
-- Installer: [JellyRipAIInstaller.exe](https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.16/JellyRipAIInstaller.exe)
-- Release page: [ai-v1.0.16 release](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.16)
+- Direct download: [JellyRipAI.exe](https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.17/JellyRipAI.exe)
+- Installer: [JellyRipAIInstaller.exe](https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.17/JellyRipAIInstaller.exe)
+- Release page: [ai-v1.0.17 release](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.17)
 - All releases: [GitHub Releases](https://github.com/unexpear/JellyRip/releases)
 
-## What's New in 1.0.16
+## What's New in 1.0.17
 
 ### FFmpeg and transcode reliability
 
@@ -25,6 +25,6 @@ Unstable pre-release.
 
 ### Release hygiene
 
-- Release metadata now aligns on the `1.0.16` line across the app, installer, docs, and release notes.
+- Release metadata now aligns on the `1.0.17` line across the app, installer, docs, and release notes.
 - Build output remains a GitHub Releases artifact instead of a tracked repository binary.
 - In-app update checks now follow the newest published release, including unstable prereleases.

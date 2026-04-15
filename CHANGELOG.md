@@ -2,6 +2,14 @@
 
 <!-- markdownlint-disable MD013 -->
 
+## [1.0.17] - 2026-04-15
+
+### Changed
+
+- Carried the AI release lane forward to `1.0.17` across runtime, installer, docs, tester worksheet, and release notes.
+- Kept the dedicated AI artifacts and update channel in place with `JellyRipAI.exe`, `JellyRipAIInstaller.exe`, and `ai-v*` release tags.
+- Release builds now prefer the FFmpeg full build provided at `%USERPROFILE%\Desktop\ffmpeg` before falling back to other bundle search roots.
+
 ## [1.0.16] - 2026-04-13
 
 ### Changed

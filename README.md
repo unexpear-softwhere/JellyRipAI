@@ -10,7 +10,7 @@ should be treated as non-final.
 
 ## Project Status
 
-- Current unstable line: `ai-v1.0.16` (latest unstable AI pre-release)
+- Current unstable line: `ai-v1.0.17` (latest unstable AI pre-release)
 - Platform target: Windows
 - Runtime target: Python 3.13+
 - Distribution target: standalone `JellyRipAI.exe` and optional installer
@@ -48,9 +48,9 @@ Branch-specific documentation for the assist line:
 
 ### From GitHub release
 
-(recommended, currently `ai-v1.0.16` unstable AI pre-release)
+(recommended, currently `ai-v1.0.17` unstable AI pre-release)
 
-1. Go to the [current unstable AI release page](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.16).
+1. Go to the [current unstable AI release page](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.17).
 2. Download `JellyRipAIInstaller.exe` (installer) or `JellyRipAI.exe` (standalone).
 3. If SmartScreen/Defender flags the file, whitelist the download folder
   first (common PyInstaller false positive).
@@ -147,8 +147,9 @@ pyinstaller JellyRip.spec
 ```
 
 The spec bundles the Gyan FFmpeg full build (`ffmpeg.exe`, `ffprobe.exe`,
-and `ffplay.exe`). Put the extracted build under `.\ffmpeg\` or `..\ffmpeg\`,
-or set `JELLYRIP_FFMPEG_DIR` before building. Release builds must also ship
+and `ffplay.exe`). Release builds prefer the extracted build at
+`%USERPROFILE%\Desktop\ffmpeg`, then fall back to `.\ffmpeg\`, `..\ffmpeg\`,
+or `JELLYRIP_FFMPEG_DIR` / `FFMPEG_DIR`. Release builds must also ship
 `FFmpeg-LICENSE.txt` and `FFmpeg-README.txt`.
 
 ### Executable plus installer
@@ -172,7 +173,7 @@ through GitHub Releases rather than committed to the repository.
 ### Full release pipeline
 
 ```bash
-release.bat 1.0.16
+release.bat 1.0.17
 ```
 
 This runs tests, checks version consistency, builds both executables,
