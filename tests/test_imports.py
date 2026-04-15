@@ -148,3 +148,164 @@ def test_disable_buttons_keeps_transcode_prep_available():
     assert gui.settings_btn.state == "disabled"
     assert gui.update_btn.state == "disabled"
     assert gui.abort_btn.state == "normal"
+
+
+def test_request_abort_releases_active_prompt_and_sets_abort():
+    with unittest.mock.patch("tkinter.Tk", new=_FakeTkBase):
+        from gui.main_window import JellyRipperGUI
+
+    class _FakeButton:
+        def __init__(self):
+            self.text = None
+            self.state = None
+
+        def config(self, **kwargs):
+            if "text" in kwargs:
+                self.text = kwargs["text"]
+            if "state" in kwargs:
+                self.state = kwargs["state"]
+
+    class _FakeEngine:
+        def __init__(self):
+            self.abort_event = threading.Event()
+            self.current_process = None
+            self.abort_calls = 0
+
+        def abort(self):
+            self.abort_calls += 1
+            self.abort_event.set()
+
+    class _FakeGrabWindow:
+        def __init__(self):
+            self.released = False
+            self.destroyed = False
+
+        def grab_release(self):
+            self.released = True
+
+        def destroy(self):
+            self.destroyed = True
+
+    gui = object.__new__(JellyRipperGUI)
+    gui._task_active = True
+    gui._input_active = True
+    gui._input_event = threading.Event()
+    gui._input_result = "pending"
+    gui._hide_input_bar = unittest.mock.Mock()
+    gui.grab_current = lambda: grab_window
+    gui.controller = unittest.mock.Mock()
+    gui.engine = _FakeEngine()
+    gui.abort_btn = _FakeButton()
+    gui.set_status = unittest.mock.Mock()
+
+    grab_window = _FakeGrabWindow()
+
+    gui.request_abort()
+
+    assert gui.engine.abort_calls == 1
+    assert gui.engine.abort_event.is_set()
+    gui.set_status.assert_called_once_with("Aborting...")
+    assert gui.abort_btn.text == "ABORTING..."
+    assert gui.abort_btn.state == "disabled"
+    gui._hide_input_bar.assert_called_once_with()
+    assert gui._input_event.is_set()
+    assert grab_window.released is True
+    assert grab_window.destroyed is True
+
+
+def test_request_abort_allows_live_worker_even_if_task_flag_is_false():
+    with unittest.mock.patch("tkinter.Tk", new=_FakeTkBase):
+        from gui.main_window import JellyRipperGUI
+
+    class _FakeButton:
+        def __init__(self):
+            self.text = None
+            self.state = None
+
+        def config(self, **kwargs):
+            if "text" in kwargs:
+                self.text = kwargs["text"]
+            if "state" in kwargs:
+                self.state = kwargs["state"]
+
+    class _FakeThread:
+        def is_alive(self):
+            return True
+
+    class _FakeEngine:
+        def __init__(self):
+            self.abort_event = threading.Event()
+            self.current_process = None
+            self.abort_calls = 0
+
+        def abort(self):
+            self.abort_calls += 1
+            self.abort_event.set()
+
+    gui = object.__new__(JellyRipperGUI)
+    gui._task_active = False
+    gui._input_active = False
+    gui._input_event = threading.Event()
+    gui._input_result = None
+    gui._hide_input_bar = unittest.mock.Mock()
+    gui.rip_thread = _FakeThread()
+    gui.grab_current = lambda: None
+    gui.controller = unittest.mock.Mock()
+    gui.engine = _FakeEngine()
+    gui.abort_btn = _FakeButton()
+    gui.set_status = unittest.mock.Mock()
+
+    gui.request_abort()
+
+    assert gui.engine.abort_calls == 1
+    assert gui.engine.abort_event.is_set()
+    gui.controller.log.assert_called_once_with("ABORT REQUESTED BY USER")
+
+
+def test_request_abort_recovers_ui_when_no_live_work_remains():
+    with unittest.mock.patch("tkinter.Tk", new=_FakeTkBase):
+        from gui.main_window import JellyRipperGUI
+
+    class _FakeButton:
+        def __init__(self):
+            self.text = None
+            self.state = None
+
+        def config(self, **kwargs):
+            if "text" in kwargs:
+                self.text = kwargs["text"]
+            if "state" in kwargs:
+                self.state = kwargs["state"]
+
+    class _FakeEngine:
+        def __init__(self):
+            self.abort_event = threading.Event()
+            self.current_process = None
+            self.abort_calls = 0
+
+        def abort(self):
+            self.abort_calls += 1
+            self.abort_event.set()
+
+    gui = object.__new__(JellyRipperGUI)
+    gui._task_active = True
+    gui._input_active = False
+    gui._input_event = threading.Event()
+    gui._input_result = None
+    gui._hide_input_bar = unittest.mock.Mock()
+    gui.rip_thread = None
+    gui.grab_current = lambda: None
+    gui.controller = unittest.mock.Mock()
+    gui.engine = _FakeEngine()
+    gui.abort_btn = _FakeButton()
+    gui.enable_buttons = unittest.mock.Mock()
+    gui.set_status = unittest.mock.Mock()
+    gui.after = lambda _delay, fn: fn()
+
+    gui.request_abort()
+
+    assert gui.engine.abort_calls == 1
+    assert gui.engine.abort_event.is_set()
+    gui.enable_buttons.assert_called_once_with()
+    assert gui.set_status.call_args_list[0].args == ("Aborting...",)
+    assert gui.set_status.call_args_list[-1].args == ("Ready",)

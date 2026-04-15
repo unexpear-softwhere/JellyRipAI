@@ -29,6 +29,11 @@ from utils.parsing import (
     parse_size_to_bytes,
     safe_int,
 )
+from utils.makemkv_log import (
+    MakeMKVIssueSummary,
+    MakeMKVMessageCoalescer,
+    analyze_makemkv_messages,
+)
 from utils.scoring import score_title
 from utils.classifier import classify_titles, format_classification_log
 
@@ -299,6 +304,8 @@ class RipperEngine:
         self.last_title_file_map = {}
         self.last_degraded_titles: list = []
         self.last_drive_info: dict = {}
+        self.last_process_issue_summary: MakeMKVIssueSummary | None = None
+        self.last_scan_issue_summary: MakeMKVIssueSummary | None = None
         self._ffprobe_cache = {}  # LRU cache with 1000-entry limit
         self._ffprobe_cache_lock = threading.Lock()
         self._ffprobe_cache_max_size = 1000
@@ -545,23 +552,50 @@ class RipperEngine:
         disc_info   = {}
         titles      = {}
         title_count = 0
+        self.last_drive_info = {}
+        self.last_scan_issue_summary = None
+        _msg_lines: list[str] = []
+        _scan_cmd = (
+            [makemkvcon] + global_args +
+            ["-r", "info", disc_target] + minlength_args + info_args
+        )
+        _diag_capture = ProcessCapture(
+            command=_scan_cmd,
+            start_time=datetime.now().isoformat(),
+            working_directory=os.getcwd(),
+        )
+        _diag_raw_lines: list[str] = []
+        _scan_start = time.time()
+        proc = None
         try:
             proc = subprocess.Popen(
-                [makemkvcon] + global_args +
-                ["-r", "info", disc_target] + minlength_args + info_args,
+                _scan_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
                 **_POPEN_FLAGS
             )
+            self.current_process = proc
             for line in iter(proc.stdout.readline, ""):
                 if self.abort_event.is_set():
-                    proc.kill()
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    try:
+                        proc.wait(timeout=5)
+                    except Exception:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
                     return None
                 line = line.strip()
                 if not line:
                     continue
+                if len(_diag_raw_lines) < 5000:
+                    _diag_raw_lines.append(line)
                 if line.startswith("CINFO:"):
                     parts = line[6:].split(",", 2)
                     if len(parts) < 3:
@@ -625,6 +659,12 @@ class RipperEngine:
                             titles[tid]["size"] = f"{gb:.2f} GB"
                         else:
                             titles[tid]["size"] = val
+                elif line.startswith("MSG:"):
+                    parts = line[4:].split(",", 4)
+                    if len(parts) >= 5:
+                        msg = parts[4].strip().strip('"')
+                        if msg:
+                            _msg_lines.append(msg)
                 elif line.startswith("SINFO:"):
                     parts = line[6:].split(",", 4)
                     if len(parts) < 5:
@@ -658,7 +698,46 @@ class RipperEngine:
                 proc.kill()
                 proc.wait(timeout=5)
         except Exception as e:
+            _diag_capture.end_time = datetime.now().isoformat()
+            _diag_capture.duration_seconds = time.time() - _scan_start
+            _diag_capture.stdout = "\n".join(_diag_raw_lines[-200:])
             on_log(f"Error scanning disc: {e}")
+            diag_exception(e, context="scan_disc", category="scan_anomaly")
+            return None
+        finally:
+            if proc is not None and self.current_process is proc:
+                self.current_process = None
+
+        scan_rc = 1
+        if proc is not None and proc.returncode is not None:
+            scan_rc = int(proc.returncode)
+        _diag_capture.exit_code = scan_rc
+        _diag_capture.end_time = datetime.now().isoformat()
+        _diag_capture.duration_seconds = time.time() - _scan_start
+        _diag_capture.stdout = "\n".join(_diag_raw_lines[-200:])
+
+        scan_summary = analyze_makemkv_messages(_msg_lines)
+        self.last_scan_issue_summary = scan_summary
+        for summary_line in scan_summary.build_summary_lines(
+            phase="scan",
+            exit_code=scan_rc,
+        ):
+            on_log(summary_line)
+        if scan_summary.has_disc_read_errors:
+            diag_record(
+                "warning" if scan_rc == 0 else "error",
+                "disc_read_error",
+                "MakeMKV logged disc-read errors during scan",
+                details={
+                    "phase": "scan",
+                    "exit_code": scan_rc,
+                    **scan_summary.to_dict(),
+                },
+                process_capture=_diag_capture,
+            )
+        if scan_rc != 0:
+            on_log(f"MakeMKV scan failed (exit code {scan_rc}).")
+            diag_process(_diag_capture, success=False, category="scan_anomaly")
             return None
 
         result = []
@@ -763,11 +842,23 @@ class RipperEngine:
             for log_line in format_classification_log(classification_rows):
                 on_log(log_line)
 
+        try:
+            from engine.scan_ops import _parse_drive_info
+
+            self.last_drive_info = _parse_drive_info(_msg_lines)
+        except Exception:
+            self.last_drive_info = {}
+
         self._last_scan_total_bytes = sum(
             max(0, int(t.get("size_bytes", 0) or 0)) for t in result
         )
         self._last_scan_timestamp = time.time()
         self._last_scan_target = disc_target
+        disc_info["title_count"] = len(result)
+        disc_info["size_signature"] = ",".join(
+            str(max(0, int(t.get("size_bytes", 0) or 0)))
+            for t in sorted(result, key=lambda t: int(t.get("id", -1)))
+        )
         self.last_disc_info = disc_info
 
         if disc_info.get("title"):
@@ -808,8 +899,11 @@ class RipperEngine:
             on_log,
             "MakeMKV info args"
         )
+        disc_info = {}
         total_bytes = 0
         seen_any_tinfo = False   # True once any TINFO: line is received
+        title_ids = set()
+        title_sizes = {}
         proc = None
         reader = None
         line_queue = None
@@ -895,13 +989,39 @@ class RipperEngine:
 
                 last_output = time.time()
                 stall_warned = False
-                if line.startswith("TINFO:"):
+                if line.startswith("CINFO:"):
+                    parts = line[6:].split(",", 2)
+                    if len(parts) < 3:
+                        continue
+                    try:
+                        attr = int(parts[0])
+                        val = parts[2].strip().strip('"')
+                    except (ValueError, IndexError):
+                        continue
+                    if attr == 2:
+                        disc_info["title"] = val
+                    elif attr == 28:
+                        disc_info["lang_code"] = val
+                    elif attr == 29:
+                        disc_info["lang_name"] = val
+                    elif attr == 32:
+                        disc_info["volume_id"] = val
+                elif line.startswith("TINFO:"):
                     seen_any_tinfo = True
                     parts = line[6:].split(",", 3)
+                    if len(parts) >= 4:
+                        try:
+                            tid = int(parts[0])
+                            title_ids.add(tid)
+                        except (TypeError, ValueError):
+                            tid = None
                     if len(parts) >= 4 and parts[1] == "11":
                         try:
                             size_str = parts[3].strip().strip('"')
-                            total_bytes += parse_size_to_bytes(size_str)
+                            size_bytes = parse_size_to_bytes(size_str)
+                            total_bytes += size_bytes
+                            if tid is not None:
+                                title_sizes[tid] = size_bytes
                         except IndexError:
                             pass
 
@@ -920,6 +1040,22 @@ class RipperEngine:
                     reader.join(timeout=1)
                 except Exception:
                     pass
+        proc_returncode = getattr(proc, "returncode", None) if proc is not None else None
+        if proc_returncode not in (0, None):
+            on_log(
+                f"Warning: MakeMKV disc info exited with code {proc_returncode}; "
+                "ignoring partial size data."
+            )
+            return None
+        if title_ids:
+            disc_info["title_count"] = len(title_ids)
+        if title_sizes:
+            disc_info["size_signature"] = ",".join(
+                str(max(0, int(size or 0)))
+                for _tid, size in sorted(title_sizes.items())
+            )
+        if disc_info:
+            self.last_disc_info = disc_info
         if total_bytes > 0:
             self._last_scan_total_bytes = int(total_bytes)
             self._last_scan_timestamp = time.time()
@@ -984,6 +1120,53 @@ class RipperEngine:
                 recursive=True
             )
         )
+
+    def _log_rip_dir_contents(self, rip_path, before_set, on_log):
+        """Log a compact recursive directory listing after a suspicious rip result."""
+        try:
+            if not os.path.isdir(rip_path):
+                on_log(f"Rip target directory is missing: {rip_path}")
+                return
+
+            entries: list[tuple[str, str]] = []
+            before = {os.path.normcase(os.path.abspath(path)) for path in before_set}
+
+            for dirpath, dirnames, filenames in os.walk(rip_path):
+                dirnames.sort()
+                filenames.sort()
+                rel_dir = os.path.relpath(dirpath, rip_path)
+                for dirname in dirnames:
+                    rel_path = dirname if rel_dir == "." else os.path.join(rel_dir, dirname)
+                    entries.append(("dir", rel_path))
+                for filename in filenames:
+                    full_path = os.path.join(dirpath, filename)
+                    rel_path = filename if rel_dir == "." else os.path.join(rel_dir, filename)
+                    marker = ""
+                    if os.path.normcase(os.path.abspath(full_path)) in before:
+                        marker = " (pre-existing)"
+                    try:
+                        size_bytes = os.path.getsize(full_path)
+                        size_note = f" ({size_bytes / (1024**2):.1f} MB)"
+                    except OSError:
+                        size_note = ""
+                    entries.append(("file", rel_path + size_note + marker))
+
+            if not entries:
+                on_log(f"Rip target directory is empty after MakeMKV run: {rip_path}")
+                return
+
+            max_entries = 20
+            on_log(
+                "Rip target directory contents after MakeMKV run "
+                f"({len(entries)} item(s)):"
+            )
+            for kind, rel_path in entries[:max_entries]:
+                prefix = "[DIR]" if kind == "dir" else "[FILE]"
+                on_log(f"  {prefix} {rel_path}")
+            if len(entries) > max_entries:
+                on_log(f"  ... {len(entries) - max_entries} more item(s) not shown")
+        except Exception as exc:
+            on_log(f"Warning: could not inspect rip target directory: {exc}")
 
     def _purge_rip_target_files(self, rip_path, on_log):
         """Ensure each rip starts fresh; never resume prior file fragments."""
@@ -1098,6 +1281,14 @@ class RipperEngine:
             working_directory=os.getcwd(),
         )
         _diag_raw_lines: list[str] = []
+        self.last_process_issue_summary = None
+        issue_summary = MakeMKVIssueSummary()
+        message_coalescer = MakeMKVMessageCoalescer()
+
+        def _emit_makemkv_message(message: str) -> None:
+            issue_summary.record(message)
+            for emitted in message_coalescer.feed(message):
+                on_log(emitted)
 
         proc = subprocess.Popen(
             cmd,
@@ -1207,11 +1398,7 @@ class RipperEngine:
                 if len(parts) >= 5:
                     msg = parts[4].strip().strip('"')
                     if msg:
-                        on_log(msg)
-                        # Log all messages but don't treat them as failures.
-                        # MakeMKV tolerates recoverable errors (read errors,
-                        # parsing issues, etc) and continues. Trust the
-                        # return code, not the message content.
+                        _emit_makemkv_message(msg)
 
         try:
             proc.wait(timeout=30)
@@ -1246,11 +1433,14 @@ class RipperEngine:
                     if len(parts) >= 5:
                         msg = parts[4].strip().strip('"')
                         if msg:
-                            on_log(msg)
+                            _emit_makemkv_message(msg)
                             # Log all messages. Don't use them for failure
                             # detection â€” trust the return code only.
         except queue_module.Empty:
             pass
+
+        for emitted in message_coalescer.flush():
+            on_log(emitted)
 
         # Warn if MakeMKV exited successfully but we got stall warnings
         # during the rip â€” this can indicate disc read/write problems that
@@ -1261,12 +1451,31 @@ class RipperEngine:
                 "Files may be incomplete or missing; validation will follow."
             )
 
+        self.last_process_issue_summary = issue_summary
+        for summary_line in issue_summary.build_summary_lines(
+            phase="rip",
+            exit_code=rc,
+        ):
+            on_log(summary_line)
+
         # AI diagnostics: finalize capture
         _diag_capture.exit_code = rc
         _diag_capture.end_time = datetime.now().isoformat()
         _diag_capture.duration_seconds = time.time() - rip_start
         _diag_capture.stdout = "\n".join(_diag_raw_lines[-200:])
         _diag_capture.stall_detected = stall_warned
+        if issue_summary.has_disc_read_errors:
+            diag_record(
+                "warning" if rc == 0 else "error",
+                "disc_read_error",
+                "MakeMKV logged disc-read errors during rip",
+                details={
+                    "phase": "rip",
+                    "exit_code": rc,
+                    **issue_summary.to_dict(),
+                },
+                process_capture=_diag_capture,
+            )
         if rc != 0:
             diag_process(_diag_capture, success=False,
                          category="subprocess_nonzero_exit")

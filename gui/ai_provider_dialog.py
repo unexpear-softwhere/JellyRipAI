@@ -18,19 +18,23 @@ import tkinter as tk
 import webbrowser
 from tkinter import messagebox
 from typing import Any, Callable
+import re
 
-# Style constants matching the app's GitHub-dark theme
-_BG = "#0d1117"
-_BG2 = "#161b22"
-_BG3 = "#21262d"
-_FG = "#c9d1d9"
-_FG_DIM = "#8b949e"
-_ACCENT = "#58a6ff"
-_GREEN = "#238636"
-_GREEN_FG = "#3fb950"
-_RED = "#f85149"
-_YELLOW = "#d29922"
-_CANCEL_BG = "#30363d"
+from gui.theme import dialog_palette
+
+# Style constants matching the shared app theme
+_COLORS = dialog_palette()
+_BG = _COLORS["surface_deep"]
+_BG2 = _COLORS["surface"]
+_BG3 = _COLORS["border"]
+_FG = _COLORS["text"]
+_FG_DIM = _COLORS["muted"]
+_ACCENT = _COLORS["accent"]
+_GREEN = _COLORS["primary_button_bg"]
+_GREEN_FG = _COLORS["success_fg"]
+_RED = _COLORS["danger_fg"]
+_YELLOW = _COLORS["warning_fg"]
+_CANCEL_BG = _COLORS["secondary_button_bg"]
 
 # ── Pricing table (display-only, per 1M tokens) ──────────────────────
 # Kept here in the dialog layer — never imported by engine/runtime code.
@@ -78,6 +82,152 @@ def _format_model_cost(model_id: str) -> str | None:
     )
 
 
+_MODEL_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)b\b")
+_QUOTA_ERROR_PATTERNS = (
+    "quota",
+    "rate_limit",
+    "rate limit",
+    "too many requests",
+    "429",
+    "token",
+    "insufficient_quota",
+    "billing",
+    "exceeded",
+    "resource_exhausted",
+    "overloaded",
+)
+
+
+def _model_power_score(model_id: str) -> float:
+    """Heuristic score so stronger models appear first in dropdowns."""
+    lowered = str(model_id or "").strip().lower()
+    if not lowered:
+        return float("-inf")
+
+    size_matches = [float(match) for match in _MODEL_SIZE_RE.findall(lowered)]
+    largest_size = max(size_matches) if size_matches else 0.0
+
+    def _version_value(text: str) -> float:
+        tokens = re.findall(r"\d+(?:\.\d+)?", text)
+        if not tokens:
+            return 0.0
+        return sum(float(token) / (10 ** idx) for idx, token in enumerate(tokens[:2]))
+
+    def _claude_version_value(text: str) -> float:
+        parts = text.split("-")
+        if len(parts) < 3:
+            return 0.0
+        version_tokens: list[str] = []
+        for token in parts[2:]:
+            if not token.isdigit():
+                continue
+            if len(token) > 2:
+                break
+            version_tokens.append(token)
+            if len(version_tokens) == 2:
+                break
+        if not version_tokens:
+            return 0.0
+        return _version_value(".".join(version_tokens))
+
+    # Provider / family tiering first. These scores are intentionally spaced
+    # far apart so "opus" will beat "sonnet" regardless of release date text.
+    if lowered.startswith("claude"):
+        tier = 0.0
+        if "opus" in lowered:
+            tier = 93000
+        elif "sonnet" in lowered:
+            tier = 92000
+        elif "haiku" in lowered:
+            tier = 91000
+        return tier + _claude_version_value(lowered)
+
+    if lowered.startswith("gpt-"):
+        score = 0.0
+        if lowered.startswith("gpt-5"):
+            score += 9200
+        elif "gpt-4.1" in lowered:
+            score += 8300
+        elif "gpt-4o" in lowered:
+            score += 8100
+        elif "gpt-4" in lowered:
+            score += 7800
+        elif "gpt-3.5" in lowered:
+            score += 5000
+        if "mini" in lowered:
+            score -= 1200
+        if "nano" in lowered:
+            score -= 1800
+        return 80000 + score
+
+    if lowered.startswith("gemini"):
+        score = 0.0
+        if "ultra" in lowered:
+            score += 8600
+        elif "pro" in lowered:
+            score += 7800
+        elif "flash" in lowered:
+            score += 6800
+        if "lite" in lowered:
+            score -= 1000
+        if "nano" in lowered:
+            score -= 1600
+        version_match = re.search(r"gemini-([0-9]+(?:\.[0-9]+)?)", lowered)
+        return 70000 + score + _version_value(version_match.group(1) if version_match else lowered)
+
+    # Local / open-weight models: parameter count should dominate.
+    family_bonus = 0.0
+    if lowered.startswith("qwen"):
+        family_bonus = 340
+    elif lowered.startswith("llama"):
+        family_bonus = 320
+    elif lowered.startswith("mistral"):
+        family_bonus = 300
+    elif lowered.startswith("gemma"):
+        family_bonus = 280
+
+    return 10000 + (largest_size * 1000) + family_bonus + _version_value(lowered)
+
+
+def _sort_models_by_power(models: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for model in models:
+        name = str(model or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(name)
+    return sorted(unique, key=lambda name: (-_model_power_score(name), name.lower()))
+
+
+def _resolve_local_model_selection(
+    current_model: str,
+    available_models: list[str],
+) -> tuple[list[str], str]:
+    options = _sort_models_by_power(list(available_models))
+    if not options:
+        return ([], "")
+    exact = {name.lower(): name for name in options}
+    selected = exact.get(str(current_model or "").strip().lower(), options[0])
+    return (options, selected)
+
+
+def _classify_connection_error(error_text: str) -> tuple[str, str]:
+    """Map raw provider test errors to clearer dialog states and guidance."""
+    raw = str(error_text or "").strip()
+    lowered = raw.lower()
+    if any(pattern in lowered for pattern in _QUOTA_ERROR_PATTERNS):
+        return (
+            "rate_limited",
+            "Rate limited / out of quota. Check billing, usage caps, or retry later.",
+        )
+    return ("failed", raw[:80])
+
+
 class AIProviderDialog:
     """Modal dialog for managing AI provider connections."""
 
@@ -90,6 +240,8 @@ class AIProviderDialog:
         self._on_change = on_change
         self._win: tk.Toplevel | None = None
         self._provider_frames: dict[str, dict[str, Any]] = {}
+        self._scroll_canvas: tk.Canvas | None = None
+        self._scroll_window_id: int | None = None
 
     def show(self) -> None:
         if self._win is not None and self._win.winfo_exists():
@@ -101,8 +253,9 @@ class AIProviderDialog:
         self._win = win
         win.title("AI Provider Setup")
         win.configure(bg=_BG)
-        win.geometry("620x640")
-        win.resizable(False, True)
+        win.geometry("780x700")
+        win.minsize(720, 560)
+        win.resizable(True, True)
         try:
             win.grab_set()
         except tk.TclError:
@@ -125,23 +278,33 @@ class AIProviderDialog:
         ).pack(fill="x", padx=16, pady=(0, 10))
 
         # Scrollable area for provider cards
-        canvas = tk.Canvas(win, bg=_BG, highlightthickness=0)
-        scrollbar = tk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        body = tk.Frame(win, bg=_BG)
+        body.pack(fill="both", expand=True)
+
+        canvas = tk.Canvas(body, bg=_BG, highlightthickness=0)
+        self._scroll_canvas = canvas
+        scrollbar = tk.Scrollbar(body, orient="vertical", command=canvas.yview)
         self._scroll_frame = tk.Frame(canvas, bg=_BG)
         self._scroll_frame.bind(
             "<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
         )
-        canvas.create_window((0, 0), window=self._scroll_frame, anchor="nw")
+        self._scroll_window_id = canvas.create_window(
+            (0, 0),
+            window=self._scroll_frame,
+            anchor="nw",
+        )
+        canvas.bind("<Configure>", self._on_scroll_canvas_configure)
         canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.pack(side="left", fill="both", expand=True, padx=(16, 0), pady=4)
-        scrollbar.pack(side="right", fill="y", padx=(0, 4), pady=4)
+        canvas.pack(side="left", fill="both", expand=True, padx=(16, 8), pady=4)
+        scrollbar.pack(side="right", fill="y", padx=(0, 12), pady=4)
 
         self._build_provider_cards()
+        self._sync_scroll_canvas_width()
 
         # Bottom buttons
         btn_row = tk.Frame(win, bg=_BG)
-        btn_row.pack(fill="x", padx=16, pady=12)
+        btn_row.pack(fill="x", padx=16, pady=(8, 12))
         tk.Button(
             btn_row, text="Close",
             bg=_CANCEL_BG, fg=_FG,
@@ -150,6 +313,29 @@ class AIProviderDialog:
         ).pack(side="right", padx=4)
 
         win.protocol("WM_DELETE_WINDOW", self._close)
+
+    def _sync_scroll_canvas_width(self, width: int | None = None) -> None:
+        canvas = self.__dict__.get("_scroll_canvas")
+        window_id = self.__dict__.get("_scroll_window_id")
+        if canvas is None or window_id is None:
+            return
+        if width is None:
+            try:
+                width = int(canvas.winfo_width())
+            except Exception:
+                return
+        inner_width = max(1, int(width))
+        try:
+            canvas.itemconfigure(window_id, width=inner_width)
+        except Exception:
+            pass
+        try:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        except Exception:
+            pass
+
+    def _on_scroll_canvas_configure(self, event) -> None:
+        self._sync_scroll_canvas_width(int(getattr(event, "width", 1)))
 
     def _close(self) -> None:
         if self._win:
@@ -169,6 +355,50 @@ class AIProviderDialog:
             pid = info.id
             status = summary.get(pid, {})
             self._build_single_card(info, status)
+
+    def _refresh_provider_cards(self) -> None:
+        if not hasattr(self, "_scroll_frame"):
+            return
+        for child in self._scroll_frame.winfo_children():
+            try:
+                child.destroy()
+            except Exception:
+                pass
+        self._provider_frames.clear()
+        if hasattr(self, "_setup_hints"):
+            self._setup_hints.clear()
+        self._build_provider_cards()
+        self._sync_scroll_canvas_width()
+
+    def _apply_parent_mode(self, pid: str | None) -> None:
+        mode = "off"
+        if pid:
+            mode = "local" if pid == "local" else "cloud"
+
+        setter = getattr(self._parent, "_set_ai_mode", None)
+        if callable(setter):
+            try:
+                setter(mode)
+                return
+            except Exception:
+                pass
+
+        cfg = getattr(self._parent, "cfg", None)
+        if isinstance(cfg, dict):
+            cfg["opt_ai_mode"] = mode
+            try:
+                from config import save_config
+                save_config(cfg)
+            except Exception:
+                pass
+
+        try:
+            from shared.ai_diagnostics import get_diagnostics
+            mgr = get_diagnostics()
+            if mgr:
+                mgr.set_mode(mode)
+        except Exception:
+            pass
 
     def _build_single_card(self, info: Any, status: dict[str, Any]) -> None:
         from shared.ai.credential_store import get_provider_credentials
@@ -296,20 +526,48 @@ class AIProviderDialog:
             bg=_BG2, fg=_FG_DIM,
             font=("Segoe UI", 10), width=8, anchor="w",
         ).pack(side="left")
-        current_model = creds.get("model", info.default_model)
+        if info.category == "local":
+            current_model = str(creds.get("model", "") or "").strip()
+            model_options, current_model = _resolve_local_model_selection(
+                current_model,
+                list(info.available_models),
+            )
+            display_options = list(model_options) or ["No installed local models"]
+        else:
+            current_model = creds.get("model", info.default_model) or info.default_model
+            model_options = _sort_models_by_power([current_model, *info.available_models])
+            if not model_options:
+                model_options = [info.default_model]
+            display_options = list(model_options)
         model_var = tk.StringVar(value=current_model)
-        model_menu = tk.OptionMenu(model_row, model_var, *info.available_models)
+        if info.category == "local" and not current_model and display_options:
+            model_var.set(display_options[0])
+        model_menu = tk.OptionMenu(model_row, model_var, *display_options)
         model_menu.configure(
             bg=_BG, fg=_FG, font=("Segoe UI", 10),
             highlightthickness=0, relief="flat",
             activebackground=_BG3, activeforeground=_FG,
         )
+        if info.category == "local" and not info.available_models:
+            model_menu.configure(state="disabled")
         model_menu["menu"].configure(
             bg=_BG2, fg=_FG, font=("Segoe UI", 10),
             activebackground=_ACCENT, activeforeground="white",
         )
         model_menu.pack(side="left", padx=4)
         widgets["model_var"] = model_var
+
+        if info.category == "local":
+            local_note = (
+                "Only pulled Ollama models are listed."
+                if info.available_models
+                else "No pulled Ollama models were detected on this PC at this URL yet."
+            )
+            tk.Label(
+                frame, text=local_note,
+                bg=_BG2, fg=_FG_DIM,
+                font=("Segoe UI", 8),
+            ).pack(fill="x", padx=76, pady=(0, 2))
 
         # Pricing label (cloud providers only)
         if info.category == "cloud":
@@ -504,12 +762,45 @@ class AIProviderDialog:
         return kwargs
 
     def _save_provider(self, pid: str) -> None:
-        """Save credentials, then auto-validate the connection."""
-        from shared.ai.credential_store import set_provider_credentials
+        """Save one exclusive provider, then auto-validate the connection."""
+        from shared.ai.credential_store import connect_single_provider
+        from shared.ai.provider_registry import get_provider
 
         kwargs = self._collect_provider_kwargs(pid)
+        provider = get_provider(pid)
+        should_activate = False
+        if provider:
+            provider.configure(**kwargs)
+            info = provider.info()
+            if info.category == "local":
+                installed_models, selected_model = _resolve_local_model_selection(
+                    kwargs.get("model", ""),
+                    list(info.available_models),
+                )
+                if not installed_models:
+                    self._set_provider_status(
+                        pid,
+                        "failed",
+                        detail="No pulled Ollama models found on this PC at this URL.",
+                    )
+                    self._apply_parent_mode(None)
+                    return
+                kwargs["model"] = selected_model
+                widgets = self._provider_frames.get(pid, {})
+                model_var = widgets.get("model_var")
+                if model_var is not None:
+                    try:
+                        model_var.set(selected_model)
+                    except Exception:
+                        pass
+            if info.requires_api_key:
+                should_activate = bool(kwargs.get("api_key"))
+            else:
+                should_activate = any(bool(value) for value in kwargs.values())
         try:
-            set_provider_credentials(pid, **kwargs)
+            connect_single_provider(pid, **kwargs)
+            self._refresh_provider_cards()
+            self._apply_parent_mode(pid if should_activate else None)
             if self._on_change:
                 self._on_change()
         except Exception as e:
@@ -551,37 +842,15 @@ class AIProviderDialog:
                 detail=f"{result.latency_ms:.0f}ms \u2022 {result.model_confirmed}",
             )
         else:
+            state, detail = _classify_connection_error(result.error)
             self._set_provider_status(
-                pid, "failed",
-                detail=result.error[:80],
+                pid, state,
+                detail=detail,
             )
 
     def _set_active(self, pid: str) -> None:
-        """Set this provider as the active cloud provider."""
-        from shared.ai.credential_store import set_active_provider_id
-
-        set_active_provider_id(pid)
-
-        # Promote this card to "active", demote others to "connected"
-        for other_pid, widgets in self._provider_frames.items():
-            set_btn = widgets.get("set_active_btn")
-            if other_pid == pid:
-                self._set_provider_status(pid, "active")
-                if set_btn:
-                    set_btn.configure(bg=_BG3, fg=_GREEN_FG)
-            else:
-                if set_btn:
-                    set_btn.configure(bg=_ACCENT, fg="white")
-                # Demote from "active" to "connected" (only if it had creds)
-                creds_ok = bool(self._collect_provider_kwargs(other_pid).get("api_key"))
-                if widgets.get("key_var"):
-                    if creds_ok:
-                        self._set_provider_status(other_pid, "connected")
-                    else:
-                        self._set_provider_status(other_pid, "not_connected")
-
-        if self._on_change:
-            self._on_change()
+        """Make this provider the only connected backend."""
+        self._save_provider(pid)
 
     def _disconnect_provider(self, pid: str) -> None:
         """Remove saved credentials for a provider after confirmation."""
@@ -626,6 +895,9 @@ class AIProviderDialog:
                 pass
             widgets.pop("security_label", None)
 
+        self._refresh_provider_cards()
+        self._apply_parent_mode(None)
+
         if self._on_change:
             self._on_change()
 
@@ -634,6 +906,7 @@ class AIProviderDialog:
     #   active        — green dot, "Active"       (chosen cloud provider)
     #   connected     — green dot, "Connected"     (credentials saved + validated)
     #   validating    — yellow dot, "Validating…"  (test in progress)
+    #   rate_limited  — yellow dot, "Rate limited / quota" (429 / quota exhausted)
     #   failed        — red dot, "Failed"          (test or save error)
     #   not_connected — dim dot, "Not connected"   (no credentials)
 
@@ -641,6 +914,7 @@ class AIProviderDialog:
         "active":        ("\u25cf Active",        _GREEN_FG),
         "connected":     ("\u25cf Connected",     _GREEN_FG),
         "validating":    ("\u25cf Validating\u2026", _YELLOW),
+        "rate_limited":  ("\u25cf Rate limited / quota", _YELLOW),
         "failed":        ("\u25cf Failed",        _RED),
         "not_connected": ("\u25cf Not connected", _FG_DIM),
     }
@@ -662,7 +936,11 @@ class AIProviderDialog:
         if detail_var:
             detail_var.set(detail)
         if detail_label:
-            detail_color = _FG_DIM if state != "failed" else _RED
+            detail_color = _FG_DIM
+            if state == "failed":
+                detail_color = _RED
+            elif state == "rate_limited":
+                detail_color = _YELLOW
             detail_label.configure(fg=detail_color)
 
 

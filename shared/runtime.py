@@ -28,11 +28,11 @@ from datetime import datetime
 
 __version__ = "1.0.16"
 
-ConfigScalar: TypeAlias = str | int | bool | float
+ConfigScalar: TypeAlias = str | int | bool | float | dict[str, str]
 LogFn: TypeAlias = Callable[[str], None]
 
 
-def get_config_dir() -> str:
+def _config_dir_path() -> str:
     system = platform.system()
     if system == "Windows":
         base = os.environ.get("APPDATA", os.path.expanduser("~"))
@@ -42,12 +42,17 @@ def get_config_dir() -> str:
         base = os.environ.get(
             "XDG_CONFIG_HOME", os.path.expanduser("~/.config")
         )
-    config_dir = os.path.join(base, "JellyRip")
-    os.makedirs(config_dir, exist_ok=True)
+    return os.path.join(base, "JellyRip")
+
+
+def get_config_dir(create: bool = True) -> str:
+    config_dir = _config_dir_path()
+    if create:
+        os.makedirs(config_dir, exist_ok=True)
     return config_dir
 
 
-CONFIG_FILE = os.path.join(get_config_dir(), "config.json")
+CONFIG_FILE = os.path.join(_config_dir_path(), "config.json")
 
 _WIN_TEMP = os.environ.get("TEMP") or os.path.expanduser("~\\AppData\\Local\\Temp")
 _WIN_HOME = os.environ.get("USERPROFILE") or os.path.expanduser("~")
@@ -141,13 +146,14 @@ DEFAULTS: dict[str, ConfigScalar] = {
     "opt_ai_local_provider": "ollama",
     "opt_ai_local_model": "qwen2.5:14b-instruct",
     "opt_ai_cloud_timeout_seconds": 30,
-    "opt_ai_local_timeout_seconds": 20,
+    "opt_ai_local_timeout_seconds": 90,
     "opt_ai_max_calls_per_session": 20,
     "opt_ai_disable_after_failures": 3,
     # AI provider connection (managed via gui/ai_provider_dialog.py)
     "opt_ai_active_cloud_provider": "",  # "claude" | "openai" | "gemini" | ""
     "opt_ai_sidebar_open": False,
     "opt_ai_sidebar_width": 360,
+    "opt_theme_overrides": {},
 }
 
 RIP_ATTEMPT_FLAGS: list[list[str]] = [

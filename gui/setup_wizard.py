@@ -17,27 +17,24 @@ from dataclasses import dataclass, field
 from tkinter import ttk
 from typing import Sequence
 
+from gui.theme import CLASSIFICATION_LABEL_COLORS, dialog_palette
 from utils.classifier import ClassifiedTitle
 
 # ---------------------------------------------------------------------------
 # Style constants (match session_setup_dialog.py)
 # ---------------------------------------------------------------------------
 
-_BG        = "#0d1117"
-_BG2       = "#161b22"
-_BG3       = "#21262d"
-_FG        = "#c9d1d9"
-_FG_DIM    = "#8b949e"
-_ACCENT    = "#58a6ff"
-_GREEN     = "#238636"
-_CANCEL_BG = "#30363d"
+_COLORS    = dialog_palette()
+_BG        = _COLORS["surface_deep"]
+_BG2       = _COLORS["surface"]
+_BG3       = _COLORS["border"]
+_FG        = _COLORS["text"]
+_FG_DIM    = _COLORS["muted"]
+_ACCENT    = _COLORS["accent"]
+_GREEN     = _COLORS["primary_button_bg"]
+_CANCEL_BG = _COLORS["secondary_button_bg"]
 
-_LABEL_COLORS = {
-    "MAIN":      "#58a6ff",
-    "DUPLICATE": "#d29922",
-    "EXTRA":     "#8b949e",
-    "UNKNOWN":   "#f0883e",
-}
+_LABEL_COLORS = dict(CLASSIFICATION_LABEL_COLORS)
 
 # Jellyfin extras folder names per
 # https://jellyfin.org/docs/general/server/media/movies/#extras
@@ -129,7 +126,8 @@ def show_scan_results(
 ) -> str | None:
     """Show scan + classification results.
 
-    Returns "movie", "tv", or "standard", or None if cancelled.
+    Returns "movie", "tv", "manual_movie", or "manual_tv",
+    or None if cancelled.
     """
 
     result: list[str | None] = [None]
@@ -169,17 +167,17 @@ def show_scan_results(
             if libre == "enabled":
                 tk.Label(
                     info_frame, text="LibreDrive: enabled",
-                    bg=_BG2, fg="#3fb950", font=("Segoe UI", 10), anchor="w",
+                    bg=_BG2, fg=_COLORS["success_fg"], font=("Segoe UI", 10), anchor="w",
                 ).pack(fill="x")
             elif libre == "possible":
                 tk.Label(
                     info_frame, text="LibreDrive: possible (firmware patch may help)",
-                    bg=_BG2, fg="#d29922", font=("Segoe UI", 10), anchor="w",
+                    bg=_BG2, fg=_COLORS["warning_fg"], font=("Segoe UI", 10), anchor="w",
                 ).pack(fill="x")
             elif libre == "unavailable":
                 tk.Label(
                     info_frame, text="LibreDrive: not available",
-                    bg=_BG2, fg="#f85149", font=("Segoe UI", 10), anchor="w",
+                    bg=_BG2, fg=_COLORS["danger_fg"], font=("Segoe UI", 10), anchor="w",
                 ).pack(fill="x")
 
     # Classification list
@@ -277,8 +275,13 @@ def show_scan_results(
     type_frame = tk.Frame(win, bg=_BG2)
     type_frame.pack(fill="x", padx=24, pady=(8, 0))
 
+    manual_picker_var = tk.BooleanVar(value=False)
+
     def _select(media_type: str) -> None:
-        result[0] = media_type
+        if manual_picker_var.get():
+            result[0] = f"manual_{media_type}"
+        else:
+            result[0] = media_type
         win.destroy()
 
     def _cancel() -> None:
@@ -288,24 +291,41 @@ def show_scan_results(
     tk.Button(
         type_frame, text="Movie",
         command=lambda: _select("movie"),
-        bg=_ACCENT, fg="white",
+        bg=_ACCENT, fg=_COLORS["accent_button_fg"],
         font=("Segoe UI", 12, "bold"),
         width=14, relief="flat",
     ).pack(side="left", padx=(0, 12))
     tk.Button(
         type_frame, text="TV Show",
         command=lambda: _select("tv"),
-        bg=_ACCENT, fg="white",
+        bg=_ACCENT, fg=_COLORS["accent_button_fg"],
         font=("Segoe UI", 12, "bold"),
         width=14, relief="flat",
     ).pack(side="left")
-    tk.Button(
-        type_frame, text="Standard",
-        command=lambda: _select("standard"),
-        bg=_BG3, fg=_FG,
-        font=("Segoe UI", 12, "bold"),
-        width=14, relief="flat",
-    ).pack(side="left", padx=(12, 0))
+
+    _section_header(win, "ADVANCED")
+    advanced_frame = tk.Frame(win, bg=_BG2)
+    advanced_frame.pack(fill="x", padx=24, pady=(8, 0))
+    tk.Checkbutton(
+        advanced_frame,
+        text="Use manual title picker (legacy flow)",
+        variable=manual_picker_var,
+        bg=_BG2,
+        fg=_FG,
+        selectcolor=_BG3,
+        activebackground=_BG2,
+        activeforeground=_FG,
+        font=("Segoe UI", 10),
+        anchor="w",
+    ).pack(anchor="w")
+    tk.Label(
+        advanced_frame,
+        text="Use this only when the guided content mapping is not what you want.",
+        bg=_BG2,
+        fg=_FG_DIM,
+        font=("Segoe UI", 9),
+        anchor="w",
+    ).pack(fill="x", pady=(4, 0))
 
     # Cancel
     tk.Frame(win, bg=_BG3, height=1).pack(fill="x", padx=0, pady=(16, 0))
@@ -314,7 +334,7 @@ def show_scan_results(
     tk.Button(
         btn_row, text="Cancel",
         command=_cancel,
-        bg=_CANCEL_BG, fg=_FG_DIM,
+        bg=_CANCEL_BG, fg=_COLORS["secondary_button_fg"],
         font=("Segoe UI", 10),
         width=10, relief="flat",
     ).pack()
@@ -494,14 +514,14 @@ def show_content_mapping(
     tk.Button(
         btn_row, text="Cancel",
         command=_cancel,
-        bg=_CANCEL_BG, fg=_FG_DIM,
+        bg=_CANCEL_BG, fg=_COLORS["secondary_button_fg"],
         font=("Segoe UI", 10),
         width=10, relief="flat",
     ).pack(side="left", padx=(0, 8))
     tk.Button(
         btn_row, text="Next  \u2192",
         command=_submit,
-        bg=_GREEN, fg="white",
+        bg=_GREEN, fg=_COLORS["primary_button_fg"],
         font=("Segoe UI", 11, "bold"),
         width=14, relief="flat",
     ).pack(side="left")
@@ -611,14 +631,14 @@ def show_extras_classification(
     tk.Button(
         btn_row, text="Cancel",
         command=_cancel,
-        bg=_CANCEL_BG, fg=_FG_DIM,
+        bg=_CANCEL_BG, fg=_COLORS["secondary_button_fg"],
         font=("Segoe UI", 10),
         width=10, relief="flat",
     ).pack(side="left", padx=(0, 8))
     tk.Button(
         btn_row, text="Next  \u2192",
         command=_submit,
-        bg=_GREEN, fg="white",
+        bg=_GREEN, fg=_COLORS["primary_button_fg"],
         font=("Segoe UI", 11, "bold"),
         width=14, relief="flat",
     ).pack(side="left")
@@ -707,7 +727,7 @@ def show_output_plan(
 
     tree_text = tk.Text(
         tree_frame,
-        bg=_BG, fg="#3fb950",
+        bg=_BG, fg=_COLORS["success_fg"],
         font=("Consolas", 11),
         relief="flat",
         height=min(20, len(tree_lines) + 1),
@@ -742,14 +762,14 @@ def show_output_plan(
     tk.Button(
         btn_row, text="Cancel",
         command=_cancel,
-        bg=_CANCEL_BG, fg=_FG_DIM,
+        bg=_CANCEL_BG, fg=_COLORS["secondary_button_fg"],
         font=("Segoe UI", 10),
         width=10, relief="flat",
     ).pack(side="left", padx=(0, 8))
     tk.Button(
         btn_row, text="Start Rip",
         command=_confirm,
-        bg=_GREEN, fg="white",
+        bg=_GREEN, fg=_COLORS["primary_button_fg"],
         font=("Segoe UI", 12, "bold"),
         width=14, relief="flat",
     ).pack(side="left")

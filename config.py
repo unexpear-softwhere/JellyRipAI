@@ -24,6 +24,23 @@ _MIN_FFMPEG_LIBAVCODEC_MAJOR = 58
 
 
 @dataclass(frozen=True)
+class StartupConfigIssue:
+    code: str
+    message: str
+    should_open_settings: bool = False
+
+
+@dataclass(frozen=True)
+class StartupConfigResult:
+    config: ConfigDict
+    issues: tuple[StartupConfigIssue, ...] = ()
+
+    @property
+    def open_settings(self) -> bool:
+        return any(issue.should_open_settings for issue in self.issues)
+
+
+@dataclass(frozen=True)
 class AppConfig:
     source: str
     output: str
@@ -201,41 +218,159 @@ def validate_handbrake(path: str | PathLike[str] | None) -> ToolValidationResult
     return _run_probe(path, ["--version"])
 
 
-def load_config() -> ConfigDict:
-    """Load config as the mutable mapping shape used by the GUI and controller."""
-    raw: ConfigDict
+def _load_raw_config() -> tuple[ConfigDict, list[StartupConfigIssue]]:
+    issues: list[StartupConfigIssue] = []
     if not os.path.exists(CONFIG_FILE):
-        raw = dict(DEFAULTS)
-    else:
-        try:
-            with open(CONFIG_FILE, encoding="utf-8") as f:
-                loaded = json.load(f)
-            raw = cast(ConfigDict, loaded) if isinstance(loaded, dict) else dict(DEFAULTS)
-        except json.JSONDecodeError as exc:
-            logging.warning("Config file is corrupt, resetting to defaults: %s", exc)
-            raw = dict(DEFAULTS)
-        except Exception as exc:
-            logging.warning("Could not read config, using defaults: %s", exc)
-            raw = dict(DEFAULTS)
+        return {}, issues
 
+    try:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
+            loaded = json.load(f)
+    except json.JSONDecodeError as exc:
+        logging.warning("Config file is corrupt, resetting to defaults: %s", exc)
+        issues.append(
+            StartupConfigIssue(
+                code="config_malformed",
+                message=(
+                    "Config file was unreadable. JellyRip started with defaults so "
+                    "you can review Settings."
+                ),
+                should_open_settings=True,
+            )
+        )
+        return {}, issues
+    except Exception as exc:
+        logging.warning("Could not read config, using defaults: %s", exc)
+        issues.append(
+            StartupConfigIssue(
+                code="config_unreadable",
+                message=(
+                    "Config file could not be read. JellyRip started with defaults "
+                    "so you can review Settings."
+                ),
+                should_open_settings=True,
+            )
+        )
+        return {}, issues
+
+    if not isinstance(loaded, dict):
+        issues.append(
+            StartupConfigIssue(
+                code="config_invalid_shape",
+                message=(
+                    "Config file had the wrong shape. JellyRip started with defaults "
+                    "so you can review Settings."
+                ),
+                should_open_settings=True,
+            )
+        )
+        return {}, issues
+
+    return cast(ConfigDict, loaded), issues
+
+
+def _merge_config(raw: Mapping[str, object]) -> ConfigDict:
     cfg: ConfigDict = dict(DEFAULTS)
     cfg.update(raw)
+    theme_overrides = cfg.get("opt_theme_overrides", {})
+    if isinstance(theme_overrides, Mapping):
+        cfg["opt_theme_overrides"] = {
+            str(key): value
+            for key, value in theme_overrides.items()
+        }
+    else:
+        cfg["opt_theme_overrides"] = {}
 
     if "opt_naming_mode" not in cfg and "opt_fallback_title_mode" in cfg:
-        cfg["opt_naming_mode"] = cfg.get("opt_fallback_title_mode", DEFAULTS["opt_naming_mode"])
+        cfg["opt_naming_mode"] = cfg.get(
+            "opt_fallback_title_mode",
+            DEFAULTS["opt_naming_mode"],
+        )
     cfg.pop("opt_fallback_title_mode", None)
+    return cfg
 
+
+def _required_blank_fields(cfg: Mapping[str, object]) -> list[str]:
     required = ("temp_folder", "tv_folder", "movies_folder")
-    for field in required:
-        if not str(cfg.get(field, "") or "").strip():
-            raise ValueError(f"Missing required config field: {field}")
+    return [
+        field
+        for field in required
+        if not str(cfg.get(field, "") or "").strip()
+    ]
+
+
+def _invalid_path_fields(cfg: Mapping[str, object]) -> list[str]:
+    path_fields = (
+        "makemkvcon_path",
+        "ffprobe_path",
+        "ffmpeg_path",
+        "handbrake_path",
+        "temp_folder",
+        "tv_folder",
+        "movies_folder",
+    )
+    return [
+        field
+        for field in path_fields
+        if not isinstance(cfg.get(field, DEFAULTS.get(field, "")), str)
+    ]
+
+
+def load_config() -> ConfigDict:
+    """Load config as the mutable mapping shape used by the GUI and controller."""
+    raw, _issues = _load_raw_config()
+    cfg = _merge_config(raw)
+
+    missing_fields = _required_blank_fields(cfg)
+    if missing_fields:
+        field_list = ", ".join(missing_fields)
+        raise ValueError(f"Missing required config field(s): {field_list}")
 
     return cfg
+
+
+def load_startup_config() -> StartupConfigResult:
+    """Load config for startup without preventing the app shell from opening."""
+    raw, issues = _load_raw_config()
+    cfg = _merge_config(raw)
+
+    invalid_path_fields = _invalid_path_fields(cfg)
+    if invalid_path_fields:
+        for field in invalid_path_fields:
+            cfg[field] = DEFAULTS[field]
+        issues.append(
+            StartupConfigIssue(
+                code="config_invalid_path_values",
+                message=(
+                    "One or more path settings had invalid values and were reset "
+                    "to defaults for this launch."
+                ),
+                should_open_settings=True,
+            )
+        )
+
+    missing_fields = _required_blank_fields(cfg)
+    if missing_fields:
+        for field in missing_fields:
+            cfg[field] = DEFAULTS[field]
+        issues.append(
+            StartupConfigIssue(
+                code="config_missing_required_paths",
+                message=(
+                    "One or more library/temp folders were blank in Settings and were "
+                    "reset to defaults for this launch."
+                ),
+                should_open_settings=True,
+            )
+        )
+
+    return StartupConfigResult(config=cfg, issues=tuple(issues))
 
 
 def save_config(cfg: Mapping[str, object] | AppConfig) -> None:
     payload = asdict(cfg) if isinstance(cfg, AppConfig) else dict(cfg)
     try:
+        get_config_dir()
         tmp = CONFIG_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)

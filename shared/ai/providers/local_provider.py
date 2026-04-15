@@ -10,31 +10,59 @@ from typing import Any
 
 from shared.ai.providers.base import BaseProvider, ConnectionResult, ProviderInfo
 
+_MODEL_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)b\b")
+
+
+def _local_model_sort_key(model_name: str) -> tuple[float, float, str]:
+    lowered = str(model_name or "").strip().lower()
+    size_matches = [float(match) for match in _MODEL_SIZE_RE.findall(lowered)]
+    largest_size = max(size_matches) if size_matches else 0.0
+
+    family_bonus = 0.0
+    if lowered.startswith("qwen"):
+        family_bonus = 40.0
+    elif lowered.startswith("llama"):
+        family_bonus = 30.0
+    elif lowered.startswith("mistral"):
+        family_bonus = 20.0
+    elif lowered.startswith("gemma"):
+        family_bonus = 10.0
+
+    return (-largest_size, -family_bonus, lowered)
+
+
+def _sort_local_models(models: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for model in models:
+        name = str(model or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(name)
+    return sorted(unique, key=_local_model_sort_key)
+
 
 class LocalProvider(BaseProvider):
     """Local model backend via Ollama HTTP API."""
 
     _DEFAULT_MODEL = "qwen2.5:14b-instruct"
-    _MODELS = [
-        "qwen2.5:14b-instruct",
-        "qwen2.5:7b-instruct",
-        "llama3.1:8b-instruct-q4_0",
-        "mistral:7b-instruct",
-        "gemma2:9b-it",
-    ]
 
     def __init__(self) -> None:
         self._model = self._DEFAULT_MODEL
         self._base_url = "http://localhost:11434"
 
     def info(self) -> ProviderInfo:
-        available_models = self._merge_available_models(self._get_available_models())
+        available_models = self._get_available_models()
         return ProviderInfo(
             id="local",
             display_name="Local (Ollama)",
             category="local",
             requires_api_key=False,
-            default_model=self._DEFAULT_MODEL,
+            default_model=available_models[0] if available_models else "",
             available_models=available_models,
             help_url="https://ollama.com/download",
         )
@@ -58,21 +86,8 @@ class LocalProvider(BaseProvider):
                 return token
         return ""
 
-    def _merge_available_models(self, installed_models: list[str]) -> list[str]:
-        ordered: list[str] = []
-        seen: set[str] = set()
-        for name in [*installed_models, *self._MODELS]:
-            if not name:
-                continue
-            key = name.lower()
-            if key in seen:
-                continue
-            ordered.append(name)
-            seen.add(key)
-        return ordered
-
     def _resolve_model_name(self, available_models: list[str] | None = None) -> str | None:
-        models = list(available_models or self._get_available_models())
+        models = _sort_local_models(list(available_models or self._get_available_models()))
         if not models:
             return None
 
@@ -80,25 +95,10 @@ class LocalProvider(BaseProvider):
         exact = {name.lower(): name for name in models}
         if configured in exact:
             return exact[configured]
+        return models[0]
 
-        requested_family = self._family_token(self._model)
-        requested_size = self._size_token(self._model)
-        best_name: str | None = None
-        best_score = -1
-        for name in models:
-            lowered = name.lower()
-            score = 0
-            if self._family_token(lowered) == requested_family:
-                score += 4
-            if requested_size and self._size_token(lowered) == requested_size:
-                score += 2
-            if requested_family and requested_family in lowered:
-                score += 1
-            if score > best_score:
-                best_score = score
-                best_name = name
-
-        return best_name if best_score > 0 else None
+    def get_selected_model_name(self, available_models: list[str] | None = None) -> str:
+        return self._resolve_model_name(available_models) or ""
 
     def _require_model_name(self) -> str:
         available_models = self._get_available_models()
@@ -116,7 +116,7 @@ class LocalProvider(BaseProvider):
 
     def is_available(self) -> bool:
         try:
-            return bool(self._resolve_model_name())
+            return bool(self._get_available_models())
         except Exception:
             return False
 
@@ -128,7 +128,9 @@ class LocalProvider(BaseProvider):
             )
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read())
-            return [m["name"] for m in data.get("models", []) if "name" in m]
+            return _sort_local_models(
+                [m["name"] for m in data.get("models", []) if "name" in m]
+            )
         except Exception:
             return []
 
@@ -163,6 +165,7 @@ class LocalProvider(BaseProvider):
             ms = (time.time() - start) * 1000
 
             available_models = [m.get("name", "") for m in data.get("models", []) if m.get("name")]
+            available_models = _sort_local_models(available_models)
             resolved_model = self._resolve_model_name(available_models)
             if not resolved_model:
                 pulled = [m.get("name", "?") for m in data.get("models", [])]
@@ -174,7 +177,7 @@ class LocalProvider(BaseProvider):
 
             confirmed = resolved_model
             if resolved_model.lower() != self._model.strip().lower():
-                confirmed = f"{resolved_model} (closest installed)"
+                confirmed = f"{resolved_model} (installed on this PC)"
             return ConnectionResult(
                 success=True,
                 latency_ms=ms,

@@ -248,11 +248,17 @@ class LegacyControllerMixin:
             "Yes = browse/select per-mode paths\n"
             "No = use saved defaults"
         ):
+            if self.engine.abort_event.is_set():
+                return None
             return resolved
+        if self.engine.abort_event.is_set():
+            return None
 
         self.log("Custom run-folder override selected — collecting paths.")
 
         for key, label in path_fields:
+            if self.engine.abort_event.is_set():
+                return None
             default_path = resolved[key]
             used_picker = callable(getattr(self.gui, "ask_directory", None))
 
@@ -265,6 +271,8 @@ class LegacyControllerMixin:
                     "Choose folder (Cancel = keep default)",
                     initialdir=default_path,
                 )
+                if self.engine.abort_event.is_set():
+                    return None
                 if chosen is None:
                     resolved[key] = default_path
                     self.log(
@@ -298,6 +306,8 @@ class LegacyControllerMixin:
                     "Enter folder path (Skip = keep default):",
                     default_value=default_path,
                 )
+                if self.engine.abort_event.is_set():
+                    return None
                 if entered is None:
                     resolved[key] = default_path
                     self.log(
@@ -318,6 +328,8 @@ class LegacyControllerMixin:
                 if self.gui.ask_yesno(
                     f"Folder does not exist:\n{chosen}\n\nCreate it?"
                 ):
+                    if self.engine.abort_event.is_set():
+                        return None
                     try:
                         os.makedirs(chosen, exist_ok=True)
                         resolved[key] = chosen
@@ -342,6 +354,8 @@ class LegacyControllerMixin:
             self.gui.show_error("Invalid Run Paths", error)
             return None
 
+        if self.engine.abort_event.is_set():
+            return None
         self.log("Custom folders set, continuing...")
 
         return resolved
@@ -798,4 +812,3 @@ class LegacyControllerMixin:
             selected_ids,
             expected_size_by_title,
         )
-

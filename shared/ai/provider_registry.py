@@ -20,39 +20,62 @@ from shared.ai.providers.base import BaseProvider, ProviderInfo
 
 _logger = logging.getLogger("ai_provider_registry")
 
-# Lazy-loaded provider instances (one per provider id)
-_providers: dict[str, BaseProvider] = {}
+_PROVIDER_ORDER = ("claude", "openai", "gemini", "local")
+
+# Lazy-loaded provider classes. We create fresh instances per request so
+# stale API keys, models, or local URLs never bleed across lookups.
+_provider_classes: dict[str, type[BaseProvider]] = {}
 
 
-def _ensure_providers() -> dict[str, BaseProvider]:
+def _ensure_provider_classes() -> dict[str, type[BaseProvider]]:
     """Lazy-init all known provider classes."""
-    if _providers:
-        return _providers
+    if _provider_classes:
+        return _provider_classes
 
     from shared.ai.providers.claude_provider import ClaudeProvider
     from shared.ai.providers.gemini_provider import GeminiProvider
     from shared.ai.providers.local_provider import LocalProvider
     from shared.ai.providers.openai_provider import OpenAIProvider
 
-    _providers["claude"] = ClaudeProvider()
-    _providers["openai"] = OpenAIProvider()
-    _providers["gemini"] = GeminiProvider()
-    _providers["local"] = LocalProvider()
-    return _providers
+    _provider_classes["claude"] = ClaudeProvider
+    _provider_classes["openai"] = OpenAIProvider
+    _provider_classes["gemini"] = GeminiProvider
+    _provider_classes["local"] = LocalProvider
+    return _provider_classes
+
+
+def _iter_provider_ids() -> list[str]:
+    classes = _ensure_provider_classes()
+    return [pid for pid in _PROVIDER_ORDER if pid in classes]
 
 
 def list_providers() -> list[ProviderInfo]:
     """Return metadata for all known providers (cloud first, then local)."""
-    providers = _ensure_providers()
-    cloud = [p.info() for p in providers.values() if p.info().category == "cloud"]
-    local = [p.info() for p in providers.values() if p.info().category == "local"]
+    all_creds = load_credentials()
+    cloud: list[ProviderInfo] = []
+    local: list[ProviderInfo] = []
+
+    for pid in _iter_provider_ids():
+        provider = get_provider(pid)
+        if provider is None:
+            continue
+        creds = all_creds.get(pid, {})
+        if creds:
+            provider.configure(**creds)
+        info = provider.info()
+        if info.category == "cloud":
+            cloud.append(info)
+        else:
+            local.append(info)
     return cloud + local
 
 
 def get_provider(provider_id: str) -> BaseProvider | None:
     """Get a provider instance by id. Returns None if unknown."""
-    providers = _ensure_providers()
-    return providers.get(provider_id)
+    provider_cls = _ensure_provider_classes().get(provider_id)
+    if provider_cls is None:
+        return None
+    return provider_cls()
 
 
 def get_configured_provider(provider_id: str) -> BaseProvider | None:
@@ -77,14 +100,17 @@ def resolve_active_cloud_provider() -> BaseProvider | None:
     active_id = get_active_provider_id()
     if active_id:
         provider = get_configured_provider(active_id)
-        if provider and provider.is_available():
+        if provider and provider.info().category == "cloud" and provider.is_available():
             return provider
 
     # Fallback: find any cloud provider with credentials
     all_creds = load_credentials()
-    providers = _ensure_providers()
-    for pid, p in providers.items():
-        if p.info().category != "cloud":
+    for pid in _iter_provider_ids():
+        p = get_provider(pid)
+        if p is None:
+            continue
+        info = p.info()
+        if info.category != "cloud":
             continue
         creds = all_creds.get(pid, {})
         if creds.get("api_key"):
@@ -122,21 +148,29 @@ def get_connection_summary() -> dict[str, dict[str, Any]]:
 
     Used by the AI provider dialog to show current status.
     """
-    providers = _ensure_providers()
     all_creds = load_credentials()
     active_id = get_active_provider_id()
     summary: dict[str, dict[str, Any]] = {}
 
-    for pid, provider in providers.items():
-        info = provider.info()
+    for pid in _iter_provider_ids():
+        provider = get_provider(pid)
+        if provider is None:
+            continue
         creds = all_creds.get(pid, {})
-        has_key = bool(creds.get("api_key")) if info.requires_api_key else True
-        model = creds.get("model", info.default_model)
+        if creds:
+            provider.configure(**creds)
+        info = provider.info()
+        if info.category == "cloud":
+            has_credentials = bool(creds.get("api_key"))
+            model = creds.get("model", info.default_model)
+        else:
+            has_credentials = provider.is_available()
+            model = creds.get("model", "") or (info.available_models[0] if info.available_models else "")
 
         summary[pid] = {
             "display_name": info.display_name,
             "category": info.category,
-            "has_credentials": has_key,
+            "has_credentials": has_credentials,
             "model": model,
             "is_active": pid == active_id,
             "help_url": info.help_url,

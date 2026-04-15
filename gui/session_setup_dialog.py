@@ -10,6 +10,8 @@ import tkinter as tk
 from dataclasses import dataclass
 from tkinter import ttk
 
+from gui.theme import dialog_palette
+
 # ---------------------------------------------------------------------------
 # Result dataclasses
 # ---------------------------------------------------------------------------
@@ -45,17 +47,19 @@ class TVSessionSetup:
 # Internal style constants
 # ---------------------------------------------------------------------------
 
-_BG        = "#0d1117"
-_BG2       = "#161b22"
-_BG3       = "#21262d"
-_FG        = "#c9d1d9"
-_FG_DIM    = "#8b949e"
-_ACCENT    = "#58a6ff"
-_GREEN     = "#238636"
-_CANCEL_BG = "#30363d"
+_COLORS = dialog_palette()
+_BG        = _COLORS["surface_deep"]
+_BG2       = _COLORS["surface"]
+_BG3       = _COLORS["border"]
+_FG        = _COLORS["text"]
+_FG_DIM    = _COLORS["muted"]
+_ACCENT    = _COLORS["accent"]
+_GREEN     = _COLORS["primary_button_bg"]
+_CANCEL_BG = _COLORS["secondary_button_bg"]
 
 _EDITION_OPTIONS = [
     "",
+    "Standard",
     "Theatrical Cut",
     "Director's Cut",
     "Extended Edition",
@@ -147,13 +151,28 @@ def _label_in_row(row: tk.Frame, text: str, width: int = 18) -> tk.Label:
 def _required_star(row: tk.Frame) -> None:
     tk.Label(
         row, text="*",
-        bg=_BG2, fg="#f85149",
+        bg=_BG2, fg=_COLORS["danger_fg"],
         font=("Segoe UI", 10, "bold"),
     ).pack(side="left", padx=(0, 4))
 
 
 def _metadata_provider_label(value: str) -> str:
     return _METADATA_PROVIDER_LABELS.get(str(value or "").strip().lower(), "TMDB")
+
+
+def _prepare_identity_dialog_window(win: tk.Toplevel, parent: tk.Misc) -> None:
+    """Keep setup dialogs focused without grabbing the whole app."""
+    win.configure(bg=_BG2)
+    win.resizable(False, False)
+    try:
+        win.transient(parent)
+    except Exception:
+        pass
+    try:
+        win.lift(parent)
+    except Exception:
+        pass
+    win.focus_force()
 
 
 # ---------------------------------------------------------------------------
@@ -173,10 +192,7 @@ def build_movie_setup_dialog(
 
     win = tk.Toplevel(parent)
     win.title("Movie \u2014 Library Identity")
-    win.configure(bg=_BG2)
-    win.resizable(False, False)
-    win.grab_set()
-    win.focus_force()
+    _prepare_identity_dialog_window(win, parent)
 
     # ── Header ──────────────────────────────────────────────────────────────
     tk.Label(
@@ -275,7 +291,7 @@ def build_movie_setup_dialog(
     error_var = tk.StringVar()
     error_lbl = tk.Label(
         win, textvariable=error_var,
-        bg=_BG2, fg="#f85149",
+        bg=_BG2, fg=_COLORS["danger_fg"],
         font=("Segoe UI", 9),
     )
     error_lbl.pack(padx=20, anchor="w")
@@ -316,14 +332,14 @@ def build_movie_setup_dialog(
     tk.Button(
         btn_row, text="Cancel",
         command=_cancel,
-        bg=_CANCEL_BG, fg=_FG_DIM,
+        bg=_CANCEL_BG, fg=_COLORS["secondary_button_fg"],
         font=("Segoe UI", 10),
         width=10, relief="flat",
     ).pack(side="left", padx=(0, 8))
     tk.Button(
         btn_row, text="Next  \u2192",
         command=_submit,
-        bg=_GREEN, fg="white",
+        bg=_GREEN, fg=_COLORS["primary_button_fg"],
         font=("Segoe UI", 11, "bold"),
         width=14, relief="flat",
     ).pack(side="left")
@@ -360,10 +376,7 @@ def build_tv_setup_dialog(
 
     win = tk.Toplevel(parent)
     win.title("TV Show \u2014 Library Identity")
-    win.configure(bg=_BG2)
-    win.resizable(False, False)
-    win.grab_set()
-    win.focus_force()
+    _prepare_identity_dialog_window(win, parent)
 
     # ── Header ──────────────────────────────────────────────────────────────
     tk.Label(
@@ -494,7 +507,7 @@ def build_tv_setup_dialog(
     error_var = tk.StringVar()
     error_lbl = tk.Label(
         win, textvariable=error_var,
-        bg=_BG2, fg="#f85149",
+        bg=_BG2, fg=_COLORS["danger_fg"],
         font=("Segoe UI", 9),
     )
     error_lbl.pack(padx=20, anchor="w")
@@ -542,14 +555,14 @@ def build_tv_setup_dialog(
     tk.Button(
         btn_row, text="Cancel",
         command=_cancel,
-        bg=_CANCEL_BG, fg=_FG_DIM,
+        bg=_CANCEL_BG, fg=_COLORS["secondary_button_fg"],
         font=("Segoe UI", 10),
         width=10, relief="flat",
     ).pack(side="left", padx=(0, 8))
     tk.Button(
         btn_row, text="Next  \u2192",
         command=_submit,
-        bg=_GREEN, fg="white",
+        bg=_GREEN, fg=_COLORS["primary_button_fg"],
         font=("Segoe UI", 11, "bold"),
         width=14, relief="flat",
     ).pack(side="left")

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from controller.controller import RipperController
+from controller.controller import IdentitySuggestion, RipperController
 import controller.controller as controller_module
 from controller.naming import build_fallback_title
 from engine.ripper_engine import RipperEngine
@@ -25,6 +25,8 @@ from gui.setup_wizard import JELLYFIN_EXTRAS_CATEGORIES
 class DummyGUI:
     def __init__(self):
         self.messages = []
+        self.ai_messages = []
+        self.ai_choices = []
 
     def append_log(self, msg):
         self.messages.append(msg)
@@ -61,6 +63,31 @@ class DummyGUI:
 
     def show_extras_picker(self, _title, _prompt, _options):
         return []
+
+    def push_ai_chat_message(
+        self,
+        role,
+        text,
+        backend_tag="",
+        open_sidebar=False,
+    ):
+        self.ai_messages.append(
+            {
+                "role": role,
+                "text": text,
+                "backend_tag": backend_tag,
+                "open_sidebar": open_sidebar,
+            }
+        )
+
+    def ask_ai_identity_choice(self, suggestion_text, *, backend_tag=""):
+        self.ai_choices.append(
+            {
+                "text": suggestion_text,
+                "backend_tag": backend_tag,
+            }
+        )
+        return "edit"
 
     def show_disc_tree(self, *_args, **_kwargs):
         return []
@@ -537,6 +564,29 @@ def test_rip_all_titles_nonzero_exit_with_output_is_failure(tmp_path, monkeypatc
     )
 
 
+def test_rip_selected_titles_success_without_output_logs_dir_contents_instead_of_crashing(
+    tmp_path, monkeypatch
+):
+    engine = RipperEngine(_engine_cfg(opt_auto_retry=False, opt_retry_attempts=1))
+    logs = []
+
+    def fake_run(_cmd, _on_progress, _on_log):
+        return True
+
+    monkeypatch.setattr(engine, "_run_rip_process", fake_run)
+
+    success, failed = engine.rip_selected_titles(
+        str(tmp_path), [0], on_progress=lambda _p: None, on_log=logs.append
+    )
+
+    assert success is False
+    assert failed == [1]
+    assert any(
+        "Rip target directory is empty after MakeMKV run" in line
+        for line in logs
+    )
+
+
 def test_rip_all_titles_records_multi_file_title_groups_for_dump_all(
     tmp_path, monkeypatch
 ):
@@ -798,6 +848,164 @@ def test_run_dump_all_reports_file_and_title_group_counts(tmp_path, monkeypatch)
     assert "3 file(s) across 2 title group(s)" in infos[-1][1]
 
 
+def test_run_dump_all_multi_prefers_cached_disc_size_after_fingerprint(
+    tmp_path,
+    monkeypatch,
+):
+    controller, engine = _controller_with_engine()
+
+    temp_root = tmp_path / "temp"
+    temp_root.mkdir()
+
+    engine.cfg["opt_show_temp_manager"] = False
+    engine.cfg["opt_scan_disc_size"] = True
+
+    monkeypatch.setattr(engine, "reset_abort", lambda: None)
+    monkeypatch.setattr(
+        engine,
+        "cleanup_partial_files",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        controller,
+        "_collect_dump_all_multi_setup",
+        lambda: (1, [], "Batch"),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_wait_for_new_unique_disc",
+        lambda *_args, **_kwargs: "fingerprint-1",
+    )
+    monkeypatch.setattr(
+        engine,
+        "write_temp_metadata",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        controller,
+        "_safe_glob",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        engine,
+        "run_job",
+        lambda *_args, **_kwargs: SimpleNamespace(success=False),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_normalize_rip_result",
+        lambda *_args, **_kwargs: (False, []),
+    )
+    monkeypatch.setattr(controller, "write_session_summary", lambda: None)
+    monkeypatch.setattr(controller, "flush_log", lambda: None)
+    monkeypatch.setattr(
+        controller.gui,
+        "show_info",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        controller.gui,
+        "show_error",
+        lambda *_args, **_kwargs: None,
+    )
+
+    prefer_cached_calls = []
+
+    def _fake_get_disc_size(
+        _on_log,
+        prefer_cached=False,
+        timeout_seconds=None,
+    ):
+        _ = timeout_seconds
+        prefer_cached_calls.append(prefer_cached)
+        return None
+
+    monkeypatch.setattr(engine, "get_disc_size", _fake_get_disc_size)
+
+    controller._run_dump_all_multi(str(temp_root))
+
+    assert prefer_cached_calls == [True]
+
+
+def test_run_dump_all_multi_skips_cached_size_after_manual_advance(
+    tmp_path,
+    monkeypatch,
+):
+    controller, engine = _controller_with_engine()
+
+    temp_root = tmp_path / "temp"
+    temp_root.mkdir()
+
+    engine.cfg["opt_show_temp_manager"] = False
+    engine.cfg["opt_scan_disc_size"] = True
+
+    monkeypatch.setattr(engine, "reset_abort", lambda: None)
+    monkeypatch.setattr(
+        engine,
+        "cleanup_partial_files",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        controller,
+        "_collect_dump_all_multi_setup",
+        lambda: (1, [], "Batch"),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_wait_for_new_unique_disc",
+        lambda *_args, **_kwargs: "manual-advance",
+    )
+    monkeypatch.setattr(
+        engine,
+        "write_temp_metadata",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        controller,
+        "_safe_glob",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        engine,
+        "run_job",
+        lambda *_args, **_kwargs: SimpleNamespace(success=False),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_normalize_rip_result",
+        lambda *_args, **_kwargs: (False, []),
+    )
+    monkeypatch.setattr(controller, "write_session_summary", lambda: None)
+    monkeypatch.setattr(controller, "flush_log", lambda: None)
+    monkeypatch.setattr(
+        controller.gui,
+        "show_info",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        controller.gui,
+        "show_error",
+        lambda *_args, **_kwargs: None,
+    )
+
+    prefer_cached_calls = []
+
+    def _fake_get_disc_size(
+        _on_log,
+        prefer_cached=False,
+        timeout_seconds=None,
+    ):
+        _ = timeout_seconds
+        prefer_cached_calls.append(prefer_cached)
+        return None
+
+    monkeypatch.setattr(engine, "get_disc_size", _fake_get_disc_size)
+
+    controller._run_dump_all_multi(str(temp_root))
+
+    assert prefer_cached_calls == [False]
+
+
 def test_build_disc_fingerprint_uses_titles_beyond_top12(monkeypatch):
     controller, _engine = _controller_with_engine()
 
@@ -912,6 +1120,152 @@ def test_wait_for_new_unique_disc_stop_after_unverified(monkeypatch):
         "stopped after unverified disc prompt" in line.lower()
         for line in controller.session_report
     )
+
+
+def test_wait_for_new_unique_disc_accepts_fast_identity_without_fingerprint(
+    monkeypatch,
+):
+    controller, engine = _controller_with_engine()
+
+    engine._last_scan_target = engine.get_disc_target()
+    engine._last_scan_timestamp = controller_module.time.time()
+    engine._last_scan_total_bytes = 123456789
+    engine.last_disc_info = {
+        "volume_id": "DISC_A",
+        "title_count": 4,
+        "size_signature": "111,222,333,444",
+    }
+
+    monkeypatch.setattr(
+        controller.gui, "show_info", lambda *_a, **_k: None, raising=False
+    )
+    monkeypatch.setattr(controller, "_disc_present", lambda **_k: True)
+    monkeypatch.setattr(
+        controller,
+        "_build_disc_fingerprint",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("full fingerprint should not run")
+        ),
+    )
+
+    seen_fast = set()
+    result = controller._wait_for_new_unique_disc(
+        seen_fingerprints=set(),
+        seen_disc_identities=seen_fast,
+        disc_number=2,
+        total=4,
+    )
+
+    assert result.startswith("volume:disc_a|")
+    assert result in seen_fast
+
+
+def test_wait_for_new_unique_disc_detects_duplicate_via_fast_identity(
+    monkeypatch,
+):
+    controller, engine = _controller_with_engine()
+
+    engine._last_scan_target = engine.get_disc_target()
+    engine._last_scan_timestamp = controller_module.time.time()
+    engine._last_scan_total_bytes = 123456789
+    engine.last_disc_info = {
+        "volume_id": "DISC_A",
+        "title_count": 4,
+        "size_signature": "111,222,333,444",
+    }
+
+    fast_identity = controller._recent_disc_fast_identity()
+    assert fast_identity is not None
+
+    monkeypatch.setattr(
+        controller.gui, "show_info", lambda *_a, **_k: None, raising=False
+    )
+    monkeypatch.setattr(controller, "_disc_present", lambda **_k: True)
+    monkeypatch.setattr(
+        controller,
+        "_build_disc_fingerprint",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("full fingerprint should not run")
+        ),
+    )
+
+    result = controller._wait_for_new_unique_disc(
+        seen_fingerprints=set(),
+        seen_disc_identities={fast_identity},
+        disc_number=2,
+        total=4,
+    )
+
+    assert result == "duplicate"
+
+
+def test_wait_for_disc_state_uses_fast_probe_for_removal(monkeypatch):
+    controller, engine = _controller_with_engine()
+    engine.cfg["opt_disc_presence_probe_seconds"] = 45
+
+    seen = []
+
+    def _fake_disc_present(probe_timeout_seconds=None):
+        seen.append(probe_timeout_seconds)
+        return False
+
+    monkeypatch.setattr(controller, "_disc_present", _fake_disc_present)
+
+    assert controller._wait_for_disc_state(
+        want_present=False,
+        timeout_seconds=10,
+    ) is True
+    assert seen == [8]
+
+
+def test_wait_for_disc_state_uses_full_probe_for_insertion(monkeypatch):
+    controller, engine = _controller_with_engine()
+    engine.cfg["opt_disc_presence_probe_seconds"] = 45
+
+    seen = []
+
+    def _fake_disc_present(probe_timeout_seconds=None):
+        seen.append(probe_timeout_seconds)
+        return True
+
+    monkeypatch.setattr(controller, "_disc_present", _fake_disc_present)
+
+    assert controller._wait_for_disc_state(
+        want_present=True,
+        timeout_seconds=10,
+    ) is True
+    assert seen == [45]
+
+
+def test_wait_for_new_unique_disc_uses_fast_pre_swapped_probe(monkeypatch):
+    controller, engine = _controller_with_engine()
+    engine.cfg["opt_disc_presence_probe_seconds"] = 45
+
+    seen = []
+
+    monkeypatch.setattr(
+        controller.gui, "show_info", lambda *_a, **_k: None, raising=False
+    )
+
+    def _fake_disc_present(probe_timeout_seconds=None):
+        seen.append(probe_timeout_seconds)
+        return False
+
+    monkeypatch.setattr(controller, "_disc_present", _fake_disc_present)
+    monkeypatch.setattr(
+        controller,
+        "_wait_for_disc_state",
+        lambda *_a, **_k: False,
+    )
+
+    result = controller._wait_for_new_unique_disc(
+        seen_fingerprints=set(),
+        disc_number=2,
+        total=4,
+    )
+
+    assert result is None
+    assert seen == [8]
 
 
 def test_preview_title_finds_nested_mkv_output(tmp_path, monkeypatch):
@@ -1075,6 +1429,119 @@ def test_get_disc_size_silent_process_times_out(monkeypatch):
     assert result is None
     assert proc.terminated or proc.killed
     assert any("disc-size scan timed out" in m.lower() for m in logs)
+
+
+def test_get_disc_size_records_fast_disc_identity(monkeypatch):
+    _controller, engine = _controller_with_engine()
+
+    class _FakeStdout:
+        def close(self):
+            pass
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdout = _FakeStdout()
+
+        def poll(self):
+            return 0
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            _ = timeout
+            return 0
+
+    class _Queue:
+        def __init__(self):
+            self._items = iter([
+                'CINFO:2,0,"Demo Disc"',
+                'CINFO:32,0,"VOL001"',
+                'TINFO:0,11,0,"10.0 GB"',
+                'TINFO:1,11,0,"5.0 GB"',
+            ])
+
+        def get(self, timeout=None):
+            _ = timeout
+            try:
+                return next(self._items)
+            except StopIteration:
+                raise queue.Empty
+
+    monkeypatch.setattr(
+        "engine.ripper_engine.subprocess.Popen",
+        lambda *args, **kwargs: _FakeProc(),
+    )
+    monkeypatch.setattr(
+        "engine.ripper_engine.queue_module.Queue",
+        lambda: _Queue(),
+    )
+    monkeypatch.setattr(engine, "_stdout_reader", lambda *_args, **_kwargs: None)
+
+    total = engine.get_disc_size(lambda _msg: None)
+
+    assert total == 15_000_000_000
+    assert engine.last_disc_info["title"] == "Demo Disc"
+    assert engine.last_disc_info["volume_id"] == "VOL001"
+    assert engine.last_disc_info["title_count"] == 2
+    assert engine.last_disc_info["size_signature"]
+
+
+def test_scan_disc_sets_and_clears_current_process(monkeypatch):
+    _controller, engine = _controller_with_engine()
+
+    class _FakeStdout:
+        def __init__(self):
+            self._lines = iter([
+                'CINFO:2,0,"Demo Disc"\n',
+                'TINFO:0,2,0,"Main Feature"\n',
+                'TINFO:0,9,0,"01:30:00"\n',
+                'TINFO:0,8,0,"12"\n',
+                'TINFO:0,11,0,"10.0 GB"\n',
+                "",
+            ])
+
+        def readline(self):
+            return next(self._lines, "")
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdout = _FakeStdout()
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            _ = timeout
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = -15
+
+        def kill(self):
+            self.returncode = -9
+
+    proc = _FakeProc()
+    seen = {"during_scan": False}
+
+    monkeypatch.setattr(
+        "engine.ripper_engine.subprocess.Popen",
+        lambda *args, **kwargs: proc,
+    )
+
+    def _progress(_value):
+        seen["during_scan"] = seen["during_scan"] or (
+            engine.current_process is proc
+        )
+
+    result = engine.scan_disc(lambda _msg: None, _progress)
+
+    assert seen["during_scan"] is True
+    assert engine.current_process is None
+    assert result
+    assert engine.last_disc_info["title_count"] == 1
+    assert engine.last_disc_info["size_signature"]
 
 
 def test_prompt_run_path_overrides_uses_defaults_when_declined():
@@ -1258,10 +1725,24 @@ def test_movie_run_does_not_consult_resume_state(tmp_path, monkeypatch):
     # Track what ask_input receives as default_value — the movie disc flow
     # should NOT pre-fill defaults from resume state.
     input_defaults = []
-    original_ask_input = controller.gui.ask_input
+    events = []
+    disc_titles = [
+        {
+            "id": 0,
+            "name": "Main Feature",
+            "duration": "120:00",
+            "size": "4.0 GB",
+            "duration_seconds": 7200,
+            "size_bytes": 4_000_000_000,
+            "chapters": 20,
+            "audio_tracks": [1],
+            "subtitle_tracks": [1],
+        },
+    ]
 
-    def tracking_ask_input(_label, _prompt, default_value=""):
+    def tracking_ask_input(label, _prompt, default_value=""):
         input_defaults.append(default_value)
+        events.append(f"prompt:{label}")
         return default_value
 
     controller.gui.ask_input = tracking_ask_input
@@ -1273,15 +1754,21 @@ def test_movie_run_does_not_consult_resume_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         engine,
         "write_temp_metadata",
-        lambda path, title, disc_number, **kwargs: writes.append(
-            (path, title, disc_number, kwargs)
-        ),
+        lambda path, title, disc_number, **kwargs: (
+            writes.append((path, title, disc_number, kwargs)),
+            engine.abort(),
+        )[-1],
     )
-
-    monkeypatch.setattr(controller, "scan_with_retry", lambda: None)
+    monkeypatch.setattr(controller, "_log_drive_compatibility", lambda: True)
+    monkeypatch.setattr(
+        controller,
+        "scan_with_retry",
+        lambda: (events.append("scan"), disc_titles)[1],
+    )
 
     controller.run_movie_disc()
 
+    assert events.index("scan") < events.index("prompt:Title")
     # Title and year prompts should have fresh defaults (no resume data).
     # Title default is "" (no active_resume), year default is "0000"
     # (the initialized placeholder, not a previously saved year).
@@ -1318,25 +1805,45 @@ def test_tv_run_does_not_consult_resume_state(tmp_path, monkeypatch):
     # Track what ask_input receives as default_value — the TV disc flow
     # should NOT pre-fill defaults from resume state.
     input_defaults = []
-    call_count = [0]
+    events = []
+    disc_titles = [
+        {
+            "id": 0,
+            "name": "Episode Block",
+            "duration": "120:00",
+            "size": "4.0 GB",
+            "duration_seconds": 7200,
+            "size_bytes": 4_000_000_000,
+            "chapters": 20,
+            "audio_tracks": [1],
+            "subtitle_tracks": [1],
+        },
+    ]
 
-    def tracking_ask_input(_label, _prompt, default_value=""):
-        input_defaults.append((_label, default_value))
-        call_count[0] += 1
-        # Abort after collecting the season input to prevent scan_with_retry
-        if call_count[0] >= 3:  # title, metadata, season
-            engine.abort()
+    def tracking_ask_input(label, _prompt, default_value=""):
+        input_defaults.append((label, default_value))
+        events.append(f"prompt:{label}")
         return default_value
 
     controller.gui.ask_input = tracking_ask_input
 
     monkeypatch.setattr(engine, "cleanup_partial_files", lambda *_a, **_k: None)
-    monkeypatch.setattr(engine, "write_temp_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        engine,
+        "write_temp_metadata",
+        lambda *_a, **_k: engine.abort(),
+    )
     monkeypatch.setattr(engine, "update_temp_metadata", lambda *_a, **_k: None)
-    monkeypatch.setattr(controller, "scan_with_retry", lambda: None)
+    monkeypatch.setattr(controller, "_log_drive_compatibility", lambda: True)
+    monkeypatch.setattr(
+        controller,
+        "scan_with_retry",
+        lambda: (events.append("scan"), disc_titles)[1],
+    )
 
     controller.run_tv_disc()
 
+    assert events.index("scan") < events.index("prompt:Title")
     # The title prompt should have an empty default (no resume data).
     title_calls = [d for label, d in input_defaults if label == "Title"]
     assert title_calls and title_calls[0] == ""
@@ -1382,16 +1889,29 @@ def test_movie_run_custom_folder_overrides_continue_past_path_selection(tmp_path
     monkeypatch.setattr(
         engine,
         "write_temp_metadata",
-        lambda path, title, disc_number, **kwargs: writes.append(
-            (path, title, disc_number, kwargs)
-        ),
+        lambda path, title, disc_number, **kwargs: (
+            writes.append((path, title, disc_number, kwargs)),
+            engine.abort(),
+        )[-1],
     )
-
-    def scan_and_abort():
-        engine.abort()
-        return None
-
-    monkeypatch.setattr(controller, "scan_with_retry", scan_and_abort)
+    monkeypatch.setattr(controller, "_log_drive_compatibility", lambda: True)
+    monkeypatch.setattr(
+        controller,
+        "scan_with_retry",
+        lambda: [
+            {
+                "id": 0,
+                "name": "Main Feature",
+                "duration": "120:00",
+                "size": "4.0 GB",
+                "duration_seconds": 7200,
+                "size_bytes": 4_000_000_000,
+                "chapters": 20,
+                "audio_tracks": [1],
+                "subtitle_tracks": [1],
+            },
+        ],
+    )
 
     controller.run_movie_disc()
 
@@ -1400,6 +1920,48 @@ def test_movie_run_custom_folder_overrides_continue_past_path_selection(tmp_path
     assert new_rip_path.startswith(os.path.normpath(str(custom_temp)))
     assert any("Custom folders set, continuing..." in m for m in controller.gui.messages)
     assert any("Flow: session initialized" in m for m in controller.gui.messages)
+
+
+def test_run_dump_all_single_scans_size_before_disc_name_prompt(tmp_path, monkeypatch):
+    controller, engine = _controller_with_engine()
+
+    temp_root = tmp_path / "temp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    engine.cfg["temp_folder"] = str(temp_root)
+    engine.cfg["opt_show_temp_manager"] = False
+    engine.cfg["opt_scan_disc_size"] = True
+
+    events = []
+    confirms = iter([False, False])
+
+    controller.gui.ask_yesno = lambda _prompt: next(confirms)
+    controller.gui.show_info = lambda *_args, **_kwargs: None
+    controller.gui.ask_input = lambda *_args, **_kwargs: (
+        events.append("prompt:Disc Name"),
+        "Named Disc",
+    )[1]
+
+    monkeypatch.setattr(engine, "cleanup_partial_files", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        engine,
+        "get_disc_size",
+        lambda *_a, **_k: (events.append("disc_size"), 5_000_000_000)[1],
+    )
+    monkeypatch.setattr(
+        engine,
+        "check_disk_space",
+        lambda *_a, **_k: ("ok", 0, 0),
+    )
+    monkeypatch.setattr(
+        engine,
+        "write_temp_metadata",
+        lambda *_a, **_k: engine.abort(),
+    )
+
+    controller.run_dump_all()
+
+    assert events.index("disc_size") < events.index("prompt:Disc Name")
 
 
 def test_movie_run_does_not_open_temp_manager_when_enabled(tmp_path, monkeypatch):
@@ -1431,6 +1993,52 @@ def test_movie_run_does_not_open_temp_manager_when_enabled(tmp_path, monkeypatch
 
     assert called["temp_manager"] is False
     assert any("Flow: session initialized" in m for m in controller.gui.messages)
+
+
+def test_movie_run_stops_if_abort_requested_during_path_setup(
+    tmp_path,
+    monkeypatch,
+):
+    controller, engine = _controller_with_engine()
+
+    temp_root = tmp_path / "temp"
+    movies_root = tmp_path / "movies"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    movies_root.mkdir(parents=True, exist_ok=True)
+
+    engine.cfg["temp_folder"] = str(temp_root)
+    engine.cfg["movies_folder"] = str(movies_root)
+
+    def _aborting_paths(_fields):
+        engine.abort()
+        return {
+            "temp_folder": str(temp_root),
+            "movies_folder": str(movies_root),
+        }
+
+    cleanup_called = {"value": False}
+
+    monkeypatch.setattr(controller, "_prompt_run_path_overrides", _aborting_paths)
+    monkeypatch.setattr(
+        controller.diagnostics,
+        "generate_session_summary",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        engine,
+        "cleanup_partial_files",
+        lambda *_a, **_k: cleanup_called.__setitem__("value", True),
+    )
+
+    controller.run_movie_disc()
+
+    assert engine.abort_event.is_set()
+    assert cleanup_called["value"] is False
+    assert not any("Flow: session initialized" in m for m in controller.gui.messages)
+    assert any(
+        "abort requested during setup" in m.lower()
+        for m in controller.gui.messages
+    )
 
 
 def test_run_organize_deletes_session_json_when_temp_folder_preserved(
@@ -1721,7 +2329,339 @@ def test_run_smart_rip_wizard_flow_completes_movie(tmp_path, monkeypatch):
                if "media type" in m.lower())
 
 
-def test_run_smart_rip_standard_flow_uses_manual_picker(tmp_path, monkeypatch):
+def test_run_smart_rip_movie_dialog_receives_identity_defaults_and_ai_prompt(
+    tmp_path,
+    monkeypatch,
+):
+    controller, engine = _controller_with_engine()
+
+    temp_root = tmp_path / "temp"
+    movies_root = tmp_path / "movies"
+    tv_root = tmp_path / "tv"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    movies_root.mkdir(parents=True, exist_ok=True)
+    tv_root.mkdir(parents=True, exist_ok=True)
+
+    engine.cfg["opt_show_temp_manager"] = False
+    engine.cfg["opt_scan_disc_size"] = False
+    engine.cfg["opt_confirm_before_rip"] = False
+    engine.cfg["temp_folder"] = str(temp_root)
+    engine.cfg["movies_folder"] = str(movies_root)
+    engine.cfg["tv_folder"] = str(tv_root)
+    engine.last_disc_info = {"title": "KUNG_FU_PANDA_3"}
+
+    controller.gui.show_info = lambda *_args, **_kwargs: None
+    controller.gui.ask_yesno = lambda _prompt: True
+    controller.gui.show_scan_results_step = lambda _cl, _di=None: "movie"
+
+    captured_defaults = {}
+
+    def _ask_movie_setup(**kwargs):
+        captured_defaults.update(kwargs)
+        return MovieSessionSetup(
+            title=kwargs.get("default_title", "Chosen Movie"),
+            year=kwargs.get("default_year", "2016"),
+            edition="",
+            metadata_provider=kwargs.get("default_metadata_provider", "TMDB"),
+            metadata_id=kwargs.get("default_metadata_id", ""),
+            replace_existing=False,
+            keep_raw=False,
+            extras_mode="ask",
+        )
+
+    controller.gui.ask_movie_setup = _ask_movie_setup
+
+    from gui.setup_wizard import ContentSelection
+
+    controller.gui.show_content_mapping_step = lambda _cl: ContentSelection(
+        main_title_ids=[0], extra_title_ids=[], skip_title_ids=[],
+    )
+    controller.gui.show_output_plan_step = lambda *_a, **_k: True
+
+    disc_titles = [
+        {
+            "id": 0,
+            "name": "Main Feature",
+            "duration": "94:39",
+            "size": "4.6 GB",
+            "duration_seconds": 5679,
+            "size_bytes": 4_600_000_000,
+        },
+    ]
+    analyzed = [
+        (str(temp_root / "main.mkv"), 5679.0, 4600.0),
+    ]
+
+    monkeypatch.setattr(engine, "cleanup_partial_files", lambda *_a, **_k: None)
+    monkeypatch.setattr(engine, "write_temp_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(engine, "update_temp_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(controller, "scan_with_retry", lambda: disc_titles)
+    monkeypatch.setattr(
+        controller,
+        "_request_identity_ai_suggestion",
+        lambda *_a, **_k: IdentitySuggestion(
+            title="Kung Fu Panda 3",
+            year="2016",
+            metadata_provider="TMDB",
+            metadata_id="tmdb:950",
+            source="ai:local",
+        ),
+    )
+
+    _main_ct = ClassifiedTitle(
+        title=disc_titles[0],
+        score=0.95,
+        label="MAIN",
+        confidence=0.95,
+        reasons=["longest duration"],
+        recommended=True,
+    )
+    monkeypatch.setattr(
+        "controller.controller.classify_and_pick_main",
+        lambda *_a, **_k: (_main_ct, [_main_ct]),
+    )
+    monkeypatch.setattr(
+        "controller.controller.format_classification_log",
+        lambda *_a, **_k: [],
+    )
+    monkeypatch.setattr(
+        engine,
+        "run_job",
+        lambda _job: SimpleNamespace(success=True, errors=[]),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_normalize_rip_result",
+        lambda *_a, **_k: (True, [item[0] for item in analyzed]),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_stabilize_ripped_files",
+        lambda *_a, **_k: (True, False),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_verify_expected_sizes",
+        lambda *_a, **_k: ("pass", "ok"),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_verify_container_integrity",
+        lambda *_a, **_k: True,
+    )
+    monkeypatch.setattr(engine, "analyze_files", lambda *_a, **_k: analyzed)
+    engine.last_title_file_map = {}
+
+    monkeypatch.setattr(
+        engine,
+        "move_files",
+        lambda *_a, **_k: (True, 1, [str(tmp_path / "library" / "main.mkv")]),
+    )
+
+    controller.run_smart_rip()
+
+    assert captured_defaults["default_title"] == "Kung Fu Panda 3"
+    assert captured_defaults["default_year"] == "2016"
+    assert captured_defaults["default_metadata_provider"] == "TMDB"
+    assert captured_defaults["default_metadata_id"] == "tmdb:950"
+    assert controller.gui.ai_choices
+    assert "Kung Fu Panda 3" in controller.gui.ai_choices[-1]["text"]
+    assert controller.gui.ai_choices[-1]["backend_tag"] == "LOCAL"
+
+
+def test_run_smart_rip_movie_ai_accept_opens_dialog_with_suggested_fields(
+    tmp_path,
+    monkeypatch,
+):
+    controller, engine = _controller_with_engine()
+
+    temp_root = tmp_path / "temp"
+    movies_root = tmp_path / "movies"
+    tv_root = tmp_path / "tv"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    movies_root.mkdir(parents=True, exist_ok=True)
+    tv_root.mkdir(parents=True, exist_ok=True)
+
+    engine.cfg["opt_show_temp_manager"] = False
+    engine.cfg["opt_scan_disc_size"] = False
+    engine.cfg["opt_confirm_before_rip"] = False
+    engine.cfg["temp_folder"] = str(temp_root)
+    engine.cfg["movies_folder"] = str(movies_root)
+    engine.cfg["tv_folder"] = str(tv_root)
+    engine.last_disc_info = {"title": "BEAUTY_AND_THE_BEAST"}
+
+    controller.gui.show_info = lambda *_args, **_kwargs: None
+    controller.gui.ask_yesno = lambda _prompt: True
+    controller.gui.show_scan_results_step = lambda _cl, _di=None: "movie"
+    controller.gui.ask_ai_identity_choice = lambda *_a, **_k: "accept"
+
+    captured_defaults = {}
+
+    def _ask_movie_setup(**kwargs):
+        captured_defaults.update(kwargs)
+        return MovieSessionSetup(
+            title=kwargs.get("default_title", ""),
+            year=kwargs.get("default_year", ""),
+            edition="",
+            metadata_provider=kwargs.get("default_metadata_provider", "TMDB"),
+            metadata_id=kwargs.get("default_metadata_id", ""),
+            replace_existing=False,
+            keep_raw=False,
+            extras_mode="ask",
+        )
+
+    controller.gui.ask_movie_setup = _ask_movie_setup
+
+    from gui.setup_wizard import ContentSelection
+
+    controller.gui.show_content_mapping_step = lambda _cl: ContentSelection(
+        main_title_ids=[0], extra_title_ids=[], skip_title_ids=[],
+    )
+    controller.gui.show_output_plan_step = lambda *_a, **_k: True
+
+    disc_titles = [
+        {
+            "id": 0,
+            "name": "Main Feature",
+            "duration": "84:00",
+            "size": "4.2 GB",
+            "duration_seconds": 5040,
+            "size_bytes": 4_200_000_000,
+        },
+    ]
+    analyzed = [
+        (str(temp_root / "main.mkv"), 5040.0, 4200.0),
+    ]
+
+    monkeypatch.setattr(engine, "cleanup_partial_files", lambda *_a, **_k: None)
+    monkeypatch.setattr(engine, "write_temp_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(engine, "update_temp_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(controller, "scan_with_retry", lambda: disc_titles)
+    monkeypatch.setattr(
+        controller,
+        "_request_identity_ai_suggestion",
+        lambda *_a, **_k: IdentitySuggestion(
+            title="Beauty and the Beast",
+            year="1991",
+            metadata_provider="TMDB",
+            metadata_id="tmdb:10020",
+            source="ai:local",
+        ),
+    )
+
+    _main_ct = ClassifiedTitle(
+        title=disc_titles[0],
+        score=0.95,
+        label="MAIN",
+        confidence=0.95,
+        reasons=["longest duration"],
+        recommended=True,
+    )
+    monkeypatch.setattr(
+        "controller.controller.classify_and_pick_main",
+        lambda *_a, **_k: (_main_ct, [_main_ct]),
+    )
+    monkeypatch.setattr(
+        "controller.controller.format_classification_log",
+        lambda *_a, **_k: [],
+    )
+    monkeypatch.setattr(
+        engine,
+        "run_job",
+        lambda _job: SimpleNamespace(success=True, errors=[]),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_normalize_rip_result",
+        lambda *_a, **_k: (True, [item[0] for item in analyzed]),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_stabilize_ripped_files",
+        lambda *_a, **_k: (True, False),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_verify_expected_sizes",
+        lambda *_a, **_k: ("pass", "ok"),
+    )
+    monkeypatch.setattr(
+        controller,
+        "_verify_container_integrity",
+        lambda *_a, **_k: True,
+    )
+    monkeypatch.setattr(engine, "analyze_files", lambda *_a, **_k: analyzed)
+    engine.last_title_file_map = {}
+
+    monkeypatch.setattr(
+        engine,
+        "move_files",
+        lambda *_a, **_k: (True, 1, [str(tmp_path / "library" / "main.mkv")]),
+    )
+
+    controller.run_smart_rip()
+
+    assert captured_defaults["default_title"] == "Beauty and the Beast"
+    assert captured_defaults["default_year"] == "1991"
+    assert captured_defaults["default_metadata_provider"] == "TMDB"
+    assert captured_defaults["default_metadata_id"] == "tmdb:10020"
+    assert any(
+        "opening identity step with suggested fields" in message.lower()
+        for message in controller.gui.messages
+    )
+
+
+def test_smart_rip_stops_if_abort_requested_during_path_setup(
+    tmp_path,
+    monkeypatch,
+):
+    controller, engine = _controller_with_engine()
+
+    temp_root = tmp_path / "temp"
+    movies_root = tmp_path / "movies"
+    tv_root = tmp_path / "tv"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    movies_root.mkdir(parents=True, exist_ok=True)
+    tv_root.mkdir(parents=True, exist_ok=True)
+
+    engine.cfg["temp_folder"] = str(temp_root)
+    engine.cfg["movies_folder"] = str(movies_root)
+    engine.cfg["tv_folder"] = str(tv_root)
+
+    def _aborting_paths(_fields):
+        engine.abort()
+        return {
+            "temp_folder": str(temp_root),
+            "movies_folder": str(movies_root),
+            "tv_folder": str(tv_root),
+        }
+
+    cleanup_called = {"value": False}
+
+    monkeypatch.setattr(controller, "_prompt_run_path_overrides", _aborting_paths)
+    monkeypatch.setattr(
+        controller.diagnostics,
+        "generate_session_summary",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        engine,
+        "cleanup_partial_files",
+        lambda *_a, **_k: cleanup_called.__setitem__("value", True),
+    )
+
+    controller.run_smart_rip()
+
+    assert engine.abort_event.is_set()
+    assert cleanup_called["value"] is False
+    assert not any("Flow: session initialized" in m for m in controller.gui.messages)
+    assert any(
+        "abort requested during setup" in m.lower()
+        for m in controller.gui.messages
+    )
+
+
+def test_run_smart_rip_manual_picker_flow_uses_manual_picker(tmp_path, monkeypatch):
     controller, engine = _controller_with_engine()
 
     temp_root = tmp_path / "temp"
@@ -1740,7 +2680,7 @@ def test_run_smart_rip_standard_flow_uses_manual_picker(tmp_path, monkeypatch):
 
     controller.gui.show_info = lambda *_args, **_kwargs: None
     controller.gui.ask_yesno = lambda _prompt: False
-    controller.gui.show_scan_results_step = lambda _cl, _di=None: "standard"
+    controller.gui.show_scan_results_step = lambda _cl, _di=None: "manual_movie"
     controller.gui.ask_movie_setup = lambda **_kw: MovieSessionSetup(
         title="Chosen Movie", year="2024", edition="",
         metadata_provider="TMDB", metadata_id="",
@@ -1748,12 +2688,12 @@ def test_run_smart_rip_standard_flow_uses_manual_picker(tmp_path, monkeypatch):
     )
     controller.gui.show_content_mapping_step = (
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("standard flow should skip content mapping")
+            AssertionError("manual picker flow should skip content mapping")
         )
     )
     controller.gui.show_output_plan_step = (
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("standard flow should skip output preview")
+            AssertionError("manual picker flow should skip output preview")
         )
     )
 
@@ -1836,7 +2776,10 @@ def test_run_smart_rip_standard_flow_uses_manual_picker(tmp_path, monkeypatch):
     assert picker_calls["count"] == 1
     assert move_call["selected_title_ids"] is None
     assert "Chosen Movie (2024)" in move_call["dest_folder"]
-    assert any("standard" in m.lower() for m in controller.gui.messages)
+    assert any(
+        "manual title picker" in m.lower()
+        for m in controller.gui.messages
+    )
 
 
 def test_run_smart_rip_cancel_at_scan_results_stops(tmp_path, monkeypatch):
@@ -2194,6 +3137,47 @@ def test_fallback_title_from_mode_logs_but_does_not_report(monkeypatch):
     assert result == "Auto-Title-2026"
     assert any("Auto-Title-2026" in line for line in controller.gui.messages)
     assert controller.session_report == []
+
+
+def test_build_identity_title_seed_prefers_disc_title_over_timestamp_mode():
+    controller, engine = _controller_with_engine(
+        _engine_cfg(opt_naming_mode="timestamp")
+    )
+    engine.last_disc_info = {"title": "Kung_Fu_Panda_3"}
+
+    seed = controller._build_identity_title_seed(
+        disc_titles=[
+            {
+                "id": 0,
+                "name": "Title 2",
+                "duration_seconds": 5679,
+                "size_bytes": 4_600_000_000,
+            }
+        ],
+        classified=[],
+    )
+
+    assert seed == "Kung Fu Panda 3"
+
+
+def test_parse_identity_ai_response_accepts_json_code_fence():
+    controller, _engine = _controller_with_engine()
+
+    suggestion = controller._parse_identity_ai_response(
+        """```json
+{"title":"Kung Fu Panda 3 (2016)","year":"","season":"","metadata_provider":"TMDB","metadata_id":"950"}
+```""",
+        fallback_title="Fallback Title",
+        is_tv=False,
+        backend_tag="LOCAL",
+    )
+
+    assert suggestion is not None
+    assert suggestion.title == "Kung Fu Panda 3"
+    assert suggestion.year == "2016"
+    assert suggestion.metadata_provider == "TMDB"
+    assert suggestion.metadata_id == "tmdb:950"
+    assert suggestion.source == "ai:local"
 
 
 def test_run_smart_rip_abort_during_scan_stops_before_wizard(monkeypatch):
