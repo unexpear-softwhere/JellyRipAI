@@ -1,4 +1,5 @@
 from gui.session_setup_dialog import _prepare_identity_dialog_window
+from gui.theme import dialog_palette
 
 
 def test_prepare_identity_dialog_window_does_not_grab_parent():
@@ -30,9 +31,8 @@ def test_prepare_identity_dialog_window_does_not_grab_parent():
 
     _prepare_identity_dialog_window(win, parent)
 
-    assert win.configured["bg"] == "#161b22"
+    assert win.configured["bg"] == dialog_palette()["surface"]
     assert win.resizable_args == (False, False)
     assert win.transient_parent is parent
     assert win.lift_parent is parent
     assert win.focused is True
-
