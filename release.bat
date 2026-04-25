@@ -199,7 +199,7 @@ echo.
 
 REM ---- Step 8: Create release with assets ----
 echo [8/8] Publishing release %RELEASE_TAG% with assets...
-gh release create %RELEASE_TAG% "%ARTIFACT_DIR%\JellyRipAI.exe" "%ARTIFACT_DIR%\JellyRipAIInstaller.exe" LICENSE THIRD_PARTY_NOTICES.md "%ARTIFACT_DIR%\FFmpeg-LICENSE.txt" "%ARTIFACT_DIR%\FFmpeg-README.txt" --title "JellyRip AI v%VERSION% (UNSTABLE)" --notes-file release_notes.txt --prerelease
+gh release create %RELEASE_TAG% "%ARTIFACT_DIR%\JellyRipAI.exe" "%ARTIFACT_DIR%\JellyRipAIInstaller.exe" LICENSE THIRD_PARTY_NOTICES.md "%ARTIFACT_DIR%\FFmpeg-LICENSE.txt" "%ARTIFACT_DIR%\FFmpeg-README.txt" --title "JellyRip AI v%VERSION% (UNSTABLE)" --notes-file release_notes.txt --prerelease --target "%RELEASE_BRANCH%"
 if errorlevel 1 (
     echo ABORT: gh release create failed.
     exit /b 1
