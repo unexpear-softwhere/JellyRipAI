@@ -1,10 +1,12 @@
 """Helper utilities implementation."""
 
+import csv
 import os
 import platform
 import re
 import subprocess
 import sys as _sys
+from dataclasses import dataclass
 from datetime import datetime
 from os import PathLike
 
@@ -94,13 +96,92 @@ def is_network_path(path: str | PathLike[str] | None) -> bool:
         return False
 
 
-def get_available_drives(makemkvcon_path: str) -> list[tuple[int, str]]:
-    """Query MakeMKV for available optical drives via disc:9999 trick."""
-    drives: list[tuple[int, str]] = []
+@dataclass(frozen=True)
+class MakeMKVDrive:
+    index: int
+    visible: int
+    enabled: int
+    flags: int
+    drive_name: str
+    disc_name: str
+    device_path: str = ""
+
+    @property
+    def usability_state(self) -> str:
+        return f"visible={self.visible}, enabled={self.enabled}, flags={self.flags}"
+
+    @property
+    def is_accessible(self) -> bool:
+        return self.visible > 0 and self.enabled > 0
+
+
+def make_default_drive(index: int = 0) -> MakeMKVDrive:
+    return MakeMKVDrive(
+        index=index,
+        visible=1,
+        enabled=1,
+        flags=0,
+        drive_name="Default Drive",
+        disc_name="",
+        device_path=f"disc:{index}",
+    )
+
+
+def parse_makemkv_drive_row(line: str) -> MakeMKVDrive | None:
+    """Parse a MakeMKV automation-mode DRV row.
+
+    Officially documented fields are:
+    ``DRV:index,visible,enabled,flags,drive name,disc name``.
+    Some Windows builds also emit a trailing device path / drive letter.
+    """
+    if not isinstance(line, str) or not line.startswith("DRV:"):
+        return None
+    try:
+        fields = next(csv.reader([line[4:]], escapechar="\\"))
+    except Exception:
+        return None
+    if len(fields) < 6:
+        return None
+    try:
+        index = int(fields[0])
+        visible = int(fields[1])
+        enabled = int(fields[2])
+        flags = int(fields[3])
+    except (TypeError, ValueError):
+        return None
+    device_path = fields[6].strip() if len(fields) >= 7 else ""
+    return MakeMKVDrive(
+        index=index,
+        visible=visible,
+        enabled=enabled,
+        flags=flags,
+        drive_name=fields[4].strip(),
+        disc_name=fields[5].strip(),
+        device_path=device_path,
+    )
+
+
+def format_makemkv_drive_label(drive: MakeMKVDrive) -> str:
+    name = drive.drive_name or f"Drive {drive.index}"
+    label = f"Drive {drive.index}: {name}"
+    if drive.device_path:
+        label += f" [{drive.device_path}]"
+    if drive.disc_name:
+        label += f" | Disc: {drive.disc_name}"
+    return label
+
+
+def get_available_drives(
+    makemkvcon_path: str,
+    *,
+    allow_fallback: bool = True,
+) -> list[MakeMKVDrive]:
+    """Query MakeMKV for available optical drives via disc:9999."""
+    drives: list[MakeMKVDrive] = []
     try:
         if _sys.platform == "win32":
             proc = subprocess.Popen(
-                [makemkvcon_path, "-r", "info", "disc:9999"],
+                [makemkvcon_path, "-r", "--cache=1", "info", "disc:9999"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -109,7 +190,7 @@ def get_available_drives(makemkvcon_path: str) -> list[tuple[int, str]]:
             )
         else:
             proc = subprocess.Popen(
-                [makemkvcon_path, "-r", "info", "disc:9999"],
+                [makemkvcon_path, "-r", "--cache=1", "info", "disc:9999"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -117,19 +198,12 @@ def get_available_drives(makemkvcon_path: str) -> list[tuple[int, str]]:
             )
         try:
             if proc.stdout is None:
-                return [(0, "Default Drive (disc:0)")]
+                return [make_default_drive()] if allow_fallback else []
             for line in iter(proc.stdout.readline, ""):
                 line = line.strip()
-                if line.startswith("DRV:"):
-                    parts = line[4:].split(",")
-                    if len(parts) >= 6:
-                        try:
-                            idx  = int(parts[0])
-                            name = parts[5].strip().strip('"')
-                            if name:
-                                drives.append((idx, name))
-                        except (ValueError, IndexError):
-                            pass
+                drive = parse_makemkv_drive_row(line)
+                if drive is not None:
+                    drives.append(drive)
             proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
             proc.kill()
@@ -139,8 +213,18 @@ def get_available_drives(makemkvcon_path: str) -> list[tuple[int, str]]:
                 pass
     except Exception:
         pass
-    if not drives:
-        drives = [(0, "Default Drive (disc:0)")]
+    if not drives and allow_fallback:
+        drives = [make_default_drive()]
     return drives
 
-__all__ = ["clean_name", "is_network_path", "make_rip_folder_name", "make_temp_title", "get_available_drives"]
+__all__ = [
+    "MakeMKVDrive",
+    "clean_name",
+    "format_makemkv_drive_label",
+    "get_available_drives",
+    "is_network_path",
+    "make_default_drive",
+    "make_rip_folder_name",
+    "make_temp_title",
+    "parse_makemkv_drive_row",
+]

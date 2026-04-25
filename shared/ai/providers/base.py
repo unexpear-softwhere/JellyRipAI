@@ -51,6 +51,14 @@ class BaseProvider(ABC):
         """Quick connectivity check. Must not raise."""
 
     @abstractmethod
+    def chat(self, messages: list[dict[str, str]],
+             max_tokens: int = 800, timeout: float = 30.0) -> str:
+        """Send a conversational message history and return the next reply text.
+
+        Must raise on failure so the caller can fall back.
+        """
+
+    @abstractmethod
     def diagnose(self, payload_json: str, system_prompt: str,
                  max_tokens: int = 800, timeout: float = 30.0) -> str:
         """Send a diagnostic payload and return the model response text.

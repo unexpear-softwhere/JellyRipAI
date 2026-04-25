@@ -1,38 +1,85 @@
-from gui.session_setup_dialog import _prepare_identity_dialog_window
-from gui.theme import dialog_palette
+import pathlib
+
+from gui.session_setup_dialog import _BG2, _choice_label, _prepare_identity_dialog_window
 
 
-def test_prepare_identity_dialog_window_does_not_grab_parent():
-    class _FakeWindow:
-        def __init__(self):
-            self.transient_parent = None
-            self.lift_parent = None
-            self.focused = False
-            self.configured = {}
-            self.resizable_args = None
+class _FakeParent:
+    def __init__(self):
+        self.top = object()
 
-        def configure(self, **kwargs):
-            self.configured.update(kwargs)
+    def winfo_toplevel(self):
+        return self.top
 
-        def resizable(self, width, height):
-            self.resizable_args = (width, height)
 
-        def transient(self, parent):
-            self.transient_parent = parent
+class _FakeWindow:
+    def __init__(self):
+        self.calls: list[tuple] = []
 
-        def lift(self, parent):
-            self.lift_parent = parent
+    def configure(self, **kwargs):
+        self.calls.append(("configure", kwargs))
 
-        def focus_force(self):
-            self.focused = True
+    def resizable(self, width, height):
+        self.calls.append(("resizable", width, height))
 
-    parent = object()
+    def transient(self, parent):
+        self.calls.append(("transient", parent))
+
+    def lift(self, parent):
+        self.calls.append(("lift", parent))
+
+    def grab_set(self):
+        self.calls.append(("grab_set",))
+
+    def focus_force(self):
+        self.calls.append(("focus_force",))
+
+
+class _TransientLiftFailWindow(_FakeWindow):
+    def transient(self, parent):
+        self.calls.append(("transient", parent))
+        raise RuntimeError("transient failed")
+
+    def lift(self, parent):
+        self.calls.append(("lift", parent))
+        raise RuntimeError("lift failed")
+
+
+def test_prepare_identity_dialog_window_sets_modal_transient_dialog():
+    parent = _FakeParent()
     win = _FakeWindow()
 
     _prepare_identity_dialog_window(win, parent)
 
-    assert win.configured["bg"] == dialog_palette()["surface"]
-    assert win.resizable_args == (False, False)
-    assert win.transient_parent is parent
-    assert win.lift_parent is parent
-    assert win.focused is True
+    assert ("configure", {"bg": _BG2}) in win.calls
+    assert ("resizable", False, False) in win.calls
+    assert ("transient", parent.top) in win.calls
+    assert ("lift", parent.top) in win.calls
+    assert ("grab_set",) in win.calls
+    assert ("focus_force",) in win.calls
+
+
+def test_prepare_identity_dialog_window_still_grabs_if_transient_setup_fails():
+    parent = _FakeParent()
+    win = _TransientLiftFailWindow()
+
+    _prepare_identity_dialog_window(win, parent)
+
+    assert ("grab_set",) in win.calls
+    assert ("focus_force",) in win.calls
+
+
+def test_choice_label_matches_values_case_insensitively():
+    labels = ["Ask per disc", "Put in Season 00", "Skip specials"]
+    values = ["ASK", "Season0", "skip"]
+
+    assert _choice_label("season0", labels, values) == "Put in Season 00"
+    assert _choice_label(" ASK ", labels, values) == "Ask per disc"
+
+
+def test_session_setup_dialog_source_keeps_main_text_labels():
+    source = pathlib.Path("gui/session_setup_dialog.py").read_text(encoding="utf-8")
+
+    assert "ask_tv_setup() \\u2014 never instantiated directly from worker threads." in source
+    assert '"Custom\\u2026"' in source
+    assert "ask_tv_setup() - never instantiated directly from worker threads." not in source
+    assert '"Custom..."' not in source

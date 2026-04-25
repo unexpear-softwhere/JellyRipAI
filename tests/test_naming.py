@@ -3,6 +3,7 @@
 import pytest
 from controller.naming import (
     build_movie_folder_name,
+    build_movie_main_filename,
     build_tv_folder_name,
     build_fallback_title,
     build_naming_preview_text,
@@ -92,6 +93,22 @@ class TestBuildMovieFolderName:
 
     def test_invalid_metadata_ignored(self):
         assert build_movie_folder_name("Test", "2024", "garbage") == "Test (2024)"
+
+    def test_edition_is_cleaned_for_folder_name(self):
+        assert build_movie_folder_name(
+            "Chosen Movie",
+            "2024",
+            "",
+            'Director: Cut / IMAX?',
+        ) == "Chosen Movie (2024) - Director Cut  IMAX"
+
+
+def test_build_movie_main_filename_cleans_edition():
+    assert build_movie_main_filename(
+        "Chosen Movie",
+        "2024",
+        'Director: Cut / IMAX?',
+    ) == "Chosen Movie (2024) - Director Cut  IMAX.mkv"
 
 
 # ── build_tv_folder_name ─────────────────────────────────────────────

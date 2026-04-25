@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from config import load_startup_config
+from gui.secure_tk import SecureTk
 from shared.runtime import APP_AUMID, APP_DISPLAY_NAME, get_config_dir
 
 JellyRipperGUI = None
@@ -30,7 +31,7 @@ class _StartupWindow:
 
         root = None
         try:
-            root = tk.Tk()
+            root = SecureTk()
             root.title(APP_DISPLAY_NAME)
             root.configure(bg="#091321")
             root.resizable(False, False)
@@ -114,22 +115,6 @@ class _StartupWindow:
             pass
 
 
-def _load_env_file() -> None:
-    """Load .env file from app directory if present (for API keys etc.)."""
-    env_path = Path(__file__).parent / ".env"
-    if not env_path.is_file():
-        return
-    with open(env_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip().strip("'\"")
-            if key and key not in os.environ:
-                os.environ[key] = value
-
 def _bootstrap_tk_paths() -> None:
     """Set Tcl/Tk library paths when Python's auto-discovery is broken."""
     if sys.platform != "win32":
@@ -181,7 +166,6 @@ def _set_windows_app_user_model_id() -> None:
 
 
 def _prepare_startup_environment() -> None:
-    _load_env_file()
     _bootstrap_tk_paths()
     get_config_dir()
 
@@ -200,9 +184,6 @@ def _create_startup_window():
         return _StartupWindow()
     except Exception:
         return _NullStartupWindow()
-
-
-
 
 def main() -> None:
     _prepare_startup_environment()

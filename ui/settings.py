@@ -1,11 +1,14 @@
-# Placeholder for settings UI logic for transcoding profiles and pipeline integration.
-# To be implemented with actual GUI framework (e.g., Tkinter, PyQt, etc.)
+"""Settings-focused UI helpers."""
 
-# Example structure:
-# - Enable Transcode After Rip (toggle)
-# - Default Profile (dropdown, shows 'Balanced (Recommended)' with explanation)
-# - Recommended settings: Show a summary panel with recommended profile and a short explanation for each setting (e.g., "Balanced: Good quality, small size, compatible with most devices.")
-# - Advanced: Expandable/collapsible section for advanced users to override any profile parameter (video, audio, subtitles, output, constraints, metadata)
-# - Manage Profiles (button)
-# - Profile management dialog (list, new, edit, duplicate, delete, set default)
-# - For each profile, show a tooltip or help text explaining what each option does and why it might be changed
+from __future__ import annotations
+
+from typing import Any
+
+from transcode.profiles import TranscodeProfile, describe_profile
+
+
+def summarize_profile(profile: TranscodeProfile | dict[str, Any] | None) -> str:
+    """Return the human summary shown under transcode profile pickers."""
+    if profile is None:
+        return "Profile details unavailable."
+    return describe_profile(profile)

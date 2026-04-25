@@ -16,6 +16,7 @@ from shared.runtime import (
     APP_VARIANT,
     __version__,
 )
+from shared.windows_exec import get_powershell_executable
 from utils.updater import (
     download_asset,
     fetch_latest_release,
@@ -44,6 +45,7 @@ def launch_downloaded_update(gui, downloaded_path):
                             "/SP-",
                             "/SUPPRESSMSGBOXES",
                         ],
+                        shell=False,
                         creationflags=0x08000000,
                     )
                 else:
@@ -52,7 +54,8 @@ def launch_downloaded_update(gui, downloaded_path):
                             downloaded_path,
                             "/SP-",
                             "/SUPPRESSMSGBOXES",
-                        ]
+                        ],
+                        shell=False,
                     )
             except Exception as e:
                 gui.controller.log(
@@ -72,29 +75,20 @@ def launch_downloaded_update(gui, downloaded_path):
                 f"}}"
             )
             try:
+                popen_kwargs = {"shell": False}
                 if sys.platform == "win32":
-                    subprocess.Popen(
-                        [
-                            "powershell",
-                            "-NoProfile",
-                            "-WindowStyle",
-                            "Hidden",
-                            "-Command",
-                            cleanup_cmd,
-                        ],
-                        creationflags=0x08000000,
-                    )
-                else:
-                    subprocess.Popen(
-                        [
-                            "powershell",
-                            "-NoProfile",
-                            "-WindowStyle",
-                            "Hidden",
-                            "-Command",
-                            cleanup_cmd,
-                        ]
-                    )
+                    popen_kwargs["creationflags"] = 0x08000000
+                subprocess.Popen(
+                    [
+                        get_powershell_executable(),
+                        "-NoProfile",
+                        "-WindowStyle",
+                        "Hidden",
+                        "-Command",
+                        cleanup_cmd,
+                    ],
+                    **popen_kwargs,
+                )
         # Use a unique per-download temp directory to prevent TOCTOU
         # attacks via the predictable JellyRipUpdate/ fixed path.
             except Exception:
@@ -266,9 +260,9 @@ def check_for_updates(gui):
                     "Update Blocked",
                     "Signature verification is enabled but no signer "
                     "thumbprint is configured.\n\n"
-                    "To enable updates, open Settings → Advanced, and set "
+                    "To enable updates, open Settings -> Advanced, and set "
                     "the 'Update Signer Thumbprint' field to your release certificate thumbprint.\n\n"
-                    "See the documentation: https://github.com/unexpear/JellyRip/wiki/Update-Signing for details.",
+                    "See the documentation: https://github.com/unexpear/JellyRip/wiki/Update-Signing for details.\n\n"
                     "Set opt_update_signer_thumbprint in Settings to "
                     "your release certificate thumbprint before using "
                     "auto-update.",

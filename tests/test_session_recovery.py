@@ -144,6 +144,18 @@ def test_restore_selected_titles_filters_to_current_disc_titles():
     assert restored == [2, 4]
 
 
+def test_restore_selected_titles_skips_completed_titles():
+    restored = restore_selected_titles(
+        [{"id": 2}, {"id": 3}, {"id": 4}],
+        {
+            "selected_titles": ["2", 3, 4],
+            "completed_titles": ["3"],
+        },
+    )
+
+    assert restored == [2, 4]
+
+
 def test_map_title_ids_to_analyzed_indices_prefers_tracked_map(tmp_path):
     first = tmp_path / "first.mkv"
     second = tmp_path / "second.mkv"

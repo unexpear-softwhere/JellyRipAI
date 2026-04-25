@@ -43,12 +43,16 @@ def test_readme_points_to_spec_build_and_release_notes_txt():
     readme = _read("README.md")
     version = _current_version()
 
+    assert "build.bat" in readme
     assert "pyinstaller JellyRip.spec" in readme
     assert "release_notes.txt" in readme
     assert f"release.bat {version}" in readme
     assert "git switch --track origin/ai" in readme
     assert "JellyRipAI.exe" in readme
     assert "JellyRipAIInstaller.exe" in readme
+    assert "dist/ai/JellyRipAI.exe" in readme
+    assert "dist\\ai\\FFmpeg-LICENSE.txt" in readme
+    assert "%USERPROFILE%\\Desktop\\ffmpeg" in readme
 
 
 def test_release_script_checks_git_state_and_release_notes():
@@ -59,12 +63,15 @@ def test_release_script_checks_git_state_and_release_notes():
     assert "git rev-parse --abbrev-ref HEAD" in release_script
     assert 'findstr /C:"v%VERSION%" release_notes.txt' in release_script
     assert "tools\\stage_ffmpeg_bundle.ps1" in release_script
-    assert "LICENSE THIRD_PARTY_NOTICES.md dist\\FFmpeg-LICENSE.txt dist\\FFmpeg-README.txt" in release_script
-    assert "dist\\ffmpeg.exe dist\\ffprobe.exe dist\\ffplay.exe" in release_script
+    assert 'set "ARTIFACT_DIR=dist\\ai"' in release_script
+    assert 'set "BUILD_DIR=build\\ai"' in release_script
+    assert 'type nul > "%ARTIFACT_DIR%\\.gitkeep"' in release_script
+    assert 'LICENSE THIRD_PARTY_NOTICES.md "%ARTIFACT_DIR%\\FFmpeg-LICENSE.txt" "%ARTIFACT_DIR%\\FFmpeg-README.txt"' in release_script
+    assert '"%ARTIFACT_DIR%\\ffmpeg.exe" "%ARTIFACT_DIR%\\ffprobe.exe" "%ARTIFACT_DIR%\\ffplay.exe"' in release_script
     assert 'set "RELEASE_BRANCH=ai"' in release_script
     assert 'set "RELEASE_TAG=ai-v%VERSION%"' in release_script
-    assert "dist\\JellyRipAI.exe" in release_script
-    assert "dist\\JellyRipAIInstaller.exe" in release_script
+    assert "%ARTIFACT_DIR%\\JellyRipAI.exe" in release_script
+    assert "%ARTIFACT_DIR%\\JellyRipAIInstaller.exe" in release_script
     assert "JellyRip AI releases intentionally bundle FFmpeg" in release_script
     assert f"REM  Usage:  release.bat {version}" in release_script
     assert f"echo Example: release.bat {version}" in release_script
@@ -84,18 +91,20 @@ def test_release_metadata_tracks_license_notices():
     assert 'AppName={#MyAppName}' in installer
     assert 'DefaultDirName={localappdata}\\Programs\\JellyRip AI' in installer
     assert 'OutputBaseFilename=JellyRipAIInstaller' in installer
-    assert 'Source: "..\\dist\\ffmpeg.exe"' in installer
-    assert 'Source: "..\\dist\\ffprobe.exe"' in installer
-    assert 'Source: "..\\dist\\ffplay.exe"' in installer
-    assert 'Source: "..\\dist\\JellyRipAI.exe"' in installer
+    assert '#define MyAppBuildOutputDir "..\\dist\\ai"' in installer
+    assert 'Source: "{#MyAppBuildOutputDir}\\ffmpeg.exe"' in installer
+    assert 'Source: "{#MyAppBuildOutputDir}\\ffprobe.exe"' in installer
+    assert 'Source: "{#MyAppBuildOutputDir}\\ffplay.exe"' in installer
+    assert 'Source: "{#MyAppBuildOutputDir}\\JellyRipAI.exe"' in installer
     assert 'Source: "..\\LICENSE"' in installer
     assert 'Source: "..\\THIRD_PARTY_NOTICES.md"' in installer
-    assert 'Source: "..\\dist\\FFmpeg-LICENSE.txt"' in installer
-    assert 'Source: "..\\dist\\FFmpeg-README.txt"' in installer
+    assert 'Source: "{#MyAppBuildOutputDir}\\FFmpeg-LICENSE.txt"' in installer
+    assert 'Source: "{#MyAppBuildOutputDir}\\FFmpeg-README.txt"' in installer
 
 
 def test_spec_bundles_ffmpeg_intentionally():
     spec = _read("JellyRip.spec")
+    bundle_stager = _read("tools/stage_ffmpeg_bundle.ps1")
 
     assert "TCL_LIBRARY" in spec
     assert "TK_LIBRARY" in spec
@@ -112,6 +121,8 @@ def test_spec_bundles_ffmpeg_intentionally():
     assert "ffmpeg.exe" in spec.lower()
     assert "ffprobe.exe" in spec.lower()
     assert "ffplay.exe" in spec.lower()
+    assert 'PREFERRED_FFMPEG_ROOT = Path.home() / "Desktop" / "ffmpeg"' in spec
+    assert '$preferredDesktopRoot = Join-Path $HOME "Desktop\\ffmpeg"' in bundle_stager
     assert "C:/Users/" not in spec
     assert "Desktop/ffmpeg" not in spec
 

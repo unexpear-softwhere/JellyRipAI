@@ -24,17 +24,24 @@ def restore_selected_titles(
     disc_titles: Sequence[DiscTitle],
     resume_meta: Mapping[str, Any],
 ) -> list[int] | None:
-    saved_raw = resume_meta.get("selected_titles")
-    saved: list[int] = []
-    if isinstance(saved_raw, Sequence) and not isinstance(saved_raw, (str, bytes)):
-        for raw_tid in cast(Sequence[object], saved_raw):
-            if isinstance(raw_tid, (int, str)):
-                saved.append(int(raw_tid))
+    def _coerce_title_ids(raw_value: object) -> list[int]:
+        title_ids: list[int] = []
+        if isinstance(raw_value, Sequence) and not isinstance(raw_value, (str, bytes)):
+            for raw_tid in cast(Sequence[object], raw_value):
+                if isinstance(raw_tid, (int, str)):
+                    title_ids.append(int(raw_tid))
+        return title_ids
+
+    saved = _coerce_title_ids(resume_meta.get("selected_titles"))
     if not saved:
         return None
 
+    completed = set(_coerce_title_ids(resume_meta.get("completed_titles")))
     valid_ids = {int(title.get("id", -1)) for title in disc_titles}
-    restored = [title_id for title_id in saved if title_id in valid_ids]
+    restored = [
+        title_id for title_id in saved
+        if title_id in valid_ids and title_id not in completed
+    ]
     return restored or None
 
 

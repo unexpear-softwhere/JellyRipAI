@@ -1,0 +1,38 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch JellyRip AI (isolated)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "APPDATA": "${workspaceFolder}/.profiles/appdata",
+                "LOCALAPPDATA": "${workspaceFolder}/.profiles/localappdata",
+                "TEMP": "${workspaceFolder}/.profiles/temp",
+                "TMP": "${workspaceFolder}/.profiles/temp"
+            }
+        },
+        {
+            "name": "Launch JellyRip AI from Editor Button (isolated)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "purpose": [
+                "debug-in-terminal"
+            ],
+            "env": {
+                "APPDATA": "${workspaceFolder}/.profiles/appdata",
+                "LOCALAPPDATA": "${workspaceFolder}/.profiles/localappdata",
+                "TEMP": "${workspaceFolder}/.profiles/temp",
+                "TMP": "${workspaceFolder}/.profiles/temp"
+            }
+        }
+    ]
+}

@@ -40,6 +40,7 @@ from controller.session_paths import (
     log_session_paths,
     validate_session_paths,
 )
+from config import resolve_vlc
 from shared.runtime import __version__
 from utils.helpers import clean_name, make_temp_title
 from utils.media import select_largest_file
@@ -91,6 +92,147 @@ class LegacyControllerMixin:
                 f"Title {tid}: MakeMKV read errors but output produced "
                 f"(degraded rip — validated downstream by ffprobe)"
             )
+
+    def _successful_title_ids_from_last_rip(
+        self,
+        selected_title_ids: Sequence[int],
+    ) -> list[int]:
+        raw_map = getattr(self.engine, "last_title_file_map", {}) or {}
+        tracked: set[int] = set()
+        if isinstance(raw_map, Mapping):
+            for raw_tid, raw_files in raw_map.items():
+                if not isinstance(raw_tid, (int, str)):
+                    continue
+                if not isinstance(raw_files, Sequence) or isinstance(
+                    raw_files, (str, bytes)
+                ):
+                    continue
+                if any(
+                    str(path).strip()
+                    for path in cast(Sequence[object], raw_files)
+                ):
+                    tracked.add(int(raw_tid))
+        return [
+            int(title_id)
+            for title_id in selected_title_ids
+            if int(title_id) in tracked
+        ]
+
+    def _begin_partial_rip_session(
+        self,
+        rip_path: str,
+        selected_title_ids: Sequence[int],
+        failed_titles: Sequence[Any] | None,
+        mkv_files: Sequence[str],
+        expected_size_by_title: Mapping[int, int] | None,
+        *,
+        label: str,
+        title: str,
+        year: str | None,
+        media_type: str | None,
+        season: int | None = None,
+        dest_folder: str | None = None,
+        required_title_ids: Sequence[int] | None = None,
+    ) -> tuple[bool, list[int], list[str], dict[int, int] | None]:
+        fallback_expected = (
+            dict(expected_size_by_title) if expected_size_by_title else None
+        )
+        if self.engine.abort_flag or not failed_titles or not mkv_files:
+            return False, [], list(mkv_files), fallback_expected
+
+        valid_files = [
+            path
+            for path in mkv_files
+            if self.engine._quick_ffprobe_ok(path, self.log)
+        ]
+        if len(valid_files) != len(mkv_files):
+            return False, [], list(mkv_files), fallback_expected
+
+        successful_title_ids = self._successful_title_ids_from_last_rip(
+            selected_title_ids
+        )
+        if not successful_title_ids:
+            return False, [], list(mkv_files), fallback_expected
+
+        if required_title_ids:
+            required = {int(title_id) for title_id in required_title_ids}
+            if not required.intersection(successful_title_ids):
+                self.log(
+                    "Partial rip produced files, but none match the required "
+                    "main title selection. Treating session as failed."
+                )
+                return False, [], list(mkv_files), fallback_expected
+
+        filtered_expected = None
+        if expected_size_by_title:
+            filtered_expected = {
+                int(title_id): int(
+                    expected_size_by_title.get(int(title_id), 0) or 0
+                )
+                for title_id in successful_title_ids
+                if int(title_id) in expected_size_by_title
+            }
+
+        failed_list = [
+            int(title_id)
+            for title_id in failed_titles
+            if isinstance(title_id, (int, str))
+        ]
+        self.report(
+            f"{label}: keeping successful output(s) and preserving session as "
+            f"partial; failed titles = {failed_list}"
+        )
+        self.log(
+            f"Continuing with {len(valid_files)} validated file(s) from "
+            f"{len(successful_title_ids)} successful title(s)."
+        )
+        self.engine.update_temp_metadata(
+            rip_path,
+            status="partial",
+            phase="analyzing",
+            title=title,
+            year=year,
+            media_type=media_type,
+            season=season,
+            selected_titles=list(selected_title_ids),
+            completed_titles=list(successful_title_ids),
+            failed_titles=failed_list,
+            dest_folder=dest_folder,
+        )
+        return True, successful_title_ids, valid_files, filtered_expected
+
+    def _preserve_partial_session(
+        self,
+        rip_path: str,
+        *,
+        title: str,
+        year: str | None,
+        media_type: str | None,
+        season: int | None = None,
+        selected_titles: Sequence[int] | None = None,
+        completed_titles: Sequence[int] | None = None,
+        failed_titles: Sequence[Any] | None = None,
+        dest_folder: str | None = None,
+    ) -> None:
+        failed_list = [
+            int(title_id)
+            for title_id in (failed_titles or [])
+            if isinstance(title_id, (int, str))
+        ]
+        self.engine.update_temp_metadata(
+            rip_path,
+            status="partial",
+            phase="partial",
+            title=title,
+            year=year,
+            media_type=media_type,
+            season=season,
+            selected_titles=list(selected_titles or []),
+            completed_titles=list(completed_titles or []),
+            failed_titles=failed_list,
+            dest_folder=dest_folder,
+        )
+        self.log(f"Partial session preserved at: {rip_path}")
 
     def _reset_state_machine(self) -> None:
         self.sm = SessionStateMachine(
@@ -755,29 +897,34 @@ class LegacyControllerMixin:
                     f"Preview candidate: {os.path.basename(latest)} | "
                     f"{size_mb:.0f} MB | {mm:02d}:{ss:02d}"
                 )
-                vlc = shutil.which("vlc")
-                if not vlc:
-                    for candidate in [
-                        r"C:\Program Files\VideoLAN\VLC\vlc.exe",
-                        r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
-                    ]:
-                        if os.path.isfile(candidate):
-                            vlc = candidate
-                            break
-                if vlc:
+                vlc_result = resolve_vlc(
+                    allow_path_lookup=bool(
+                        self.engine.cfg.get(
+                            "opt_allow_path_tool_resolution",
+                            False,
+                        )
+                    ),
+                )
+                if vlc_result.path:
                     if _sys.platform == "win32":
                         subprocess.Popen(
-                            [vlc, latest],
+                            [vlc_result.path, latest],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                             creationflags=0x08000000,
+                            shell=False,
                         )
                     else:
                         subprocess.Popen(
-                            [vlc, latest],
+                            [vlc_result.path, latest],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
+                            shell=False,
                         )
+                    self.log(
+                        f"Preview player resolved via {vlc_result.source}: "
+                        f"{vlc_result.path}"
+                    )
                     self.log(
                         f"Preview opened in VLC: {os.path.basename(latest)}"
                     )

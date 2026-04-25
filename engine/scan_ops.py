@@ -3,10 +3,15 @@ import sys
 import time
 from datetime import datetime
 from typing import Any
+from utils.helpers import MakeMKVDrive
 from utils.parsing import parse_cli_args, parse_duration_to_seconds, parse_size_to_bytes, safe_int
 from shared.ai_diagnostics import ProcessCapture, diag_process, diag_record, diag_exception
 
-def _parse_drive_info(msg_lines: list[str]) -> dict[str, Any]:
+def _parse_drive_info(
+    msg_lines: list[str],
+    drive_rows: list[MakeMKVDrive] | None = None,
+    selected_drive_index: int | None = None,
+) -> dict[str, Any]:
     """Extract LibreDrive / UHD / disc-type info from MakeMKV MSG lines.
 
     ``libre_drive`` is tri-state:
@@ -22,7 +27,14 @@ def _parse_drive_info(msg_lines: list[str]) -> dict[str, Any]:
         "libre_drive": None,         # "enabled"/"possible"/"unavailable"/None
         "libre_drive_raw": "",       # verbatim MakeMKV line for debug log
         "uhd_friendly": None,        # True/False/None
+        "drive_index": None,
         "drive_name": "",
+        "disc_name": "",
+        "device_path": "",
+        "visible": None,
+        "enabled": None,
+        "flags": None,
+        "usability_state": "",
         "firmware": "",
         "messages": [],              # all relevant MSG strings for diagnostics
     }
@@ -78,6 +90,26 @@ def _parse_drive_info(msg_lines: list[str]) -> dict[str, Any]:
             info["uhd_friendly"] = True
         else:
             info["uhd_friendly"] = False
+
+    selected_drive = None
+    if drive_rows:
+        if selected_drive_index is not None:
+            for drive in drive_rows:
+                if drive.index == selected_drive_index:
+                    selected_drive = drive
+                    break
+        if selected_drive is None:
+            selected_drive = drive_rows[0]
+
+    if selected_drive is not None:
+        info["drive_index"] = selected_drive.index
+        info["drive_name"] = selected_drive.drive_name or info["drive_name"]
+        info["disc_name"] = selected_drive.disc_name
+        info["device_path"] = selected_drive.device_path
+        info["visible"] = selected_drive.visible
+        info["enabled"] = selected_drive.enabled
+        info["flags"] = selected_drive.flags
+        info["usability_state"] = selected_drive.usability_state
     return info
 
 
@@ -86,6 +118,24 @@ def format_drive_compatibility(info: dict[str, Any]) -> list[str]:
     lines: list[str] = []
     disc = info.get("disc_type")
     ld = info.get("libre_drive")
+    drive_name = str(info.get("drive_name", "") or "").strip()
+    disc_name = str(info.get("disc_name", "") or "").strip()
+    device_path = str(info.get("device_path", "") or "").strip()
+    usability_state = str(info.get("usability_state", "") or "").strip()
+
+    if drive_name:
+        label = f"Drive: {drive_name}"
+        if device_path:
+            label += f" [{device_path}]"
+        lines.append(label)
+    elif device_path:
+        lines.append(f"Drive path: {device_path}")
+
+    if disc_name:
+        lines.append(f"Disc label: {disc_name}")
+
+    if usability_state:
+        lines.append(f"MakeMKV state: {usability_state}")
 
     if disc:
         lines.append(f"Disc type: {disc}")

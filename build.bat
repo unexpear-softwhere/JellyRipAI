@@ -3,6 +3,8 @@ REM Build JellyRipAI.exe from source using PyInstaller
 
 set "PYTHON_EXE=.venv\Scripts\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
+set "ARTIFACT_DIR=dist\ai"
+set "BUILD_DIR=build\ai"
 
 echo Building JellyRipAI.exe...
 echo.
@@ -16,12 +18,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Clean previous builds
-if exist dist rmdir /s /q dist >nul 2>&1
-if exist build rmdir /s /q build >nul 2>&1
+REM Clean previous AI build outputs
+if exist "%ARTIFACT_DIR%" rmdir /s /q "%ARTIFACT_DIR%" >nul 2>&1
+if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%" >nul 2>&1
+if not exist "%ARTIFACT_DIR%" mkdir "%ARTIFACT_DIR%"
+type nul > "%ARTIFACT_DIR%\.gitkeep"
 
 REM Build the exe
-%PYTHON_EXE% -m PyInstaller JellyRip.spec
+%PYTHON_EXE% -m PyInstaller --distpath "%ARTIFACT_DIR%" --workpath "%BUILD_DIR%" JellyRip.spec
 
 if errorlevel 1 (
     echo Build failed!
@@ -29,7 +33,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\stage_ffmpeg_bundle.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\stage_ffmpeg_bundle.ps1 -DistDir "%ARTIFACT_DIR%"
 if errorlevel 1 (
     echo FFmpeg bundle staging failed!
     pause
@@ -38,10 +42,10 @@ if errorlevel 1 (
 
 echo.
 echo Build complete! Output:
-echo   dist\JellyRipAI.exe
-echo   dist\ffmpeg.exe
-echo   dist\ffprobe.exe
-echo   dist\ffplay.exe
-echo   dist\FFmpeg-LICENSE.txt
-echo   dist\FFmpeg-README.txt
+echo   %ARTIFACT_DIR%\JellyRipAI.exe
+echo   %ARTIFACT_DIR%\ffmpeg.exe
+echo   %ARTIFACT_DIR%\ffprobe.exe
+echo   %ARTIFACT_DIR%\ffplay.exe
+echo   %ARTIFACT_DIR%\FFmpeg-LICENSE.txt
+echo   %ARTIFACT_DIR%\FFmpeg-README.txt
 pause

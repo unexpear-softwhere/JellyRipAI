@@ -3,19 +3,16 @@
 import hashlib
 import json
 import re
-import shutil
 import subprocess
 import sys as _sys
 import time
 import urllib.error
 import urllib.request
+from shared.windows_exec import get_powershell_executable
 
-# Resolve PowerShell executable once at import time; fall back to the
-# well-known absolute path when powershell.exe is not on PATH.
-_ps_exe = (
-    shutil.which("powershell")
-    or r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-)
+# Resolve PowerShell executable once at import time using the trusted
+# Windows system path rather than search-order lookup.
+_ps_exe = get_powershell_executable()
 
 # Suppress black CMD flash on Windows.
 _POPEN_FLAGS = {"creationflags": 0x08000000} if _sys.platform == "win32" else {}
@@ -193,6 +190,7 @@ def get_authenticode_signature(path):
         capture_output=True,
         text=True,
         timeout=15,
+        shell=False,
         **_POPEN_FLAGS
     )
     if proc.returncode != 0:

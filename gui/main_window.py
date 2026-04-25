@@ -13,15 +13,19 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import quote_plus
 
 import tkinter as tk
-from tkinter import colorchooser, filedialog, messagebox, scrolledtext, ttk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+from gui.secure_tk import SecureTk
 from shared.event import Event
 from ui.adapters import UIAdapter
+from ui.dialogs import ask_yes_no
+from ui.settings import summarize_profile
 
 
 if sys.platform == "win32":
@@ -97,7 +101,9 @@ else:
         def clear(self):          pass
 
 from shared.runtime import (
+    APP_AUMID,
     APP_DISPLAY_NAME,
+    APP_EXE_BASENAME,
     CONFIG_FILE,
     DEFAULTS,
     RIP_ATTEMPT_FLAGS,
@@ -108,14 +114,28 @@ from shared.runtime import (
     configure_safe_int_debug,
     get_config_dir,
 )
+from shared.ai_profile import (
+    AIProfile,
+    AI_PROFILE_CHOICE_LABELS,
+    AI_PROFILE_FIELDS,
+    AI_PROFILE_VALUE_LABELS,
+    DEFAULT_AI_PROFILE,
+    load_ai_profile,
+)
+from shared.ai_chat_memory import AIChatMemory
+from shared.ai_chat_replay import (
+    ai_chat_replay_path,
+    append_ai_chat_replay,
+    list_ai_chat_replay_bundles,
+)
 
 from config import (
-    auto_locate_ffmpeg,
-    auto_locate_handbrake,
-    auto_locate_tools,
     handbrake_gui_installed,
     load_startup_config,
+    resolve_ffmpeg,
     resolve_ffprobe,
+    resolve_handbrake,
+    resolve_makemkvcon,
     save_config,
     should_keep_current_tool_path,
     validate_ffmpeg,
@@ -150,8 +170,11 @@ from transcode.planner import (
     transcode_backend_label,
 )
 from transcode.encoder_probe import get_ffmpeg_version_info
+from transcode.profiles import PROFILE_SCHEMA
 from transcode.profiles import ProfileLoader
-from transcode.profiles import describe_profile
+from transcode.profiles import ProfileValidationError
+from transcode.profiles import TranscodeProfile
+from transcode.profiles import normalize_profile_data
 from transcode.queue_builder import (
     build_queue_jobs,
     build_recommendation_job,
@@ -164,8 +187,11 @@ from transcode.recommendations import (
     probe_media_for_recommendation,
 )
 from utils.helpers import (
+    MakeMKVDrive,
+    format_makemkv_drive_label,
     get_available_drives,
     is_network_path,
+    make_default_drive,
     make_rip_folder_name,
 )
 from utils.scoring import format_audio_summary
@@ -177,13 +203,31 @@ from utils.classifier import (
 )
 from gui.theme import (
     APP_THEME,
-    THEME_EDITOR_GROUPS,
     build_app_theme,
-    normalize_theme_color,
-    sanitize_theme_overrides,
 )
 
 from gui.update_ui import check_for_updates, launch_downloaded_update
+from shared.windows_exec import (
+    get_explorer_executable,
+    get_powershell_executable,
+)
+
+
+def compute_initial_window_bounds(
+    screen_width: int,
+    screen_height: int,
+) -> tuple[int, int, int, int]:
+    screen_width = max(1024, int(screen_width))
+    screen_height = max(768, int(screen_height))
+    window_width = max(1024, min(1260, screen_width - 160))
+    window_height = max(760, min(900, screen_height - 120))
+    min_width = min(window_width, 1040)
+    min_height = min(window_height, 760)
+    return window_width, window_height, min_width, min_height
+
+
+def get_bottom_safe_margin_px(cfg) -> int:
+    return int((cfg or {}).get("opt_bottom_safe_margin_px", 72))
 
 
 HANDBRAKE_PRESETS = [
@@ -199,12 +243,15 @@ _AI_ASSISTANT_SYSTEM_PROMPT = (
     "You are the conversational assistant inside the JellyRip desktop app. "
     "Keep the tone natural and useful, like a strong general chat assistant rather than a rigid support script. "
     "You can help with the current rip session, answer general questions, explain what is happening, and suggest next steps. "
-    "Every request includes a UI snapshot with the current status, progress, selected drive, "
+    "Every request includes a stable AI profile, controller-owned workflow facts, and a UI snapshot with the current status, progress, selected drive, "
     "and recent live log lines so you can reason from what the user sees. "
-    "Use that snapshot when it is relevant, but do not let it narrow answers that are clearly general. "
-    "Treat the UI snapshot and live log as the only trusted source for app-state facts. "
-    "Do not invent metadata IDs, progress values, drive names, or control labels that are not present in that snapshot or log. "
-    "If a value is missing, say it is missing or uncertain. "
+    "Use that context when it is relevant, but do not let it narrow answers that are clearly general. "
+    "Treat the workflow facts, UI snapshot, and live log as the trusted source for app-state facts only. "
+    "For ordinary movie or TV knowledge such as release year, edition naming, and common metadata identifiers like TMDB or TVDB, use normal model knowledge when you are confident. "
+    "Do not invent app-state details such as progress values, drive names, workflow steps, or control labels that are not present in the provided context. "
+    "If an app-state value is missing, say it is missing or uncertain. "
+    "If the user is just greeting you or making general small talk, respond naturally instead of turning it into a UI status report. "
+    "If the user asks what metadata to enter for a title, answer with the likely fields directly first, then mention uncertainty or alternate matches if needed. "
     "You do not have direct screen vision beyond that snapshot. "
     "Be concise, practical, flexible, and honest about uncertainty."
 )
@@ -376,7 +423,7 @@ def _build_transcode_plan(
     return build_transcode_plan(scan_root, selected_paths, output_root)
 
 
-class JellyRipperGUI(tk.Tk, UIAdapter):
+class JellyRipperGUI(SecureTk, UIAdapter):
     def auto_detect_existing_folder_mode(self, folder_path):
         """
         Auto-detect mode for an existing folder:
@@ -451,8 +498,14 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         self._startup_context = dict(startup_context or {})
         self.title(f"{APP_DISPLAY_NAME} v{__version__}")
         self._theme = build_app_theme(self.cfg.get("opt_theme_overrides"))
-        self.geometry("1360x940")
-        self.minsize(1120, 820)
+        window_width, window_height, min_width, min_height = (
+            compute_initial_window_bounds(
+                self.winfo_screenwidth(),
+                self.winfo_screenheight(),
+            )
+        )
+        self.geometry(f"{window_width}x{window_height}")
+        self.minsize(min_width, min_height)
         self.configure(bg=self._theme["window_bg"])
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -461,7 +514,6 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         self.controller    = RipperController(self.engine, self)
         self.rip_thread    = None
         self._settings_window = None
-        self._ui_editor_window = None
         self._input_result = None
         self._input_event  = threading.Event()
         self._input_active = False
@@ -472,16 +524,18 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         self._ai_sidebar_visible = bool(self.cfg.get("opt_ai_sidebar_open", False))
         self._ai_chat_busy = False
         self._ai_chat_history: list[dict[str, str]] = []
+        self._ai_chat_memory = AIChatMemory()
         self._ai_chat_body_labels: list[tk.Misc] = []
         self._ai_chat_typing_row = None
         self._ai_chat_typing_body = None
         self._ai_chat_typing_job = None
         self._ai_chat_typing_base_text = "Thinking"
         self._ai_chat_typing_step = 0
+        self._ai_chat_mousewheel_binding_installed = False
+        self._ai_chat_transcript_frame = None
         self._task_active = False
-        self._abort_ui_recovery_job = None
         self._ai_sidebar_min_width = 340
-        self._log_panel_min_width = 600
+        self._log_panel_min_width = 520
         self._progress_visible = False
         self._ai_sidebar_edge_margin = 18
         self._ai_sidebar_main_min_visible_width = 240
@@ -502,7 +556,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             self.controller.log
         )
 
-        self._build_interface_v2()
+        self.build_interface()
         self._install_text_context_menu_bindings()
         self.controller.log(f"{APP_DISPLAY_NAME} v{__version__} started")
         self.controller.log("Choose a mode to begin")
@@ -533,7 +587,8 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             self._run_on_main(
                 lambda: messagebox.showwarning(
                     "Startup Recovery",
-                    summary + "\n\nJellyRip opened with safe defaults so you can fix this in Settings.",
+                    summary
+                    + f"\n\n{APP_DISPLAY_NAME} opened with safe defaults so you can fix this in Settings.",
                     parent=self,
                 )
             )
@@ -542,6 +597,143 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
 
         if self._startup_context.get("open_settings"):
             self.after(0, self._open_settings_safe)
+
+    def _ui_state_debug_enabled(self) -> bool:
+        try:
+            return bool(self.cfg.get("opt_debug_state", False))
+        except Exception:
+            return False
+
+    def _ui_state_debug_json_enabled(self) -> bool:
+        try:
+            return bool(self.cfg.get("opt_debug_state_json", False))
+        except Exception:
+            return False
+
+    def _debug_widget_identity(self, widget) -> str:
+        if widget is None:
+            return ""
+
+        parts: list[str] = []
+        try:
+            widget_class = str(widget.winfo_class() or "").strip()
+            if widget_class:
+                parts.append(widget_class)
+        except Exception:
+            pass
+        try:
+            widget_name = str(widget.winfo_name() or "").strip()
+            if widget_name:
+                parts.append(widget_name)
+        except Exception:
+            pass
+        try:
+            widget_path = str(widget)
+            if widget_path:
+                parts.append(widget_path)
+        except Exception:
+            pass
+        if parts:
+            return " | ".join(parts)
+        try:
+            return repr(widget)
+        except Exception:
+            return ""
+
+    def _current_focus_identity(self) -> str:
+        try:
+            return self._debug_widget_identity(self.focus_get())
+        except Exception:
+            return ""
+
+    def _debug_ui_event(self, event_name: str, **details) -> None:
+        if not self._ui_state_debug_enabled():
+            return
+
+        payload: dict[str, object] = {
+            "event": str(event_name or "").strip() or "unknown",
+            "focus": self._current_focus_identity(),
+            "thread": threading.current_thread().name or "unknown",
+            "ai_sidebar_open": bool(getattr(self, "_ai_sidebar_visible", False)),
+            "ai_chat_busy": bool(getattr(self, "_ai_chat_busy", False)),
+            "task_active": bool(getattr(self, "_task_active", False)),
+        }
+        try:
+            payload["abort_requested"] = bool(self.engine.abort_event.is_set())
+        except Exception:
+            payload["abort_requested"] = False
+
+        for key, value in details.items():
+            if key.endswith("widget"):
+                payload[key] = self._debug_widget_identity(value)
+            else:
+                payload[key] = value
+
+        try:
+            if self._ui_state_debug_json_enabled():
+                message = f"DEBUG UI {json.dumps(payload, sort_keys=True, default=str)}"
+            else:
+                detail_text = ", ".join(
+                    f"{key}={payload[key]!r}"
+                    for key in sorted(payload)
+                    if payload[key] not in ("", None)
+                )
+                message = f"DEBUG UI {payload['event']}: {detail_text}"
+            self.controller.log(message)
+        except Exception:
+            pass
+
+    def _bind_debug_focus_trace(self, widget, source: str) -> None:
+        if widget is None:
+            return
+
+        def _on_focus_in(event, _source=source):
+            self._debug_ui_event(
+                "focus_in",
+                source=_source,
+                widget=event.widget,
+            )
+
+        def _on_focus_out(event, _source=source):
+            self._debug_ui_event(
+                "focus_out",
+                source=_source,
+                widget=event.widget,
+            )
+
+        try:
+            widget.bind("<FocusIn>", _on_focus_in, add="+")
+        except Exception:
+            pass
+        try:
+            widget.bind("<FocusOut>", _on_focus_out, add="+")
+        except Exception:
+            pass
+
+    def _start_task_from_ui(self, mode: str, *, source: str) -> None:
+        self._debug_ui_event(
+            "mode_button_invoke",
+            mode=mode,
+            source=source,
+        )
+        self.start_task(mode)
+
+    def _current_ai_chat_prompt_len(self) -> int:
+        widget = self.__dict__.get("ai_chat_input")
+        if widget is None:
+            return 0
+        try:
+            return len(widget.get("1.0", "end-1c").strip())
+        except Exception:
+            return 0
+
+    def _submit_ai_chat_from_ui(self, source: str = "button") -> None:
+        self._debug_ui_event(
+            "ai_chat_send_invoke",
+            source=source,
+            prompt_len=self._current_ai_chat_prompt_len(),
+        )
+        self._submit_ai_chat()
 
     def _append_log_text_main(self, msg, tag=None):
         """Append one line to the log widget from the Tk main thread only."""
@@ -687,6 +879,67 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             save_config(self.cfg)
         except Exception:
             pass
+
+    def _set_ai_profile(
+        self,
+        raw_profile: dict[str, object] | None = None,
+        *,
+        onboarded: bool | None = None,
+    ) -> dict[str, str]:
+        profile = AIProfile.from_mapping(raw_profile).to_dict()
+        self.cfg["opt_ai_profile"] = dict(profile)
+        if onboarded is not None:
+            self.cfg["opt_ai_profile_onboarded"] = bool(onboarded)
+
+        engine = getattr(self, "engine", None)
+        engine_cfg = getattr(engine, "cfg", None)
+        if isinstance(engine_cfg, dict):
+            engine_cfg["opt_ai_profile"] = dict(profile)
+            if onboarded is not None:
+                engine_cfg["opt_ai_profile_onboarded"] = bool(onboarded)
+        return profile
+
+    def _ensure_ai_profile_onboarded(self) -> bool:
+        if bool(self.cfg.get("opt_ai_profile_onboarded", False)):
+            return True
+
+        choice = self._run_on_main(
+            lambda: messagebox.askyesnocancel(
+                "AI Assistant Setup",
+                f"Set up the {APP_DISPLAY_NAME} assistant profile before your first run?\n\n"
+                "Yes = open AI Assistant settings now\n"
+                "No = keep the current defaults and continue\n"
+                "Cancel = stop here",
+                parent=self,
+            )
+        )
+        self._debug_ui_event(
+            "ai_onboarding_prompt",
+            choice=(
+                "cancel" if choice is None else
+                "yes" if choice else
+                "no"
+            ),
+        )
+        if choice is None:
+            self.controller.log("AI assistant onboarding cancelled.")
+            return False
+        if choice:
+            self.controller.log(
+                "Opening AI assistant settings for first-use profile setup."
+            )
+            self.open_settings(selected_tab="ai")
+            return False
+
+        self._set_ai_profile(
+            load_ai_profile(self.cfg).to_dict(),
+            onboarded=True,
+        )
+        self._persist_config()
+        self.controller.log(
+            "AI assistant profile kept at defaults for now."
+        )
+        return True
 
     def _configure_main_styles(self) -> None:
         colors = self._theme
@@ -925,6 +1178,49 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         except Exception:
             pass
         self._refresh_ai_chat_bubble_layout(width)
+
+    def _install_ai_chat_mousewheel_binding(self) -> None:
+        if getattr(self, "_ai_chat_mousewheel_binding_installed", False):
+            return
+        try:
+            self.bind_all("<MouseWheel>", self._handle_ai_chat_mousewheel, add="+")
+        except Exception:
+            return
+        self._ai_chat_mousewheel_binding_installed = True
+
+    def _widget_is_inside_ai_chat_transcript(self, widget: tk.Misc | None) -> bool:
+        if widget is None:
+            return False
+        ancestors = (
+            self.__dict__.get("ai_chat_canvas"),
+            self.__dict__.get("_ai_chat_transcript_frame"),
+        )
+        current = widget
+        while current is not None:
+            if any(current is ancestor for ancestor in ancestors if ancestor is not None):
+                return True
+            current = getattr(current, "master", None)
+        return False
+
+    def _handle_ai_chat_mousewheel(self, event) -> str | None:
+        if not getattr(self, "_ai_sidebar_visible", False):
+            return None
+        if not self._widget_is_inside_ai_chat_transcript(getattr(event, "widget", None)):
+            return None
+        canvas = self.__dict__.get("ai_chat_canvas")
+        if canvas is None:
+            return None
+        delta = int(getattr(event, "delta", 0))
+        if delta == 0:
+            return None
+        units = int(-1 * (delta / 120))
+        if units == 0:
+            units = -1 if delta > 0 else 1
+        try:
+            canvas.yview_scroll(units, "units")
+        except Exception:
+            return None
+        return "break"
 
     def _update_ai_chat_scrollregion(self, _event=None) -> None:
         canvas = self.__dict__.get("ai_chat_canvas")
@@ -1207,6 +1503,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             return
         self._ai_sidebar_visible = True
         self.cfg["opt_ai_sidebar_open"] = True
+        self._debug_ui_event("ai_sidebar_show")
         self.after_idle(self._apply_ai_sidebar_width)
         self._persist_config()
         self._update_ai_sidebar_toggle_ui()
@@ -1222,6 +1519,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 pass
         self._ai_sidebar_visible = False
         self.cfg["opt_ai_sidebar_open"] = False
+        self._debug_ui_event("ai_sidebar_hide")
         self._persist_config()
         self._update_ai_sidebar_toggle_ui()
 
@@ -1285,16 +1583,224 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         max_log_lines: int = 60,
         max_log_chars: int = 6000,
     ) -> str:
+        payload = self._build_ai_sidebar_context_payload(
+            prompt,
+            max_history=max_history,
+            max_log_lines=max_log_lines,
+            max_log_chars=max_log_chars,
+        )
+        return json.dumps(payload, indent=2)
+
+    def _build_ai_sidebar_context_payload(
+        self,
+        prompt: str,
+        *,
+        max_history: int = 8,
+        max_log_lines: int = 60,
+        max_log_chars: int = 6000,
+    ) -> dict[str, object]:
         snapshot = self._get_ai_sidebar_snapshot(
             max_log_lines=max_log_lines,
             max_log_chars=max_log_chars,
         )
-        payload = {
+        profile = self._get_ai_profile_context()
+        session_facts = self._get_ai_session_facts()
+        memory = self._sync_ai_chat_memory_from_history()
+        memory.pin_session_facts(session_facts)
+        memory_payload = memory.build_context_payload(
+            max_recent_turns=max_history,
+        )
+        return {
             "request": str(prompt or "").strip(),
-            "conversation_history": self._ai_chat_history[-max_history:],
+            "conversation_history": list(memory_payload.get("recent_turns", [])),
+            "conversation_summary": str(memory_payload.get("rolling_summary", "") or ""),
+            "pinned_session_facts": dict(
+                memory_payload.get("pinned_session_facts", {})
+                if isinstance(memory_payload.get("pinned_session_facts"), dict)
+                else {}
+            ),
+            "compaction_trace": list(memory_payload.get("compaction_trace", [])),
+            "ai_profile": profile,
+            "session_facts": session_facts,
             "ui_snapshot": snapshot,
         }
-        return json.dumps(payload, indent=2)
+
+    def _get_ai_profile_context(self) -> dict[str, str]:
+        return load_ai_profile(self.__dict__.get("cfg", {})).to_dict()
+
+    def _get_ai_session_facts(self) -> dict[str, object]:
+        controller = self.__dict__.get("controller", None)
+        build_facts = getattr(controller, "build_ai_session_facts", None)
+        if not callable(build_facts):
+            return {}
+        try:
+            facts = build_facts()
+        except Exception as exc:
+            return {"context_error": str(exc)}
+        if isinstance(facts, dict):
+            return facts
+        return {}
+
+    def _ensure_ai_chat_memory(self) -> AIChatMemory:
+        memory = self.__dict__.get("_ai_chat_memory")
+        if isinstance(memory, AIChatMemory):
+            return memory
+        memory = AIChatMemory()
+        self._ai_chat_memory = memory
+        return memory
+
+    def _sync_ai_chat_memory_from_history(self) -> AIChatMemory:
+        memory = self._ensure_ai_chat_memory()
+        snapshot = memory.build_context_payload()
+        if snapshot["recent_turns"] or snapshot["rolling_summary"] or snapshot["compaction_trace"]:
+            return memory
+
+        for item in list(self.__dict__.get("_ai_chat_history", [])):
+            if not isinstance(item, dict):
+                continue
+            memory.remember_turn(
+                item.get("role", ""),
+                item.get("content", ""),
+            )
+        return memory
+
+    def _remember_ai_chat_turn(self, role: str, text: str) -> dict[str, object] | None:
+        return self._ensure_ai_chat_memory().remember_turn(role, text)
+
+    def _build_ai_sidebar_chat_messages(
+        self,
+        prompt: str,
+        *,
+        max_history: int = 8,
+        max_log_lines: int = 60,
+        max_log_chars: int = 6000,
+    ) -> list[dict[str, str]]:
+        payload = self._build_ai_sidebar_context_payload(
+            prompt,
+            max_history=max_history,
+            max_log_lines=max_log_lines,
+            max_log_chars=max_log_chars,
+        )
+        return self._build_ai_sidebar_chat_messages_from_payload(payload)
+
+    def _build_ai_sidebar_chat_messages_from_payload(
+        self,
+        payload: dict[str, object] | None,
+    ) -> list[dict[str, str]]:
+        payload = payload if isinstance(payload, dict) else {}
+        request_text = str(payload.get("request", "") or "").strip()
+        snapshot = payload.get("ui_snapshot")
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+        profile = payload.get("ai_profile")
+        if not isinstance(profile, dict):
+            profile = {}
+        summary_text = str(payload.get("conversation_summary", "") or "").strip()
+        pinned_session_facts = payload.get("pinned_session_facts")
+        if not isinstance(pinned_session_facts, dict):
+            pinned_session_facts = {}
+        session_facts = payload.get("session_facts")
+        if not isinstance(session_facts, dict):
+            session_facts = {}
+        if not pinned_session_facts:
+            pinned_session_facts = dict(session_facts)
+        raw_history = payload.get("conversation_history")
+        if not isinstance(raw_history, list):
+            raw_history = []
+        history: list[dict[str, str]] = []
+        for item in raw_history:
+            role = str(item.get("role", "") or "").strip().lower()
+            content = str(item.get("content", "") or "")
+            if role not in {"user", "assistant"} or not content.strip():
+                continue
+            if history and history[-1]["role"] == role:
+                history[-1]["content"] = (
+                    f"{history[-1]['content']}\n\n{content}"
+                ).strip()
+                continue
+            history.append({"role": role, "content": content})
+        if history and history[-1]["role"] == "user":
+            history[-1] = {"role": "user", "content": request_text}
+        elif request_text:
+            history.append({"role": "user", "content": request_text})
+        return [
+            {"role": "system", "content": _AI_ASSISTANT_SYSTEM_PROMPT},
+            {
+                "role": "system",
+                "content": (
+                    "Stable JellyRip AI profile. Use this as preference context, "
+                    "not as evidence about the current session:\n"
+                    f"{json.dumps(profile, indent=2)}"
+                ),
+            },
+            {
+                "role": "system",
+                "content": (
+                    "Pinned JellyRip workflow facts from the controller. Use this as the trusted "
+                    "source for workflow state:\n"
+                    f"{json.dumps(pinned_session_facts, indent=2)}"
+                ),
+            },
+            *(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Rolling conversation memory for older sidebar turns. "
+                            "Prefer the recent turns when they are more specific:\n"
+                            f"{summary_text}"
+                        ),
+                    }
+                ]
+                if summary_text else []
+            ),
+            {
+                "role": "system",
+                "content": (
+                    "Current JellyRip app snapshot. Use this as the trusted "
+                    "source for current app-state facts, not as a limit on general movie or TV knowledge:\n"
+                    f"{json.dumps(snapshot, indent=2)}"
+                ),
+            },
+            *history,
+        ]
+
+    def _record_ai_chat_replay(
+        self,
+        phase: str,
+        *,
+        replay_id: str,
+        title: str = "AI Assistant",
+        backend: str = "",
+        request_text: str = "",
+        display_text: str = "",
+        response_text: str = "",
+        error_text: str = "",
+        details: dict[str, object] | None = None,
+    ) -> dict[str, object] | None:
+        record = append_ai_chat_replay(
+            phase,
+            replay_id=replay_id,
+            title=title,
+            backend=backend,
+            request_text=request_text,
+            display_text=display_text,
+            response_text=response_text,
+            error_text=error_text,
+            details=details,
+        )
+        if record is None:
+            return None
+        path = ai_chat_replay_path()
+        self._last_ai_chat_replay_id = replay_id
+        self._last_ai_chat_replay_path = path
+        if not self.__dict__.get("_ai_chat_replay_path_announced", False):
+            controller = self.__dict__.get("controller", None)
+            log = getattr(controller, "log", None)
+            if callable(log):
+                log(f"[AI] Sidebar chat replay: {path}")
+            self._ai_chat_replay_path_announced = True
+        return record
 
     def _copy_text_to_clipboard(self, text: str) -> bool:
         value = str(text or "")
@@ -1333,6 +1839,435 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
 
     def _copy_ai_chat_transcript(self) -> None:
         self._copy_ai_chat_text(self._format_ai_chat_transcript())
+
+    @staticmethod
+    def _format_ai_chat_replay_value(value: object) -> str:
+        if isinstance(value, (dict, list)):
+            if not value:
+                return "(empty)"
+            return json.dumps(value, indent=2, ensure_ascii=False)
+        text = str(value or "")
+        return text if text.strip() else "(empty)"
+
+    def _serialize_ai_chat_replay_bundle(self, bundle: dict[str, object] | None) -> str:
+        return json.dumps(bundle or {}, indent=2, ensure_ascii=False, sort_keys=True)
+
+    def _format_ai_chat_replay_bundle_text(
+        self,
+        bundle: dict[str, object] | None,
+    ) -> str:
+        bundle = bundle if isinstance(bundle, dict) else {}
+        final_record = bundle.get("final_record")
+        if not isinstance(final_record, dict):
+            final_record = {}
+
+        summary = [
+            "Summary",
+            f"Replay ID: {str(bundle.get('replay_id', '') or '(missing)')}",
+            f"Title: {str(bundle.get('title', '') or 'AI Assistant')}",
+            f"Status: {str(bundle.get('status', '') or 'request')}",
+            f"Backend: {str(bundle.get('backend', '') or '(pending)')}",
+            f"First Timestamp: {str(bundle.get('first_timestamp', '') or '(unknown)')}",
+            f"Last Timestamp: {str(bundle.get('last_timestamp', '') or '(unknown)')}",
+            f"Phases: {', '.join(bundle.get('phase_sequence', []) or []) or '(none)'}",
+            f"Records: {int(bundle.get('line_count', 0) or 0)}",
+            f"Final Phase: {str(final_record.get('phase', '') or '(none)')}",
+        ]
+
+        sections = [
+            "\n".join(summary),
+            f"Request Text\n{self._format_ai_chat_replay_value(bundle.get('request_text'))}",
+            f"Display Text\n{self._format_ai_chat_replay_value(bundle.get('display_text'))}",
+            f"Final Answer\n{self._format_ai_chat_replay_value(bundle.get('final_answer_text'))}",
+            f"Final Error\n{self._format_ai_chat_replay_value(bundle.get('final_error_text'))}",
+            f"AI Profile\n{self._format_ai_chat_replay_value(bundle.get('ai_profile'))}",
+            f"Session Facts\n{self._format_ai_chat_replay_value(bundle.get('session_facts'))}",
+            f"Payload\n{self._format_ai_chat_replay_value(bundle.get('payload'))}",
+            f"Payload By Provider\n{self._format_ai_chat_replay_value(bundle.get('payload_by_provider'))}",
+            f"Messages\n{self._format_ai_chat_replay_value(bundle.get('messages'))}",
+            f"Messages By Provider\n{self._format_ai_chat_replay_value(bundle.get('messages_by_provider'))}",
+        ]
+        return "\n\n".join(sections).strip()
+
+    def _get_selected_ai_chat_replay_bundle(self) -> dict[str, object] | None:
+        tree = self.__dict__.get("_ai_chat_replay_tree")
+        bundle_index = self.__dict__.get("_ai_chat_replay_index", {})
+        if tree is None or not isinstance(bundle_index, dict):
+            return None
+        try:
+            selection = list(tree.selection())
+        except Exception:
+            return None
+        if not selection:
+            return None
+        return bundle_index.get(selection[0])
+
+    def _update_ai_chat_replay_detail(self, _event=None) -> None:
+        detail = self.__dict__.get("_ai_chat_replay_detail")
+        status_var = self.__dict__.get("_ai_chat_replay_status_var")
+        if detail is None:
+            return
+
+        bundle = self._get_selected_ai_chat_replay_bundle()
+        if bundle is None:
+            body_text = (
+                "No replay bundle selected.\n\n"
+                "Choose a replay on the left to inspect the bundled request and response."
+            )
+            if status_var is not None:
+                status_var.set(f"No replay selected. Source: {ai_chat_replay_path()}")
+        else:
+            body_text = self._format_ai_chat_replay_bundle_text(bundle)
+            if status_var is not None:
+                status_var.set(
+                    "Showing replay "
+                    f"{bundle.get('replay_id', '(missing)')} from {ai_chat_replay_path()}"
+                )
+
+        try:
+            detail.configure(state="normal")
+            detail.delete("1.0", "end")
+            detail.insert("1.0", body_text)
+            detail.see("1.0")
+            detail.configure(state="disabled")
+        except Exception:
+            pass
+
+    def _refresh_ai_chat_replay_inspector(self) -> None:
+        tree = self.__dict__.get("_ai_chat_replay_tree")
+        detail = self.__dict__.get("_ai_chat_replay_detail")
+        status_var = self.__dict__.get("_ai_chat_replay_status_var")
+        if tree is None or detail is None:
+            return
+
+        try:
+            previous_selection = list(tree.selection())
+        except Exception:
+            previous_selection = []
+
+        try:
+            tree.delete(*tree.get_children(""))
+        except Exception:
+            pass
+
+        bundles = list_ai_chat_replay_bundles(limit=60)
+        bundle_index: dict[str, dict[str, object]] = {}
+
+        for bundle in bundles:
+            replay_id = str(bundle.get("replay_id", "") or "")
+            if not replay_id:
+                continue
+            bundle_index[replay_id] = bundle
+            updated = str(bundle.get("last_timestamp", "") or "")
+            status = str(bundle.get("status", "") or "request").title()
+            backend = str(bundle.get("backend", "") or "").upper() or "-"
+            request_text = str(
+                bundle.get("display_text")
+                or bundle.get("request_text")
+                or ""
+            )
+            request_summary = self._trim_context_label(request_text, limit=72) or "(empty)"
+            tree.insert(
+                "",
+                "end",
+                iid=replay_id,
+                values=(updated, status, backend, request_summary),
+            )
+
+        self._ai_chat_replay_index = bundle_index
+
+        if not bundles:
+            if status_var is not None:
+                status_var.set(f"No replay entries found at {ai_chat_replay_path()}")
+            self._update_ai_chat_replay_detail()
+            return
+
+        target = (
+            previous_selection[0]
+            if previous_selection and previous_selection[0] in bundle_index
+            else str(bundles[0].get("replay_id", "") or "")
+        )
+        if target:
+            try:
+                tree.selection_set(target)
+                tree.focus(target)
+                tree.see(target)
+            except Exception:
+                pass
+
+        self._update_ai_chat_replay_detail()
+
+    def _copy_selected_ai_chat_replay(self) -> None:
+        bundle = self._get_selected_ai_chat_replay_bundle()
+        status_var = self.__dict__.get("_ai_chat_replay_status_var")
+        if bundle is None:
+            if status_var is not None:
+                status_var.set("Choose a replay before copying.")
+            return
+        if self._copy_text_to_clipboard(self._serialize_ai_chat_replay_bundle(bundle)):
+            if status_var is not None:
+                status_var.set(
+                    f"Copied replay {bundle.get('replay_id', '(missing)')}."
+                )
+        elif status_var is not None:
+            status_var.set("Copy failed.")
+
+    def _export_selected_ai_chat_replay(self) -> None:
+        bundle = self._get_selected_ai_chat_replay_bundle()
+        status_var = self.__dict__.get("_ai_chat_replay_status_var")
+        if bundle is None:
+            if status_var is not None:
+                status_var.set("Choose a replay before exporting.")
+            return
+
+        replay_id = str(bundle.get("replay_id", "replay") or "replay")
+        export_path = self.ask_save_file(
+            "Export Replay",
+            "Save the selected replay bundle as JSON",
+            initialdir=get_config_dir(),
+            initialfile=f"ai_chat_replay_{replay_id}.json",
+            defaultextension=".json",
+            filetypes=(("JSON files", "*.json"), ("All files", "*.*")),
+        )
+        if not export_path:
+            if status_var is not None:
+                status_var.set("Export cancelled.")
+            return
+
+        try:
+            with open(export_path, "w", encoding="utf-8") as handle:
+                handle.write(self._serialize_ai_chat_replay_bundle(bundle))
+                handle.write("\n")
+        except Exception as exc:
+            if status_var is not None:
+                status_var.set(f"Export failed: {exc}")
+            return
+
+        controller = self.__dict__.get("controller", None)
+        log = getattr(controller, "log", None)
+        if callable(log):
+            log(f"[AI] Exported sidebar chat replay bundle: {export_path}")
+        if status_var is not None:
+            status_var.set(f"Exported replay to {export_path}")
+
+    def _open_ai_chat_replay_inspector(self) -> None:
+        existing = self.__dict__.get("_ai_chat_replay_window")
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.deiconify()
+                    existing.lift()
+                    existing.focus_force()
+                    self._refresh_ai_chat_replay_inspector()
+                    return
+            except Exception:
+                pass
+
+        colors = self._theme
+        win = tk.Toplevel(self)
+        win.title("AI Chat Replay Browser")
+        win.configure(bg=colors["window_bg"])
+        win.geometry("1180x760")
+        win.transient(self)
+        win.lift()
+        win.focus_force()
+        self._ai_chat_replay_window = win
+
+        def _close() -> None:
+            self._ai_chat_replay_window = None
+            self._ai_chat_replay_tree = None
+            self._ai_chat_replay_detail = None
+            self._ai_chat_replay_status_var = None
+            self._ai_chat_replay_index = {}
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+        win.protocol("WM_DELETE_WINDOW", _close)
+
+        tk.Label(
+            win,
+            text="AI Chat Replay Browser",
+            bg=colors["window_bg"],
+            fg=colors["title"],
+            font=("Segoe UI", 14, "bold"),
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(14, 4))
+
+        tk.Label(
+            win,
+            text=(
+                "Read-only debug view of append-only sidebar chat replay bundles. "
+                f"Source: {ai_chat_replay_path()}"
+            ),
+            bg=colors["window_bg"],
+            fg=colors["muted"],
+            font=("Segoe UI", 9),
+            wraplength=1120,
+            justify="left",
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(0, 10))
+
+        action_row = tk.Frame(win, bg=colors["window_bg"])
+        action_row.pack(fill="x", padx=16, pady=(0, 10))
+
+        self._ai_chat_replay_status_var = tk.StringVar(value="")
+        tk.Label(
+            action_row,
+            textvariable=self._ai_chat_replay_status_var,
+            bg=colors["window_bg"],
+            fg=colors["muted"],
+            font=("Segoe UI", 9),
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+
+        action_button = {
+            "bg": colors["toolbar_button"],
+            "fg": colors["toolbar_button_text"],
+            "activebackground": colors["toolbar_button_active"],
+            "activeforeground": colors["toolbar_button_text"],
+            "font": ("Segoe UI", 10, "bold"),
+            "relief": "flat",
+            "bd": 0,
+            "padx": 12,
+            "pady": 6,
+            "cursor": "hand2",
+        }
+
+        tk.Button(
+            action_row,
+            text="Refresh",
+            command=self._refresh_ai_chat_replay_inspector,
+            **action_button,
+        ).pack(side="right", padx=(6, 0))
+        tk.Button(
+            action_row,
+            text="Export JSON",
+            command=self._export_selected_ai_chat_replay,
+            **action_button,
+        ).pack(side="right", padx=(6, 0))
+        tk.Button(
+            action_row,
+            text="Copy Replay",
+            command=self._copy_selected_ai_chat_replay,
+            **action_button,
+        ).pack(side="right", padx=(6, 0))
+        tk.Button(
+            action_row,
+            text="Close",
+            command=_close,
+            **action_button,
+        ).pack(side="right", padx=(6, 0))
+
+        panes = tk.PanedWindow(
+            win,
+            orient="horizontal",
+            sashwidth=8,
+            bd=0,
+            relief="flat",
+            bg=colors["window_bg"],
+        )
+        panes.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+
+        list_frame = tk.Frame(
+            panes,
+            bg=colors["surface"],
+            highlightbackground=colors["panel_border"],
+            highlightthickness=1,
+            bd=0,
+        )
+        detail_frame = tk.Frame(
+            panes,
+            bg=colors["surface"],
+            highlightbackground=colors["panel_border"],
+            highlightthickness=1,
+            bd=0,
+        )
+        panes.add(list_frame, minsize=320)
+        panes.add(detail_frame, minsize=520)
+
+        tk.Label(
+            list_frame,
+            text="Replay Bundles",
+            bg=colors["surface"],
+            fg=colors["title"],
+            font=("Segoe UI", 11, "bold"),
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(12, 8))
+
+        style = ttk.Style(win)
+        style.configure(
+            "AIReplay.Treeview",
+            background=colors["surface_alt"],
+            foreground=colors["text"],
+            fieldbackground=colors["surface_alt"],
+            rowheight=24,
+            font=("Consolas", 10),
+        )
+        style.configure(
+            "AIReplay.Treeview.Heading",
+            background=colors["surface"],
+            foreground=colors["title"],
+            font=("Segoe UI", 10, "bold"),
+        )
+        style.map(
+            "AIReplay.Treeview",
+            background=[("selected", colors["blue"])],
+            foreground=[("selected", colors["text"])],
+        )
+
+        tree_shell = tk.Frame(list_frame, bg=colors["surface"])
+        tree_shell.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        tree = ttk.Treeview(
+            tree_shell,
+            columns=("updated", "status", "backend", "request"),
+            show="headings",
+            style="AIReplay.Treeview",
+            selectmode="browse",
+        )
+        tree.heading("updated", text="Updated")
+        tree.heading("status", text="Status")
+        tree.heading("backend", text="Backend")
+        tree.heading("request", text="Request")
+        tree.column("updated", width=180, anchor="w", stretch=False)
+        tree.column("status", width=80, anchor="center", stretch=False)
+        tree.column("backend", width=90, anchor="center", stretch=False)
+        tree.column("request", width=300, anchor="w", stretch=True)
+        tree_scroll = ttk.Scrollbar(tree_shell, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=tree_scroll.set)
+        tree.pack(side="left", fill="both", expand=True)
+        tree_scroll.pack(side="right", fill="y")
+        tree.bind("<<TreeviewSelect>>", self._update_ai_chat_replay_detail)
+        self._ai_chat_replay_tree = tree
+
+        tk.Label(
+            detail_frame,
+            text="Selected Replay Bundle",
+            bg=colors["surface"],
+            fg=colors["title"],
+            font=("Segoe UI", 11, "bold"),
+            anchor="w",
+        ).pack(fill="x", padx=12, pady=(12, 8))
+
+        detail = scrolledtext.ScrolledText(
+            detail_frame,
+            bg=colors["surface_alt"],
+            fg=colors["text"],
+            font=("Consolas", 10),
+            insertbackground=colors["text"],
+            wrap="word",
+            relief="flat",
+            bd=0,
+            padx=12,
+            pady=12,
+            state="disabled",
+        )
+        detail.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self._ai_chat_replay_detail = detail
+        self._ai_chat_replay_index = {}
+
+        self._refresh_ai_chat_replay_inspector()
 
     def _set_ai_chat_busy(self, busy: bool, status_text: str | None = None) -> None:
         self._ai_chat_busy = busy
@@ -1490,6 +2425,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 self._ai_chat_history = []
                 history = self._ai_chat_history
             history.append({"role": safe_role, "content": message})
+            self._remember_ai_chat_turn(safe_role, message)
             if open_sidebar:
                 self._show_ai_sidebar()
             self._append_ai_chat_message(
@@ -1659,6 +2595,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
 
     def _reset_ai_chat(self) -> None:
         self._ai_chat_history.clear()
+        self._ensure_ai_chat_memory().reset()
         self._hide_ai_chat_typing_indicator()
         self._ai_chat_body_labels = []
         container = self.__dict__.get("ai_chat_messages")
@@ -1682,6 +2619,14 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         self._set_ai_chat_busy(False, "Ready")
 
     def _handle_ai_chat_return(self, event) -> str | None:
+        state = int(getattr(event, "state", 0) or 0)
+        shift_pressed = bool(state & 0x1)
+        self._debug_ui_event(
+            "ai_chat_return",
+            event_state=state,
+            shift_pressed=shift_pressed,
+            prompt_len=self._current_ai_chat_prompt_len(),
+        )
         if event.state & 0x1:
             return None
         self._submit_ai_chat()
@@ -1757,61 +2702,235 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _request_ai_chat_async(
+        self,
+        title: str,
+        messages: list[dict[str, str]],
+        max_tokens: int,
+        on_success,
+        on_error,
+        on_status=None,
+        log_request: bool = True,
+        log_failures: bool = True,
+        messages_by_provider: dict[str, list[dict[str, str]]] | None = None,
+        max_tokens_by_provider: dict[str, int] | None = None,
+    ) -> None:
+        if not list(messages or []):
+            self.after(0, lambda: on_error("No chat messages provided."))
+            return
+
+        providers = self._resolve_ai_text_providers()
+        if not providers:
+            self.after(
+                0,
+                lambda: on_error(
+                    "AI is off or no configured provider is available. "
+                    "Use the AI mode toggle or Provider Setup first."
+                ),
+            )
+            return
+
+        if log_request:
+            self.controller.log(f"[AI] {title} requested.")
+
+        def worker() -> None:
+            last_error = "No provider available."
+            for tag, provider, timeout in providers:
+                if provider is None:
+                    continue
+                try:
+                    if on_status is not None:
+                        self.after(0, lambda current=tag: on_status(current))
+                    request_messages = list(
+                        messages_by_provider.get(tag, messages)
+                        if messages_by_provider else messages
+                    )
+                    request_max_tokens = (
+                        int(max_tokens_by_provider.get(tag, max_tokens))
+                        if max_tokens_by_provider else int(max_tokens)
+                    )
+                    result = provider.chat(
+                        request_messages,
+                        max_tokens=request_max_tokens,
+                        timeout=float(timeout),
+                    ).strip()
+                    if log_request:
+                        self.controller.log(f"[AI:{tag}] {title} complete.")
+                    self.after(
+                        0,
+                        lambda response=result, backend=tag: on_success(response, backend),
+                    )
+                    return
+                except Exception as e:
+                    last_error = f"{tag}: {e}"
+                    if log_failures:
+                        self.controller.log(f"[AI:{tag}] {title} failed: {e}")
+            self.after(0, lambda err=last_error: on_error(err))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def _start_ai_chat_request(self, prompt: str, display_text: str | None = None) -> None:
         request_text = str(prompt or "").strip()
         if not request_text or self._ai_chat_busy:
             return
+        if not self._ensure_ai_profile_onboarded():
+            return
 
         shown_text = str(display_text or request_text).strip()
+        replay_id = uuid.uuid4().hex
         self._ai_chat_history.append({"role": "user", "content": shown_text})
+        self._remember_ai_chat_turn("user", shown_text)
         self._append_ai_chat_message("user", shown_text)
         self._set_ai_chat_busy(True, "Thinking...")
 
         if _prompt_looks_like_ui_help(request_text):
-            snapshot = self._get_ai_sidebar_snapshot(
+            fallback_payload = self._build_ai_sidebar_context_payload(
+                request_text,
                 max_log_lines=20,
                 max_log_chars=2200,
+            )
+            self._record_ai_chat_replay(
+                "request",
+                replay_id=replay_id,
+                request_text=request_text,
+                display_text=shown_text,
+                details={
+                    "mode": "app_ui_help",
+                    "payload": fallback_payload,
+                    "compaction_trace": list(fallback_payload.get("compaction_trace", [])),
+                },
+            )
+            snapshot = (
+                fallback_payload.get("ui_snapshot", {})
+                if isinstance(fallback_payload, dict)
+                else {}
             )
             answer = _build_ui_help_fallback(
                 snapshot,
                 str(snapshot.get("live_log_tail", "")),
             )
+            self._record_ai_chat_replay(
+                "response",
+                replay_id=replay_id,
+                backend="app",
+                request_text=request_text,
+                display_text=shown_text,
+                response_text=answer,
+                details={
+                    "mode": "app_ui_help",
+                    "compaction_trace": list(fallback_payload.get("compaction_trace", [])),
+                },
+            )
             self._ai_chat_history.append({"role": "assistant", "content": answer})
+            self._remember_ai_chat_turn("assistant", answer)
             self._append_ai_chat_message("assistant", answer, backend_tag="app")
             self._set_ai_chat_busy(False, "Ready via app")
             if self._ai_sidebar_visible and hasattr(self, "ai_chat_input"):
                 self.ai_chat_input.focus_set()
             return
 
-        full_payload = self._build_ai_sidebar_payload(request_text)
-        local_payload = self._build_ai_sidebar_payload(
+        full_payload = self._build_ai_sidebar_context_payload(request_text)
+        full_messages = self._build_ai_sidebar_chat_messages_from_payload(full_payload)
+        local_payload = self._build_ai_sidebar_context_payload(
             request_text,
             max_history=4,
             max_log_lines=20,
             max_log_chars=2200,
         )
+        local_messages = self._build_ai_sidebar_chat_messages_from_payload(local_payload)
+        self._record_ai_chat_replay(
+            "request",
+            replay_id=replay_id,
+            request_text=request_text,
+            display_text=shown_text,
+            details={
+                "mode": "provider_chat",
+                "ai_profile": full_payload.get("ai_profile", {}),
+                "session_facts": full_payload.get("session_facts", {}),
+                "conversation_summary": full_payload.get("conversation_summary", ""),
+                "pinned_session_facts": full_payload.get("pinned_session_facts", {}),
+                "compaction_trace": list(full_payload.get("compaction_trace", [])),
+                "payload": full_payload,
+                "payload_by_provider": {"LOCAL": local_payload},
+                "messages": full_messages,
+                "messages_by_provider": {"LOCAL": local_messages},
+                "max_tokens": 900,
+                "max_tokens_by_provider": {"LOCAL": 420},
+            },
+        )
 
         def _on_success(result_text: str, backend_tag: str) -> None:
-            answer = result_text.strip() or "(no response)"
+            raw_answer = result_text.strip() or "(no response)"
+            answer = raw_answer
+            replay_backend = backend_tag
+            replay_details: dict[str, object] = {
+                "mode": "provider_chat",
+                "raw_response_text": raw_answer,
+            }
             if _looks_like_ai_payload_echo(answer):
-                snapshot = self._get_ai_sidebar_snapshot(
-                    max_log_lines=20,
-                    max_log_chars=2200,
+                snapshot = (
+                    local_payload.get("ui_snapshot", {})
+                    if isinstance(local_payload, dict)
+                    else {}
                 )
                 answer = _build_ui_help_fallback(
                     snapshot,
                     str(snapshot.get("live_log_tail", "")),
                     "AI returned raw request payload.",
                 )
-                backend_tag = "app"
+                replay_backend = "app"
+                replay_details["fallback_reason"] = "payload_echo"
+                replay_details["source_backend"] = backend_tag
+                replay_details["fallback_payload"] = local_payload
             self._ai_chat_history.append({"role": "assistant", "content": answer})
-            self._append_ai_chat_message("assistant", answer, backend_tag=backend_tag)
-            self._set_ai_chat_busy(False, f"Ready via {backend_tag.lower()}")
+            self._remember_ai_chat_turn("assistant", answer)
+            memory_payload = self._build_ai_sidebar_context_payload(
+                request_text,
+                max_history=8,
+                max_log_lines=20,
+                max_log_chars=2200,
+            )
+            replay_details["conversation_summary"] = memory_payload.get(
+                "conversation_summary",
+                "",
+            )
+            replay_details["pinned_session_facts"] = memory_payload.get(
+                "pinned_session_facts",
+                {},
+            )
+            replay_details["compaction_trace"] = list(
+                memory_payload.get("compaction_trace", [])
+            )
+            self._record_ai_chat_replay(
+                "response",
+                replay_id=replay_id,
+                backend=replay_backend,
+                request_text=request_text,
+                display_text=shown_text,
+                response_text=answer,
+                details=replay_details,
+            )
+            self._append_ai_chat_message("assistant", answer, backend_tag=replay_backend)
+            self._set_ai_chat_busy(False, f"Ready via {replay_backend.lower()}")
             if self._ai_sidebar_visible and hasattr(self, "ai_chat_input"):
                 self.ai_chat_input.focus_set()
 
         def _on_error(message: str) -> None:
             friendly = _friendly_ai_chat_error(message)
+            self._record_ai_chat_replay(
+                "error",
+                replay_id=replay_id,
+                request_text=request_text,
+                display_text=shown_text,
+                error_text=message,
+                details={
+                    "mode": "provider_chat",
+                    "friendly_error": friendly,
+                    "conversation_summary": full_payload.get("conversation_summary", ""),
+                    "pinned_session_facts": full_payload.get("pinned_session_facts", {}),
+                    "compaction_trace": list(full_payload.get("compaction_trace", [])),
+                },
+            )
             self._append_ai_chat_message("system", friendly)
             if _prompt_looks_like_ui_help(request_text):
                 snapshot = self._get_ai_sidebar_snapshot(
@@ -1824,6 +2943,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                     message,
                 )
                 self._ai_chat_history.append({"role": "assistant", "content": fallback})
+                self._remember_ai_chat_turn("assistant", fallback)
                 self._append_ai_chat_message("assistant", fallback, backend_tag="fallback")
                 self._set_ai_chat_busy(False, "Ready with fallback")
             else:
@@ -1831,10 +2951,9 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             if self._ai_sidebar_visible and hasattr(self, "ai_chat_input"):
                 self.ai_chat_input.focus_set()
 
-        self._request_ai_response_async(
+        self._request_ai_chat_async(
             title="AI Assistant",
-            user_text=full_payload,
-            system_prompt=_AI_ASSISTANT_SYSTEM_PROMPT,
+            messages=full_messages,
             max_tokens=900,
             on_success=_on_success,
             on_error=_on_error,
@@ -1843,7 +2962,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             ),
             log_request=False,
             log_failures=False,
-            payload_by_provider={"LOCAL": local_payload},
+            messages_by_provider={"LOCAL": local_messages},
             max_tokens_by_provider={"LOCAL": 420},
         )
 
@@ -1851,10 +2970,25 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         if not hasattr(self, "ai_chat_input"):
             return
         prompt = self.ai_chat_input.get("1.0", "end-1c").strip()
+        self._debug_ui_event(
+            "ai_chat_submit",
+            prompt_len=len(prompt),
+        )
         if not prompt:
+            self._debug_ui_event("ai_chat_submit_empty")
             self.ai_chat_input.focus_set()
             return
+        if not self._ensure_ai_profile_onboarded():
+            self._debug_ui_event(
+                "ai_chat_submit_blocked_onboarding",
+                prompt_len=len(prompt),
+            )
+            return
         self.ai_chat_input.delete("1.0", "end")
+        self._debug_ui_event(
+            "ai_chat_submit_dispatch",
+            prompt_len=len(prompt),
+        )
         self._start_ai_chat_request(prompt)
 
     def _request_ai_sidebar_suggestion(self) -> None:
@@ -2315,10 +3449,11 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 bg=color,
                 activebackground=color,
                 wraplength=wraplength,
-                disabledforeground="#f2f7ff",
+                disabledforeground=colors["text"],
                 **tile_button,
             )
             btn.pack(fill="both", expand=True)
+            self._bind_debug_focus_trace(btn, f"mode_button:{mode}")
             self.mode_buttons[mode] = btn
             return btn
 
@@ -2335,7 +3470,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         ).grid(row=0, column=0, sticky="w", padx=(0, 18))
 
         self.drive_var = tk.StringVar(value="Loading drives...")
-        self.drive_options = [(0, "Default Drive (disc:0)")]
+        self.drive_options = [make_default_drive()]
         self.drive_menu = ttk.Combobox(
             drive_frame,
             textvariable=self.drive_var,
@@ -2434,7 +3569,15 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         ).pack(side="left", padx=(2, 0))
 
         toolbar_actions = tk.Frame(util_frame, bg=colors["surface"])
-        toolbar_actions.pack(side="right", padx=14, pady=8)
+        toolbar_actions.pack(
+            side="right",
+            fill="x",
+            expand=True,
+            padx=14,
+            pady=10,
+        )
+        for col in range(6):
+            toolbar_actions.grid_columnconfigure(col, weight=1, uniform="toolbar")
 
         self.ai_chat_toggle_btn = tk.Button(
             toolbar_actions,
@@ -2442,7 +3585,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             command=self._toggle_ai_sidebar,
             **toolbar_button,
         )
-        self.ai_chat_toggle_btn.pack(side="left", padx=6)
+        self.ai_chat_toggle_btn.grid(row=0, column=0, sticky="ew", padx=6)
 
         self.settings_btn = tk.Button(
             toolbar_actions,
@@ -2450,15 +3593,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             command=self._open_settings_safe,
             **toolbar_button,
         )
-        self.settings_btn.pack(side="left", padx=6)
-
-        self.ui_editor_btn = tk.Button(
-            toolbar_actions,
-            text="UI Editor",
-            command=self._open_ui_editor_safe,
-            **toolbar_button,
-        )
-        self.ui_editor_btn.pack(side="left", padx=6)
+        self.settings_btn.grid(row=0, column=1, sticky="ew", padx=6)
 
         self.update_btn = tk.Button(
             toolbar_actions,
@@ -2466,7 +3601,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             command=self.check_for_updates,
             **toolbar_button,
         )
-        self.update_btn.pack(side="left", padx=6)
+        self.update_btn.grid(row=0, column=2, sticky="ew", padx=6)
 
         self.log_btn = tk.Button(
             toolbar_actions,
@@ -2474,7 +3609,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             command=self._focus_live_log,
             **toolbar_button,
         )
-        self.log_btn.pack(side="left", padx=6)
+        self.log_btn.grid(row=0, column=3, sticky="ew", padx=6)
 
         self.copy_log_btn = tk.Button(
             toolbar_actions,
@@ -2482,7 +3617,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             command=self.copy_log_to_clipboard,
             **toolbar_button,
         )
-        self.copy_log_btn.pack(side="left", padx=6)
+        self.copy_log_btn.grid(row=0, column=4, sticky="ew", padx=6)
 
         self.browse_btn = tk.Button(
             toolbar_actions,
@@ -2490,7 +3625,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             command=self._browse_folder_in_explorer,
             **toolbar_button,
         )
-        self.browse_btn.pack(side="left", padx=6)
+        self.browse_btn.grid(row=0, column=5, sticky="ew", padx=6)
 
         self._update_ai_mode_ui()
 
@@ -2503,9 +3638,9 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         action_frame.grid_rowconfigure(1, minsize=88)
 
         self.mode_buttons = {}
-        make_tile(action_frame, 0, 0, "Rip TV Show Disc", "t", colors["green"], lambda: self.start_task("t"))
-        make_tile(action_frame, 0, 1, "Rip Movie Disc", "m", colors["teal"], lambda: self.start_task("m"))
-        make_tile(action_frame, 0, 2, "Dump All Titles", "d", colors["blue"], lambda: self.start_task("d"))
+        make_tile(action_frame, 0, 0, "Rip TV Show Disc", "t", colors["green"], lambda: self._start_task_from_ui("t", source="tile"))
+        make_tile(action_frame, 0, 1, "Rip Movie Disc", "m", colors["teal"], lambda: self._start_task_from_ui("m", source="tile"))
+        make_tile(action_frame, 0, 2, "Dump All Titles", "d", colors["blue"], lambda: self._start_task_from_ui("d", source="tile"))
         make_tile(
             action_frame,
             1,
@@ -2513,7 +3648,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             "Organize Existing MKVs",
             "i",
             colors["purple"],
-            lambda: self.start_task("i"),
+            lambda: self._start_task_from_ui("i", source="tile"),
             columnspan=2,
             wraplength=720,
         )
@@ -2532,7 +3667,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         self._bottom_dock.pack(side="bottom", fill="x")
 
         self.content_frame = tk.Frame(self, bg=bg)
-        self.content_frame.pack(fill="both", expand=True, padx=36, pady=(12, 0))
+        self.content_frame.pack(fill="both", expand=True, padx=36, pady=(10, 0))
 
         self.content_pane = tk.PanedWindow(
             self.content_frame,
@@ -2553,7 +3688,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         self.content_pane.add(self.log_panel, minsize=self._log_panel_min_width)
 
         status_strip = tk.Frame(self.log_panel, bg=bg)
-        status_strip.pack(fill="x", pady=(0, 8))
+        status_strip.pack(fill="x", pady=(0, 6))
         for col in range(4):
             status_strip.grid_columnconfigure(col, weight=1, uniform="status")
         self.status_strip = status_strip
@@ -2567,18 +3702,18 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         )
         self.status_brand.grid(row=0, column=0, columnspan=3, sticky="ew", padx=(0, 12))
         self.status_brand_inner = tk.Frame(self.status_brand, bg=colors["header_bg"], bd=0)
-        self.status_brand_inner.pack(expand=True, pady=2)
+        self.status_brand_inner.pack(expand=True, pady=0)
         for text in ("Raw", "Jelly", "Ripper"):
             tk.Label(
                 self.status_brand_inner,
                 text=text,
                 bg=colors["header_bg"],
                 fg=colors["title"],
-                font=("Segoe UI", 28, "bold"),
+                font=("Segoe UI", 24, "bold"),
                 anchor="center",
                 justify="center",
-                padx=28,
-                pady=14,
+                padx=22,
+                pady=8,
                 bd=0,
             ).pack(side="left")
 
@@ -2597,11 +3732,11 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             textvariable=self.status_var,
             bg=colors["pill_idle_bg"],
             fg=colors["ready_text"],
-            font=("Segoe UI", 28, "italic"),
+            font=("Segoe UI", 22, "italic"),
             anchor="center",
             justify="center",
             padx=14,
-            pady=14,
+            pady=8,
             bd=0,
         )
         self.status_value_label.pack(fill="both", expand=True)
@@ -2635,7 +3770,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             bg=colors["surface_alt"],
             fg=colors["text"],
             font=("Segoe UI", 15, "bold"),
-        ).pack(anchor="w", padx=18, pady=(12, 10))
+        ).pack(anchor="w", padx=18, pady=(10, 8))
 
         tk.Frame(log_card, bg=colors["panel_border"], height=1).pack(fill="x")
 
@@ -2746,6 +3881,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             highlightthickness=1,
             bd=0,
         )
+        self._ai_chat_transcript_frame = transcript_frame
         transcript_frame.pack(fill="both", expand=True, padx=10, pady=(8, 0))
 
         self.ai_chat_canvas = tk.Canvas(
@@ -2775,6 +3911,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         )
         self.ai_chat_canvas.bind("<Configure>", self._on_ai_chat_canvas_configure)
         self.ai_chat_messages.bind("<Configure>", self._update_ai_chat_scrollregion)
+        self._install_ai_chat_mousewheel_binding()
 
         ai_input_section = tk.Frame(ai_shell, bg=colors["surface_alt"])
         ai_input_section.pack(side="bottom", fill="x", padx=10, pady=(6, 6))
@@ -2804,6 +3941,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         )
         self.ai_chat_input.pack(fill="x")
         self.ai_chat_input.bind("<Return>", self._handle_ai_chat_return)
+        self._bind_debug_focus_trace(self.ai_chat_input, "ai_chat_input")
 
         ai_send_row = tk.Frame(ai_input_section, bg=colors["surface_alt"])
         ai_send_row.pack(fill="x", pady=(6, 0))
@@ -2833,7 +3971,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         self.ai_chat_send_btn = tk.Button(
             ai_send_row,
             text="Send",
-            command=self._submit_ai_chat,
+            command=lambda: self._submit_ai_chat_from_ui("button"),
             bg=colors["green"],
             fg=colors["text"],
             activebackground=colors["green"],
@@ -2846,6 +3984,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             pady=6,
             cursor="hand2",
         )
+        self._bind_debug_focus_trace(self.ai_chat_send_btn, "ai_chat_send_button")
         self._layout_ai_chat_action_row()
 
         transcript_frame.pack_forget()
@@ -2863,7 +4002,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             highlightthickness=1,
             bd=0,
         )
-        self._input_bar_pack_kwargs = {"fill": "x", "padx": 36, "pady": (14, 0)}
+        self._input_bar_pack_kwargs = {"fill": "x", "padx": 36, "pady": (10, 0)}
         self.input_bar.pack(**self._input_bar_pack_kwargs)
         self.input_bar.pack_forget()
 
@@ -2873,9 +4012,9 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             textvariable=self.input_label_var,
             bg=colors["surface"],
             fg=colors["text"],
-            font=("Segoe UI", 12),
+            font=("Segoe UI", 11),
             anchor="w",
-        ).pack(side="left", padx=(14, 8), pady=12)
+        ).pack(side="left", padx=(12, 6), pady=10)
 
         self.input_var = tk.StringVar()
         self.input_field = tk.Entry(
@@ -2883,13 +4022,13 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             textvariable=self.input_var,
             bg=colors["surface_deep"],
             fg=colors["text"],
-            font=("Segoe UI", 13),
+            font=("Segoe UI", 12),
             insertbackground=colors["text"],
             relief="flat",
             bd=0,
-            width=40,
+            width=42,
         )
-        self.input_field.pack(side="left", fill="x", expand=True, padx=8, pady=12, ipady=10)
+        self.input_field.pack(side="left", fill="x", expand=True, padx=6, pady=10)
         self.input_field.bind("<Return>", lambda e: self._confirm_input())
 
         tk.Button(
@@ -2900,23 +4039,23 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             fg=colors["text"],
             activebackground=colors["green"],
             activeforeground=colors["text"],
-            font=("Segoe UI", 12, "bold"),
+            font=("Segoe UI", 11, "bold"),
             relief="flat",
             bd=0,
-            padx=18,
-            pady=10,
+            padx=14,
+            pady=8,
             cursor="hand2",
-        ).pack(side="left", padx=8, pady=10)
+        ).pack(side="left", padx=6, pady=8)
 
         tk.Button(
             self.input_bar,
             text="Skip",
             command=self._skip_input,
             **toolbar_button,
-        ).pack(side="left", padx=(0, 10), pady=10)
+        ).pack(side="left", padx=(0, 10), pady=8)
 
         self._session_controls_frame = tk.Frame(self._bottom_dock, bg=bg)
-        self._session_controls_frame.pack(fill="x", padx=36, pady=(12, 0))
+        self._session_controls_frame.pack(fill="x", padx=36, pady=(10, 0))
         self.abort_btn = tk.Button(
             self._session_controls_frame,
             text="ABORT SESSION",
@@ -2925,431 +4064,24 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             fg=colors["text"],
             activebackground=colors["abort"],
             activeforeground=colors["text"],
-            disabledforeground="#ffd0d6",
-            font=("Segoe UI", 17, "bold"),
+            disabledforeground=colors["text"],
+            font=("Segoe UI", 18, "bold"),
             relief="flat",
             bd=0,
             padx=18,
             pady=12,
             cursor="hand2",
-            state="normal",
+            state="disabled",
         )
         self.abort_btn.pack(fill="x")
 
-        safe_margin_px = int(self.cfg.get("opt_bottom_safe_margin_px", 32))
+        safe_margin_px = get_bottom_safe_margin_px(self.cfg)
         self._bottom_safe_spacer = tk.Frame(self._bottom_dock, bg=bg, height=safe_margin_px)
         self._bottom_safe_spacer.pack(fill="x")
         self._bottom_safe_spacer.pack_propagate(False)
 
     def build_interface(self):
-        colors = self._theme
-        bg = colors["window_bg"]
-        self.configure(bg=BG)
-
-        header = tk.Frame(self, bg="#161b22")
-        header.pack(fill="x")
-        tk.Label(
-            header,
-            text=f"JELLYFIN RAW RIPPER",
-            font=("Segoe UI", 24, "bold"),
-            bg="#161b22", fg="#58a6ff"
-        ).pack(pady=12)
-
-        drive_frame = tk.Frame(self, bg=BG)
-        drive_frame.pack(fill="x", padx=20, pady=(8, 0))
-        tk.Label(
-            drive_frame, text="Drive:",
-            bg=BG, fg="#8b949e",
-            font=("Segoe UI", 10)
-        ).pack(side="left", padx=(0, 8))
-        self.drive_var     = tk.StringVar(value="Loading drives...")
-        self.drive_options = [(0, "Default Drive (disc:0)")]
-        self.drive_menu    = ttk.Combobox(
-            drive_frame, textvariable=self.drive_var,
-            values=["Loading drives..."],
-            state="readonly", width=38
-        )
-        self.drive_menu.bind(
-            "<<ComboboxSelected>>", self._on_drive_select
-        )
-        self.drive_menu.pack(side="left")
-        tk.Button(
-            drive_frame, text="↻ Refresh",
-            command=self._refresh_drives,
-            bg="#21262d", fg="#c9d1d9",
-            font=("Segoe UI", 10), relief="flat"
-        ).pack(side="left", padx=8)
-
-        mode_frame = tk.Frame(self, bg=BG)
-        mode_frame.pack(pady=(12, 4))
-        self.mode_buttons = {}
-
-        primary_row = tk.Frame(mode_frame, bg=BG)
-        primary_row.pack()
-        secondary_row = tk.Frame(mode_frame, bg=BG)
-        secondary_row.pack(pady=(8, 0))
-
-        buttons_row1 = [
-            (primary_row, "📀  Rip TV Show Disc", "t", "#238636", 20, lambda: self.start_task("t")),
-            (primary_row, "🎬  Rip Movie Disc", "m", "#238636", 20, lambda: self.start_task("m")),
-            (primary_row, "💾  Dump All Titles", "d", "#1f6feb", 18, lambda: self.start_task("d")),
-        ]
-        buttons_row2 = [
-            (secondary_row, "📁  Organize Existing MKVs", "i", "#6e40c9", 22, lambda: self.start_task("i")),
-            (
-                secondary_row,
-                "🧰  Prep for FFmpeg or HandBrake",
-                "scan",
-                "#9a6700",
-                30,
-                self._open_folder_scanner,
-            ),
-        ]
-
-        for parent, text, mode, color, width, command in buttons_row1 + buttons_row2:
-            btn = tk.Button(
-                parent,
-                text=text,
-                command=command,
-                bg=color, fg="white",
-                font=("Segoe UI", 11),
-                width=width, height=2, relief="flat"
-            )
-            btn.pack(side="left", padx=5)
-            self.mode_buttons[mode] = btn
-
-        util_frame = tk.Frame(self, bg=BG)
-        util_frame.pack(fill="x", padx=20)
-        tk.Button(
-            util_frame, text="📂  Browse Folder",
-            command=self._browse_folder_in_explorer,
-            bg="#21262d", fg="#8b949e",
-            font=("Segoe UI", 10), relief="flat"
-        ).pack(side="right", padx=4)
-        tk.Button(
-            util_frame, text="📋  Copy Log",
-            command=self.copy_log_to_clipboard,
-            bg="#21262d", fg="#8b949e",
-            font=("Segoe UI", 10), relief="flat"
-        ).pack(side="right", padx=4)
-        self.update_btn = tk.Button(
-            util_frame, text="⬆  Check Updates",
-            command=self.check_for_updates,
-            bg="#21262d", fg="#8b949e",
-            font=("Segoe UI", 10), relief="flat"
-        )
-        self.update_btn.pack(side="right", padx=4)
-        self.settings_btn = tk.Button(
-            util_frame, text="⚙  Settings",
-            command=self._open_settings_safe,
-            bg="#21262d", fg="#8b949e",
-            font=("Segoe UI", 10), relief="flat"
-        )
-        self.settings_btn.pack(side="right", padx=4)
-        self.ui_editor_btn = tk.Button(
-            util_frame, text="UI Editor",
-            command=self._open_ui_editor_safe,
-            bg="#21262d", fg="#8b949e",
-            font=("Segoe UI", 10), relief="flat"
-        )
-        self.ui_editor_btn.pack(side="right", padx=4)
-        self.ai_chat_toggle_btn = tk.Button(
-            util_frame,
-            text="Assistant",
-            command=self._toggle_ai_sidebar,
-            bg="#21262d",
-            fg="#8b949e",
-            font=("Segoe UI", 10),
-            relief="flat",
-        )
-        self.ai_chat_toggle_btn.pack(side="right", padx=4)
-
-        # --- AI Mode Control (left side of util bar) ---
-        ai_frame = tk.Frame(util_frame, bg=BG)
-        ai_frame.pack(side="left", padx=(0, 12))
-        tk.Label(
-            ai_frame, text="AI:",
-            bg=BG, fg="#8b949e",
-            font=("Segoe UI", 10)
-        ).pack(side="left", padx=(0, 4))
-
-        self._ai_mode_var = tk.StringVar(value=str(self.cfg.get("opt_ai_mode", "cloud")))
-        self._ai_mode_buttons: dict[str, tk.Button] = {}
-        for mode_value, mode_label in [("off", "OFF"), ("cloud", "CLOUD"), ("local", "LOCAL")]:
-            btn = tk.Button(
-                ai_frame, text=mode_label,
-                command=lambda m=mode_value: self._set_ai_mode(m),
-                bg="#21262d", fg="#8b949e",
-                font=("Segoe UI", 9), relief="flat",
-                width=6, padx=0,
-            )
-            btn.pack(side="left", padx=1)
-            self._ai_mode_buttons[mode_value] = btn
-        self._ai_status_label = tk.Label(
-            ai_frame, text="",
-            bg=BG, fg="#3fb950",
-            font=("Segoe UI", 9)
-        )
-        self._ai_status_label.pack(side="left", padx=(6, 0))
-        tk.Button(
-            ai_frame, text="\u2699",
-            bg="#21262d", fg="#8b949e",
-            font=("Segoe UI", 9), relief="flat",
-            width=3, padx=0,
-            command=self._open_ai_providers,
-        ).pack(side="left", padx=(4, 0))
-        self._update_ai_mode_ui()
-
-        self.progress_var = tk.DoubleVar(value=0)
-        self.progress_bar = ttk.Progressbar(
-            self, variable=self.progress_var,
-            maximum=100, mode="determinate"
-        )
-        self.progress_bar.pack(fill="x", padx=20, pady=(8, 2))
-
-        self.status_var = tk.StringVar(value="Ready")
-        tk.Label(
-            self, textvariable=self.status_var,
-            bg=BG, fg="#58a6ff",
-            font=("Segoe UI", 10, "italic")
-        ).pack(anchor="w", padx=22)
-
-        session_controls = tk.Frame(self, bg=BG)
-        session_controls.pack(fill="x", padx=20, pady=(4, 6))
-        self.abort_btn = tk.Button(
-            session_controls, text="ABORT SESSION",
-            bg="#c94b4b", fg="white",
-            font=("Segoe UI", 11, "bold"),
-            width=20, command=self.request_abort, relief="flat",
-            state="disabled"
-        )
-        self.abort_btn.pack(side="right")
-
-        self.content_frame = tk.Frame(self, bg=BG)
-        self.content_frame.pack(fill="both", expand=True, padx=20, pady=(0, 0))
-
-        self.content_pane = tk.PanedWindow(
-            self.content_frame,
-            orient="horizontal",
-            bg=BG,
-            bd=0,
-            sashwidth=8,
-            sashrelief="raised",
-            relief="flat",
-            opaqueresize=True,
-            showhandle=False,
-        )
-        self.content_pane.pack(fill="both", expand=True)
-        self.content_pane.bind("<Configure>", self._on_content_pane_configure)
-
-        self.log_panel = tk.Frame(self.content_pane, bg=BG)
-        self.content_pane.add(self.log_panel, minsize=self._log_panel_min_width)
-
-        tk.Label(
-            self.log_panel, text="Live Log",
-            bg=BG, fg="#8b949e",
-            font=("Segoe UI", 10)
-        ).pack(anchor="w")
-
-        self.log_text = scrolledtext.ScrolledText(
-            self.log_panel, height=18, bg="#161b22", fg="#c9d1d9",
-            font=("Consolas", 10), insertbackground="white",
-            state="disabled"
-        )
-        self.log_text.pack(fill="both", expand=True, pady=(0, 0))
-        self.log_text.tag_configure("prompt", foreground="#f0e68c")
-        self.log_text.tag_configure("answer", foreground="#90ee90")
-
-        self.ai_sidebar_frame = tk.Frame(
-            self.content_pane,
-            bg="#11161d",
-            width=self._ai_sidebar_width,
-            highlightbackground="#30363d",
-            highlightthickness=1,
-        )
-        self.ai_sidebar_frame.pack_propagate(False)
-        self.ai_sidebar_frame.bind("<Configure>", self._on_ai_sidebar_configure)
-
-        ai_header = tk.Frame(self.ai_sidebar_frame, bg="#11161d")
-        ai_header.pack(fill="x", padx=12, pady=(12, 6))
-
-        tk.Label(
-            ai_header,
-            text="Assistant",
-            bg="#11161d",
-            fg="#58a6ff",
-            font=("Segoe UI", 11, "bold"),
-        ).pack(side="left")
-
-        self.ai_chat_status_var = tk.StringVar(value="Ready")
-        tk.Label(
-            ai_header,
-            textvariable=self.ai_chat_status_var,
-            bg="#11161d",
-            fg="#8b949e",
-            font=("Segoe UI", 9),
-        ).pack(side="left", padx=(8, 0))
-
-        tk.Button(
-            ai_header,
-            text="X",
-            command=self._hide_ai_sidebar,
-            bg="#21262d",
-            fg="#8b949e",
-            font=("Segoe UI", 9),
-            relief="flat",
-            width=3,
-        ).pack(side="right")
-
-        tk.Label(
-            self.ai_sidebar_frame,
-            text=(
-                "Ask about this rip or a general question here. "
-                "Automatic rip suggestions still land in the live log."
-            ),
-            bg="#11161d",
-            fg="#8b949e",
-            font=("Segoe UI", 9),
-            justify="left",
-            wraplength=320,
-        ).pack(fill="x", padx=12, pady=(0, 8))
-
-        self.ai_chat_transcript = scrolledtext.ScrolledText(
-            self.ai_sidebar_frame,
-            height=12,
-            bg=self._theme["surface"],
-            fg=self._theme["text"],
-            font=("Consolas", 10),
-            insertbackground="white",
-            wrap="word",
-            state="disabled",
-        )
-        self.ai_chat_transcript.pack(fill="both", expand=True, padx=12, pady=(0, 8))
-        self.ai_chat_transcript.tag_configure("ai_chat_user", foreground="#58a6ff")
-        self.ai_chat_transcript.tag_configure("ai_chat_assistant", foreground="#3fb950")
-        self.ai_chat_transcript.tag_configure("ai_chat_system", foreground="#d29922")
-        self.ai_chat_transcript.tag_configure("ai_chat_body", foreground="#c9d1d9")
-
-        ai_input_section = tk.Frame(self.ai_sidebar_frame, bg="#11161d")
-
-        ai_action_row = tk.Frame(ai_input_section, bg="#11161d")
-        ai_action_row.pack(fill="x", pady=(0, 8))
-
-        self.ai_chat_suggest_btn = tk.Button(
-            ai_action_row,
-            text="Suggest Next Step",
-            command=self._request_ai_sidebar_suggestion,
-            bg="#21262d",
-            fg="#c9d1d9",
-            font=("Segoe UI", 9),
-            relief="flat",
-        )
-        self.ai_chat_suggest_btn.pack(side="left")
-
-        tk.Button(
-            ai_action_row,
-            text="Clear",
-            command=self._reset_ai_chat,
-            bg="#21262d",
-            fg="#8b949e",
-            font=("Segoe UI", 9),
-            relief="flat",
-        ).pack(side="right")
-
-        self.ai_chat_input = tk.Text(
-            ai_input_section,
-            height=4,
-            bg="#0d1117",
-            fg="#c9d1d9",
-            font=("Segoe UI", 10),
-            insertbackground="white",
-            relief="flat",
-            wrap="word",
-        )
-        self.ai_chat_input.pack(fill="x", pady=(0, 8))
-        self.ai_chat_input.bind("<Return>", self._handle_ai_chat_return)
-
-        ai_send_row = tk.Frame(ai_input_section, bg="#11161d")
-        ai_send_row.pack(fill="x")
-
-        tk.Label(
-            ai_send_row,
-            text="Enter sends. Shift+Enter adds a new line.",
-            bg="#11161d",
-            fg="#8b949e",
-            font=("Segoe UI", 8),
-        ).pack(side="left")
-
-        self.ai_chat_send_btn = tk.Button(
-            ai_send_row,
-            text="Send",
-            command=self._submit_ai_chat,
-            bg="#238636",
-            fg="white",
-            font=("Segoe UI", 9, "bold"),
-            relief="flat",
-            width=10,
-        )
-        self.ai_chat_send_btn.pack(side="right")
-        ai_input_section.pack(side="bottom", fill="x", padx=12, pady=(0, 12))
-
-        if self._ai_sidebar_visible:
-            self.content_pane.add(
-                self.ai_sidebar_frame,
-                minsize=self._ai_sidebar_min_width,
-            )
-            self.after_idle(self._apply_ai_sidebar_width)
-        self._reset_ai_chat()
-        self._update_ai_sidebar_toggle_ui()
-
-        self.input_bar = tk.Frame(self, bg="#21262d")
-        self.input_bar.pack(fill="x", padx=20, pady=4)
-        self.input_bar.pack_forget()
-
-        self.input_label_var = tk.StringVar(value="")
-        tk.Label(
-            self.input_bar, textvariable=self.input_label_var,
-            bg="#21262d", fg="#c9d1d9",
-            font=("Segoe UI", 10), anchor="w"
-        ).pack(side="left", padx=(10, 6), pady=8)
-
-        self.input_var   = tk.StringVar()
-        self.input_field = tk.Entry(
-            self.input_bar, textvariable=self.input_var,
-            bg="#0d1117", fg="#c9d1d9",
-            font=("Segoe UI", 11),
-            insertbackground="white",
-            relief="flat", bd=4, width=40
-        )
-        self.input_field.pack(side="left", padx=4, pady=8)
-        self.input_field.bind(
-            "<Return>", lambda e: self._confirm_input()
-        )
-
-        tk.Button(
-            self.input_bar, text="Confirm",
-            bg="#238636", fg="white",
-            font=("Segoe UI", 10, "bold"),
-            command=self._confirm_input, relief="flat"
-        ).pack(side="left", padx=4, pady=8)
-
-        tk.Button(
-            self.input_bar, text="Skip",
-            bg="#30363d", fg="#8b949e",
-            font=("Segoe UI", 10),
-            command=self._skip_input, relief="flat"
-        ).pack(side="left", padx=4, pady=8)
-
-        # Keep bottom interaction controls clear of the Windows taskbar area
-        # on machines where the app window can overlap shell-reserved space.
-        safe_margin_px = int(self.cfg.get("opt_bottom_safe_margin_px", 72))
-        self._bottom_safe_spacer = tk.Frame(self, bg=BG, height=safe_margin_px)
-        self._bottom_safe_spacer.pack(fill="x")
-        self._bottom_safe_spacer.pack_propagate(False)
-
-        # Do not auto-probe optical drives on startup; probing can spin up
-        # physical media drives and stall on some systems. Users can refresh
-        # explicitly with the Refresh button.
+        self._build_interface_v2()
 
     def _browse_folder_in_explorer(self):
         folder = self.ask_directory("Browse Folder", "Choose a folder to open")
@@ -3489,6 +4221,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             main_log=str(self.cfg.get("log_file", "") or ""),
             ffprobe_path=str(self.cfg.get("ffprobe_path", "") or ""),
             include_dirs=False,
+            allow_path_lookup=self._allow_path_tool_resolution(),
         )
 
         progress_win = tk.Toplevel(self)
@@ -3866,9 +4599,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         ).pack(side="right", padx=4)
 
     def _open_ffmpeg_recommendation_scan(self, scan_root, input_path):
-        ffprobe_exe = resolve_ffprobe(
-            os.path.normpath(self.cfg.get("ffprobe_path", ""))
-        )[0] or ""
+        ffprobe_exe = self._resolve_ffprobe_tool().path or ""
         if not ffprobe_exe or not os.path.isfile(ffprobe_exe):
             self.show_error(
                 "FFmpeg Recommendation",
@@ -4004,9 +4735,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             jobs=build_result.jobs,
             log_dir=log_dir,
             ffmpeg_exe=ffmpeg_exe,
-            ffprobe_exe=resolve_ffprobe(
-                os.path.normpath(self.cfg.get("ffprobe_path", ""))
-            )[0],
+            ffprobe_exe=self._resolve_ffprobe_tool().path,
             handbrake_exe=self._resolve_transcode_backend_path("handbrake")[0],
             ffmpeg_source_mode=ffmpeg_source_mode,
             temp_root=os.path.normpath(
@@ -4902,27 +5631,11 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                     err_var.set("Enter a name for the profile.")
                     return
                 profile_data, crf_val, preset_val = _collect()
-                # Warn if extra_video_params contains source-derived HDR color
-                # metadata. Those tags (colorprim, transfer, colormatrix, hdr-opt)
-                # are file-specific — applying them to an SDR file would incorrectly
-                # tag its output as HDR.
-                _HDR_MARKERS = {"colorprim=", "transfer=", "colormatrix=", "hdr-opt="}
-                _extra = (profile_data.get("video") or {}).get("extra_video_params") or ""
-                if any(m in _extra for m in _HDR_MARKERS):
-                    if not messagebox.askyesno(
-                        "Source-specific HDR settings",
-                        "The 'Extra encoder params' field contains HDR color metadata "
-                        "(e.g. colorprim=bt2020, transfer=smpte2084) that was seeded "
-                        "from this specific file.\n\n"
-                        "Saving it as a reusable profile will embed those HDR tags "
-                        "into every file encoded with it — including SDR content.\n\n"
-                        "Use \u2018Apply Once\u2019 to keep it file-specific, or clear "
-                        "'Extra encoder params' before saving a general profile.\n\n"
-                        "Save with HDR metadata anyway?",
-                        icon="warning",
-                        parent=name_dlg,
-                    ):
-                        return
+                if not self._confirm_profile_hdr_metadata_save(
+                    profile_data,
+                    name_dlg,
+                ):
+                    return
                 try:
                     loader = self._get_transcode_profile_loader()
                     loader.add_profile(name, profile_data)
@@ -4961,52 +5674,377 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
     def _resolve_transcode_backend_path(self, backend):
         backend_key = str(backend or "").strip().lower()
         if backend_key == "handbrake":
-            cfg_key = "handbrake_path"
-            auto_locator = auto_locate_handbrake
-            validator = validate_handbrake
+            resolved = resolve_handbrake(
+                os.path.normpath(str(self.cfg.get("handbrake_path", "") or "")),
+                allow_path_lookup=self._allow_path_tool_resolution(),
+            )
+            backend_label = _transcode_backend_label("handbrake")
         else:
-            backend_key = "ffmpeg"
-            cfg_key = "ffmpeg_path"
-            auto_locator = auto_locate_ffmpeg
-            validator = validate_ffmpeg
+            resolved = resolve_ffmpeg(
+                os.path.normpath(str(self.cfg.get("ffmpeg_path", "") or "")),
+                allow_path_lookup=self._allow_path_tool_resolution(),
+            )
+            backend_label = _transcode_backend_label("ffmpeg")
 
-        backend_label = _transcode_backend_label(backend_key)
-        configured_path = str(self.cfg.get(cfg_key, "") or "").strip()
-        if configured_path:
-            configured_path = os.path.normpath(configured_path)
-            ok, reason = validator(configured_path)
-            if ok:
-                return configured_path, f"Using configured {backend_label}: {configured_path}"
+        if resolved.path:
+            return (
+                resolved.path,
+                f"Using {backend_label} ({resolved.source}): {resolved.path}",
+            )
 
-            auto_path = auto_locator()
-            if auto_path:
-                auto_path = os.path.normpath(auto_path)
-                auto_ok, _auto_reason = validator(auto_path)
-                if auto_ok:
-                    reason_text = reason or "validation failed"
-                    return (
-                        auto_path,
-                        f"Configured {backend_label} path failed ({reason_text}). "
-                        f"Using auto-detected {backend_label}: {auto_path}",
-                    )
+        if resolved.suggestion_path:
+            detail = resolved.error or (
+                f"Configured {backend_label} executable is unavailable."
+            )
+            detail += (
+                f"\n\nUsing {backend_label} ({resolved.suggestion_source}): "
+                f"{resolved.suggestion_path}"
+            )
+            return resolved.suggestion_path, detail
 
-            reason_text = reason or "validation failed"
-            return "", f"{backend_label} is not ready: {reason_text}"
+        detail = resolved.error or f"{backend_label} executable not found."
+        detail += "\n\nSet it in Settings > Paths."
+        return "", detail
 
-        auto_path = auto_locator()
-        if auto_path:
-            auto_path = os.path.normpath(auto_path)
-            ok, reason = validator(auto_path)
-            if ok:
-                return auto_path, f"Using auto-detected {backend_label}: {auto_path}"
-            if reason:
-                return "", f"Auto-detected {backend_label} failed validation: {reason}"
+    def _allow_path_tool_resolution(self) -> bool:
+        return (
+            sys.platform == "win32"
+            and bool(self.cfg.get("opt_allow_path_tool_resolution", False))
+        )
 
-        return "", f"{backend_label} executable not found. Set it in Settings > Paths."
+    def _resolve_ffprobe_tool(self):
+        return resolve_ffprobe(
+            os.path.normpath(str(self.cfg.get("ffprobe_path", "") or "")),
+            allow_path_lookup=self._allow_path_tool_resolution(),
+        )
 
     def _get_transcode_profile_loader(self):
         profile_path = os.path.join(get_config_dir(), TRANSCODE_PROFILE_FILENAME)
         return ProfileLoader(profile_path)
+
+    @staticmethod
+    def _format_expert_profile_value(value):
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    @staticmethod
+    def _make_expert_var_handle(var, kind="value"):
+        return {"var": var, "kind": kind}
+
+    @staticmethod
+    def _expert_var_get(handle):
+        if isinstance(handle, dict):
+            return handle["var"].get()
+        return handle.get()
+
+    def _expert_var_set(self, handle, value):
+        if isinstance(handle, dict):
+            var = handle["var"]
+            if handle.get("kind") == "bool":
+                var.set(bool(value))
+            else:
+                var.set(self._format_expert_profile_value(value))
+            return
+        handle.set(self._format_expert_profile_value(value))
+
+    def _expert_var_matches(self, handle, expected_value):
+        if isinstance(handle, dict) and handle.get("kind") == "bool":
+            return bool(handle["var"].get()) == bool(expected_value)
+        current_value = self._expert_var_get(handle)
+        return (
+            str(current_value if current_value is not None else "").strip()
+            == self._format_expert_profile_value(expected_value)
+        )
+
+    @staticmethod
+    def _parse_expert_profile_value(field_name, raw_value, expected_type):
+        raw_text = str(raw_value if raw_value is not None else "").strip()
+        allowed_types = (
+            expected_type
+            if isinstance(expected_type, tuple) else
+            (expected_type,)
+        )
+        allows_none = type(None) in allowed_types
+        non_none_types = tuple(
+            field_type
+            for field_type in allowed_types
+            if field_type is not type(None)
+        )
+
+        if not raw_text:
+            if allows_none:
+                return None
+            if str in non_none_types:
+                raise ValueError(f"{field_name} cannot be blank.")
+            raise ValueError(f"{field_name} requires a value.")
+
+        if bool in non_none_types:
+            normalized = raw_text.lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+            raise ValueError(
+                f"{field_name} must be true/false, yes/no, on/off, or 1/0."
+            )
+
+        if int in non_none_types and float in non_none_types:
+            try:
+                numeric = float(raw_text)
+            except ValueError as exc:
+                raise ValueError(f"{field_name} must be a number.") from exc
+            return int(numeric) if numeric.is_integer() else numeric
+
+        if int in non_none_types:
+            try:
+                return int(raw_text)
+            except ValueError as exc:
+                raise ValueError(f"{field_name} must be an integer.") from exc
+
+        if float in non_none_types:
+            try:
+                return float(raw_text)
+            except ValueError as exc:
+                raise ValueError(f"{field_name} must be a number.") from exc
+
+        if str in non_none_types:
+            return raw_text
+
+        return raw_text
+
+    def _collect_expert_profile_data(
+        self,
+        base_profile_data,
+        expert_vars,
+        profile_name,
+    ):
+        profile_data = normalize_profile_data(base_profile_data or {})
+        for section_name, schema in PROFILE_SCHEMA.items():
+            section_vars = expert_vars.get(section_name, {})
+            for key, expected_type in schema.items():
+                var = section_vars.get(key)
+                if var is None:
+                    continue
+                field_name = f"{section_name}.{key}"
+                profile_data[section_name][key] = self._parse_expert_profile_value(
+                    field_name,
+                    self._expert_var_get(var),
+                    expected_type,
+                )
+        TranscodeProfile(profile_name, profile_data)
+        return profile_data
+
+    def _save_expert_profile_data(self, profile_name, profile_data):
+        loader = self._get_transcode_profile_loader()
+        target_name = str(profile_name or loader.default or "").strip()
+        if not target_name:
+            target_name = "Balanced (Recommended)"
+        normalized = normalize_profile_data(profile_data)
+        loader.profiles[target_name] = TranscodeProfile(target_name, normalized)
+        if not loader.default:
+            loader.default = target_name
+        loader.save()
+        return target_name
+
+    def _persist_settings_and_profile(
+        self,
+        staged_cfg,
+        *,
+        expert_profile_name=None,
+        expert_profile_data=None,
+    ):
+        saved_name = None
+        profile_loader = None
+        profile_snapshot = None
+
+        if expert_profile_data is not None:
+            profile_loader = self._get_transcode_profile_loader()
+            profile_snapshot = {
+                "profiles": {
+                    name: normalize_profile_data(profile.to_dict())
+                    for name, profile in profile_loader.profiles.items()
+                },
+                "default": profile_loader.default,
+            }
+            saved_name = self._save_expert_profile_data(
+                expert_profile_name,
+                expert_profile_data,
+            )
+
+        try:
+            save_config(staged_cfg)
+        except Exception:
+            if profile_loader is not None and profile_snapshot is not None:
+                try:
+                    profile_loader.profiles = {
+                        name: TranscodeProfile(name, profile_data)
+                        for name, profile_data in profile_snapshot["profiles"].items()
+                    }
+                    profile_loader.default = profile_snapshot["default"]
+                    profile_loader.save()
+                except Exception as rollback_exc:
+                    logger = getattr(getattr(self, "controller", None), "log", None)
+                    if callable(logger):
+                        logger(
+                            "Settings rollback failed after config save error: "
+                            f"{rollback_exc}"
+                        )
+            raise
+
+        return saved_name
+
+    def _create_expert_profile(self, profile_name, profile_data=None):
+        loader = self._get_transcode_profile_loader()
+        target_name = str(profile_name or "").strip()
+        if not target_name:
+            raise ProfileValidationError("Enter a profile name.")
+        if target_name in loader.profiles:
+            raise ProfileValidationError(
+                f"Profile already exists: {target_name}"
+            )
+        normalized = normalize_profile_data(profile_data or {})
+        loader.add_profile(target_name, normalized)
+        return target_name
+
+    def _duplicate_expert_profile(
+        self,
+        source_name,
+        new_name,
+        profile_data=None,
+    ):
+        loader = self._get_transcode_profile_loader()
+        source_profile_name = str(source_name or "").strip()
+        target_name = str(new_name or "").strip()
+        if not source_profile_name or source_profile_name not in loader.profiles:
+            raise ProfileValidationError(
+                f"Unknown transcode profile: {source_profile_name}"
+            )
+        if not target_name:
+            raise ProfileValidationError("Enter a profile name.")
+        if target_name in loader.profiles:
+            raise ProfileValidationError(
+                f"Profile already exists: {target_name}"
+            )
+        duplicated_data = normalize_profile_data(
+            profile_data or loader.get_profile(source_profile_name).to_dict()
+        )
+        loader.add_profile(target_name, duplicated_data)
+        return target_name
+
+    def _delete_expert_profile(self, profile_name):
+        loader = self._get_transcode_profile_loader()
+        target_name = str(profile_name or "").strip()
+        if not target_name or target_name not in loader.profiles:
+            raise ProfileValidationError(
+                f"Unknown transcode profile: {target_name}"
+            )
+        if len(loader.profiles) <= 1:
+            raise ProfileValidationError(
+                "At least one transcode profile must remain."
+            )
+        loader.delete_profile(target_name)
+        next_name = loader.default or next(iter(loader.profiles), None)
+        if not next_name:
+            raise ProfileValidationError("No transcode profiles are available.")
+        return next_name
+
+    def _set_default_expert_profile(self, profile_name):
+        loader = self._get_transcode_profile_loader()
+        target_name = str(profile_name or loader.default or "").strip()
+        if not target_name:
+            raise ProfileValidationError("No transcode profiles are available.")
+        if target_name not in loader.profiles:
+            raise ProfileValidationError(
+                f"Unknown transcode profile: {target_name}"
+            )
+        loader.set_default(target_name)
+        return target_name
+
+    def _load_expert_profile_snapshot(self, profile_name=None):
+        loader = self._get_transcode_profile_loader()
+        profile_names = list(loader.profiles)
+        default_name = loader.default or (
+            profile_names[0] if profile_names else None
+        )
+        selected_name = str(profile_name or "").strip() or default_name
+        if not selected_name:
+            raise ProfileValidationError("No transcode profiles are available.")
+        if selected_name not in loader.profiles:
+            raise ProfileValidationError(
+                f"Unknown transcode profile: {selected_name}"
+            )
+        profile = loader.get_profile(selected_name)
+        return {
+            "name": selected_name,
+            "default_name": default_name,
+            "names": profile_names,
+            "data": normalize_profile_data(profile.to_dict()),
+        }
+
+    def _confirm_profile_hdr_metadata_save(self, profile_data, parent):
+        hdr_markers = {"colorprim=", "transfer=", "colormatrix=", "hdr-opt="}
+        extra = (profile_data.get("video") or {}).get("extra_video_params") or ""
+        if not any(marker in extra for marker in hdr_markers):
+            return True
+        return ask_yes_no(
+            "Source-specific HDR settings",
+            "The 'Extra encoder params' field contains HDR color metadata "
+            "(e.g. colorprim=bt2020, transfer=smpte2084) that was seeded "
+            "from this specific file.\n\n"
+            "Saving it as a reusable profile will embed those HDR tags "
+            "into every file encoded with it, including SDR content.\n\n"
+            "Use 'Apply Once' to keep it file-specific, or clear "
+            "'Extra encoder params' before saving a general profile.\n\n"
+            "Save with HDR metadata anyway?",
+            icon="warning",
+            parent=parent,
+        )
+
+    def _confirm_discard_dirty_expert_changes(
+        self,
+        profile_data,
+        expert_vars,
+        prompt,
+        parent,
+    ):
+        if not expert_vars:
+            return True
+        if not self._expert_profile_form_is_dirty(profile_data, expert_vars):
+            return True
+        return ask_yes_no(
+            "Discard Expert Changes",
+            prompt,
+            parent=parent,
+        )
+
+    def _populate_expert_profile_vars(self, expert_vars, profile_data):
+        for section_name, schema in PROFILE_SCHEMA.items():
+            section_vars = expert_vars.get(section_name, {})
+            values = (profile_data or {}).get(section_name, {})
+            for key in schema:
+                var = section_vars.get(key)
+                if var is None:
+                    continue
+                self._expert_var_set(var, values.get(key))
+
+    def _expert_profile_form_is_dirty(self, profile_data, expert_vars):
+        expected = normalize_profile_data(profile_data or {})
+        for section_name, schema in PROFILE_SCHEMA.items():
+            section_vars = expert_vars.get(section_name, {})
+            values = expected.get(section_name, {})
+            for key in schema:
+                var = section_vars.get(key)
+                if var is None:
+                    continue
+                if not self._expert_var_matches(var, values.get(key)):
+                    return True
+        return False
+
+    def _summarize_expert_profile(self, profile_data):
+        return summarize_profile(normalize_profile_data(profile_data or {}))
 
     def _open_transcode_queue_builder(
         self,
@@ -5281,7 +6319,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 if selected_profile not in profile_names:
                     selected_profile = default_profile_name
                 try:
-                    profile_summary = describe_profile(
+                    profile_summary = summarize_profile(
                         profile_loader.get_profile(selected_profile)
                     )
                 except Exception:
@@ -5446,9 +6484,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 jobs=jobs,
                 log_dir=log_dir,
                 ffmpeg_exe=ffmpeg_path,
-                ffprobe_exe=resolve_ffprobe(
-                    os.path.normpath(self.cfg.get("ffprobe_path", ""))
-                )[0],
+                ffprobe_exe=self._resolve_ffprobe_tool().path,
                 handbrake_exe=handbrake_path,
                 ffmpeg_source_mode=ffmpeg_source_mode,
                 temp_root=os.path.normpath(
@@ -5779,20 +6815,30 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
 
     def _refresh_drives(self):
         def _load():
-            makemkvcon = os.path.normpath(
+            configured = os.path.normpath(
                 self.cfg.get("makemkvcon_path", "")
             )
-            drives = get_available_drives(makemkvcon)
+            resolved = resolve_makemkvcon(
+                configured,
+                allow_path_lookup=self._allow_path_tool_resolution(),
+            )
+            drives = get_available_drives(resolved.path or "")
             self.after(0, lambda: self._update_drive_menu(drives))
         threading.Thread(target=_load, daemon=True).start()
 
-    def _update_drive_menu(self, drives):
-        self.drive_options = drives
-        labels = [f"Drive {idx}: {name}" for idx, name in drives]
+    def _update_drive_menu(self, drives: list[MakeMKVDrive]):
+        normalized_drives = list(drives or [])
+        if not normalized_drives:
+            normalized_drives = [make_default_drive()]
+        self.drive_options = normalized_drives
+        labels = [
+            format_makemkv_drive_label(drive)
+            for drive in normalized_drives
+        ]
         self.drive_menu["values"] = labels
         current_idx = self.cfg.get("opt_drive_index", 0)
-        for i, (idx, name) in enumerate(drives):
-            if idx == current_idx:
+        for i, drive in enumerate(normalized_drives):
+            if drive.index == current_idx:
                 self.drive_var.set(labels[i])
                 break
         else:
@@ -5801,12 +6847,19 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
 
     def _on_drive_select(self, *args):
         selected = self.drive_var.get()
-        for idx, name in self.drive_options:
-            if f"Drive {idx}: {name}" == selected:
-                self.cfg["opt_drive_index"] = idx
-                self.engine.cfg["opt_drive_index"] = idx
+        for drive in self.drive_options:
+            if format_makemkv_drive_label(drive) == selected:
+                self.cfg["opt_drive_index"] = drive.index
+                self.engine.cfg["opt_drive_index"] = drive.index
                 save_config(self.cfg)
-                self.controller.log(f"Drive selected: {name}")
+                drive_text = drive.drive_name or f"Drive {drive.index}"
+                if drive.device_path:
+                    drive_text += f" [{drive.device_path}]"
+                if drive.disc_name:
+                    drive_text += f" | disc: {drive.disc_name}"
+                self.controller.log(
+                    f"Drive selected: {drive_text} ({drive.usability_state})"
+                )
                 break
 
     def copy_log_to_clipboard(self):
@@ -5838,7 +6891,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         pack_kwargs = getattr(
             self,
             "_input_bar_pack_kwargs",
-            {"fill": "x", "padx": 20, "pady": 4},
+            {"fill": "x", "padx": 36, "pady": (10, 0)},
         )
         before = getattr(self, "_session_controls_frame", None)
         if before is not None:
@@ -5867,164 +6920,216 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         self._input_result = ""
         self._input_event.set()
 
+    def _ask_input_modal(self, label, prompt, default_value=""):
+        """Show a modal text prompt and return text, empty string, or None."""
+        result = [None]
+        colors = self._theme
+        win = tk.Toplevel(self)
+        win.title(label or "Input")
+        win.configure(bg=colors["surface"])
+        win.grab_set()
+        win.lift()
+        win.focus_force()
+        win.resizable(False, False)
+
+        tk.Label(
+            win,
+            text=prompt,
+            bg=colors["surface"],
+            fg=colors["text"],
+            justify="left",
+            wraplength=520,
+            font=("Segoe UI", 10),
+        ).pack(padx=18, pady=(18, 10), anchor="w")
+
+        value_var = tk.StringVar(value=default_value or "")
+        entry = tk.Entry(
+            win,
+            textvariable=value_var,
+            bg=colors["surface_deep"],
+            fg=colors["text"],
+            insertbackground=colors["text"],
+            relief="flat",
+            font=("Segoe UI", 11),
+            width=44,
+        )
+        entry.pack(fill="x", padx=18, pady=(0, 14))
+
+        button_row = tk.Frame(win, bg=colors["surface"])
+        button_row.pack(padx=18, pady=(0, 18))
+        finished = {"done": False}
+
+        def finish(value):
+            if finished["done"]:
+                return
+            finished["done"] = True
+            result[0] = value
+            win.destroy()
+
+        def submit(*_args):
+            finish(value_var.get().strip())
+
+        def skip(*_args):
+            finish("")
+
+        win.protocol("WM_DELETE_WINDOW", skip)
+        win.bind("<Return>", submit)
+        win.bind("<Escape>", skip)
+
+        tk.Button(
+            button_row,
+            text="OK",
+            bg=colors["green"],
+            fg=colors["text"],
+            font=("Segoe UI", 10, "bold"),
+            command=submit,
+            relief="flat",
+            width=12,
+        ).pack(side="left", padx=4)
+        tk.Button(
+            button_row,
+            text="Skip",
+            bg=colors["toolbar_button"],
+            fg=colors["toolbar_button_text"],
+            font=("Segoe UI", 10),
+            command=skip,
+            relief="flat",
+            width=12,
+        ).pack(side="left", padx=4)
+
+        timeout_seconds = self._get_user_prompt_timeout_seconds()
+        if timeout_seconds is not None:
+            win.after(int(timeout_seconds * 1000), lambda: finish(None))
+
+        def _poll_abort():
+            if finished["done"]:
+                return
+            if self.engine.abort_event.is_set():
+                finish(None)
+                return
+            try:
+                win.after(100, _poll_abort)
+            except tk.TclError:
+                return
+
+        win.after(100, _poll_abort)
+        if default_value:
+            entry.selection_range(0, "end")
+        entry.focus_set()
+        win.wait_window()
+        return result[0]
+
     def ask_input(self, label, prompt,
                   default_value=""):
-        """Show non-modal input bar and wait from caller thread for user input.
+        """Show a modal input popup and wait for the entered value."""
+        lock = getattr(self, "_input_lock", None)
+        if lock is None:
+            lock = threading.Lock()
 
-        Serialised by _input_lock — only one prompt can be active at a time,
-        preventing concurrent calls from clobbering _input_result/_input_event.
-        """
-        with self._input_lock:
-            result = [None]
-            done   = threading.Event()
-            timeout_seconds = self._get_user_prompt_timeout_seconds()
-            start = time.time()
-
-            def _show():
-                self._input_event.clear()
-                self._input_result = None
-                self._show_input_bar(
-                    f"{label}: {prompt}", default_value
-                )
-
-                def _wait():
-                    while not self._input_event.wait(timeout=0.1):
-                        if self.engine.abort_event.is_set():
-                            self.after(0, self._hide_input_bar)
-                            result[0] = None
-                            done.set()
-                            return
-                    val = self._input_result
-                    self.after(0, self._hide_input_bar)
-                    if val:
-                        self.append_log(
-                            f"[{datetime.now().strftime('%H:%M:%S')}] "
-                            f"{label}: {val}"
-                        )
-                    elif val == "":
-                        self.append_log(
-                            f"[{datetime.now().strftime('%H:%M:%S')}] "
-                            f"{label}: (skipped)"
-                        )
-                    result[0] = val
-                    done.set()
-
-                threading.Thread(target=_wait, daemon=True).start()
-
-            self.after(0, _show)
-            # Caller may be a worker thread; this loop must not touch tkinter.
-            while not done.wait(timeout=0.1):
-                if self.engine.abort_event.is_set():
-                    return None
-                if (timeout_seconds is not None and
-                    time.time() - start >= timeout_seconds):
-                    def _timeout_cleanup():
-                        self._input_result = None
-                        self._hide_input_bar()
-                        self._input_event.set()
-
-                    self.after(0, _timeout_cleanup)
-                    done.wait(timeout=1.0)
-                    return None
-            return result[0]
-
-    def ask_yesno(self, prompt):
-        """Render an inline Yes/No prompt in the log pane and wait for answer."""
-        if threading.current_thread() is threading.main_thread():
-            return bool(
-                messagebox.askyesno(
-                    "Confirm",
+        with lock:
+            value = self._run_modal_dialog(
+                lambda: self._ask_input_modal(
+                    label,
                     prompt,
-                    parent=self,
+                    default_value=default_value,
                 )
             )
+            if value:
+                self.append_log(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] "
+                    f"{label}: {value}"
+                )
+            elif value == "":
+                self.append_log(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] "
+                    f"{label}: (skipped)"
+                )
+            return value
 
-        result = [None]
-        done   = threading.Event()
-        finish_holder = {"fn": None}
-        timeout_seconds = self._get_user_prompt_timeout_seconds()
-        start = time.time()
+    def _ask_yesno_modal(self, prompt):
+        """Show a modal Yes/No popup and return the chosen boolean."""
+        result = [False]
         colors = self._theme
+        win = tk.Toplevel(self)
+        win.title("Confirm")
+        win.configure(bg=colors["surface"])
+        win.grab_set()
+        win.lift()
+        win.focus_force()
+        win.resizable(False, False)
 
-        def _show():
-            ts = datetime.now().strftime("%H:%M:%S")
-            self._append_log_text_main(f"[{ts}] {prompt}", "prompt")
+        tk.Label(
+            win,
+            text=prompt,
+            bg=colors["surface"],
+            fg=colors["text"],
+            justify="left",
+            wraplength=520,
+            font=("Segoe UI", 10),
+        ).pack(padx=18, pady=(18, 10), anchor="w")
 
-            btn_frame = tk.Frame(self.log_text, bg=colors["surface"])
+        button_row = tk.Frame(win, bg=colors["surface"])
+        button_row.pack(padx=18, pady=(0, 18))
+        finished = {"done": False}
 
-            def finish(answer, answer_text=None):
-                if done.is_set():
-                    return
-                result[0] = answer
-                try:
-                    btn_frame.destroy()
-                except Exception:
-                    pass
-                if answer_text:
-                    self._append_log_text_main(
-                        f"[{datetime.now().strftime('%H:%M:%S')}] {answer_text}",
-                        "answer",
-                    )
-                done.set()
+        def finish(answer):
+            if finished["done"]:
+                return
+            finished["done"] = True
+            result[0] = bool(answer)
+            win.destroy()
 
-            finish_holder["fn"] = finish
+        win.protocol("WM_DELETE_WINDOW", lambda: finish(False))
+        win.bind("<Escape>", lambda _e: finish(False))
+        win.bind("<Return>", lambda _e: finish(True))
 
-            def yes():
-                if done.is_set() or self.engine.abort_event.is_set():
-                    return
-                finish(True, "→ Yes")
+        tk.Button(
+            button_row,
+            text="Yes",
+            bg=colors["green"],
+            fg=colors["text"],
+            font=("Segoe UI", 10, "bold"),
+            command=lambda: finish(True),
+            relief="flat",
+            width=12,
+        ).pack(side="left", padx=4)
+        tk.Button(
+            button_row,
+            text="No",
+            bg=colors["abort"],
+            fg=colors["text"],
+            font=("Segoe UI", 10, "bold"),
+            command=lambda: finish(False),
+            relief="flat",
+            width=12,
+        ).pack(side="left", padx=4)
 
-            def no():
-                if done.is_set() or self.engine.abort_event.is_set():
-                    return
-                finish(False, "→ No")
+        timeout_seconds = self._get_user_prompt_timeout_seconds()
+        if timeout_seconds is not None:
+            win.after(int(timeout_seconds * 1000), lambda: finish(False))
 
-            tk.Button(
-                btn_frame, text="  Yes  ",
-                bg=colors["green"], fg=colors["text"],
-                font=("Segoe UI", 10, "bold"),
-                command=yes, relief="flat"
-            ).pack(side="left", padx=6, pady=4)
-            tk.Button(
-                btn_frame, text="  No  ",
-                bg=colors["abort"], fg=colors["text"],
-                font=("Segoe UI", 10, "bold"),
-                command=no, relief="flat"
-            ).pack(side="left", padx=6, pady=4)
-
-            # Re-enable widget for embedded button insertion
-            # (_append_log_text_main leaves it disabled).
-            self.log_text.config(state="normal")
-            self.log_text.window_create("end", window=btn_frame)
-            self.log_text.insert("end", "\n")
-            self.log_text.see("end")
-            self.log_text.config(state="disabled")
-
-            # Abort watcher — unblocks immediately if abort fires
-            def _abort_watch():
-                while not done.is_set():
-                    if self.engine.abort_event.is_set():
-                        self.after(0, lambda: finish(False))
-                        return
-                    time.sleep(0.1)
-
-            threading.Thread(
-                target=_abort_watch, daemon=True
-            ).start()
-
-        self.after(0, _show)
-        # Wait by event polling so worker threads can call this safely
-        # while tkinter widgets are still managed on the main thread.
-        while not done.wait(timeout=0.1):
+        def _poll_abort():
+            if finished["done"]:
+                return
             if self.engine.abort_event.is_set():
-                return False
-            if (timeout_seconds is not None and
-                    time.time() - start >= timeout_seconds):
-                if finish_holder["fn"] is not None:
-                    self.after(0, lambda: finish_holder["fn"](False))
-                    done.wait(timeout=1.0)
-                return False
-        return result[0] if result[0] is not None else False
+                finish(False)
+                return
+            try:
+                win.after(100, _poll_abort)
+            except tk.TclError:
+                return
+
+        win.after(100, _poll_abort)
+        win.wait_window()
+        return result[0]
+
+    def ask_yesno(self, prompt):
+        """Show a modal Yes/No popup and wait for the answer."""
+        return bool(
+            self._run_modal_dialog(
+                lambda: self._ask_yesno_modal(prompt)
+            )
+        )
 
     # ------------------------------------------------------------------
     # Session setup dialogs (worker-thread-safe)
@@ -6034,8 +7139,10 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         self,
         default_title: str = "",
         default_year: str = "",
+        default_edition: str = "",
         default_metadata_provider: str = "TMDB",
         default_metadata_id: str = "",
+        default_replace_existing: bool = False,
     ):
         """Show the movie rip setup dialog and return a MovieSessionSetup or None.
 
@@ -6052,8 +7159,10 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 self,
                 default_title=default_title,
                 default_year=default_year,
+                default_edition=default_edition,
                 default_metadata_provider=default_metadata_provider,
                 default_metadata_id=default_metadata_id,
+                default_replace_existing=default_replace_existing,
             )
             done.set()
 
@@ -6066,9 +7175,15 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
     def ask_tv_setup(
         self,
         default_title: str = "",
+        default_year: str = "",
         default_season: str = "1",
+        default_starting_disc: str = "1",
         default_metadata_provider: str = "TMDB",
         default_metadata_id: str = "",
+        default_episode_mapping: str = "auto",
+        default_multi_episode: str = "auto",
+        default_specials: str = "ask",
+        default_replace_existing: bool = False,
     ):
         """Show the TV rip setup dialog and return a TVSessionSetup or None.
 
@@ -6084,9 +7199,46 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             result[0] = build_tv_setup_dialog(
                 self,
                 default_title=default_title,
+                default_year=default_year,
                 default_season=default_season,
+                default_starting_disc=default_starting_disc,
                 default_metadata_provider=default_metadata_provider,
                 default_metadata_id=default_metadata_id,
+                default_episode_mapping=default_episode_mapping,
+                default_multi_episode=default_multi_episode,
+                default_specials=default_specials,
+                default_replace_existing=default_replace_existing,
+            )
+            done.set()
+
+        self.after(0, _show)
+        while not done.wait(timeout=0.1):
+            if self.engine.abort_event.is_set():
+                return None
+        return result[0]
+
+    def ask_dump_setup(
+        self,
+        default_multi_disc: bool = False,
+        default_disc_name: str = "",
+        default_disc_count: str = "1",
+        default_custom_disc_names: str = "",
+        default_batch_title: str = "",
+    ):
+        """Show the dump session setup dialog and return a DumpSessionSetup or None."""
+        from gui.session_setup_dialog import build_dump_setup_dialog
+
+        result = [None]
+        done = threading.Event()
+
+        def _show():
+            result[0] = build_dump_setup_dialog(
+                self,
+                default_multi_disc=default_multi_disc,
+                default_disc_name=default_disc_name,
+                default_disc_count=default_disc_count,
+                default_custom_disc_names=default_custom_disc_names,
+                default_batch_title=default_batch_title,
             )
             done.set()
 
@@ -6115,6 +7267,23 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         while not done.wait(timeout=0.1):
             if self.engine.abort_event.is_set():
                 return None
+        return result[0]
+
+    def show_same_disc_prompt_step(self, context_summary=""):
+        """Ask how to handle a disc that matches the previous session."""
+        from gui.setup_wizard import show_same_disc_prompt
+
+        result = ["cancel"]
+        done = threading.Event()
+
+        def _show():
+            result[0] = show_same_disc_prompt(self, context_summary)
+            done.set()
+
+        self.after(0, _show)
+        while not done.wait(timeout=0.1):
+            if self.engine.abort_event.is_set():
+                return "cancel"
         return result[0]
 
     def show_content_mapping_step(self, classified):
@@ -6151,7 +7320,18 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 return None
         return result[0]
 
-    def show_output_plan_step(self, base_folder, main_label, extras_map):
+    def show_output_plan_step(
+        self,
+        base_folder,
+        main_label,
+        extras_map,
+        detail_lines=None,
+        header_text="Step 5: Output Plan",
+        subtitle_text=f"This is exactly what {APP_DISPLAY_NAME} will create. No guessing, no surprises.",
+        confirm_text="Start Rip",
+        *,
+        suggested_folder=None,
+    ):
         """Step 5: Output plan preview. Returns True to confirm, False to cancel."""
         from gui.setup_wizard import show_output_plan
 
@@ -6159,7 +7339,17 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         done = threading.Event()
 
         def _show():
-            result[0] = show_output_plan(self, base_folder, main_label, extras_map)
+            result[0] = show_output_plan(
+                self,
+                base_folder,
+                main_label,
+                extras_map,
+                detail_lines=detail_lines,
+                header_text=header_text,
+                subtitle_text=subtitle_text,
+                confirm_text=confirm_text,
+                suggested_base_folder=suggested_folder,
+            )
             done.set()
 
         self.after(0, _show)
@@ -6272,6 +7462,31 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
 
         return self._run_on_main(_pick)
 
+    def _run_modal_dialog(self, show_dialog):
+        """Run a blocking Tk dialog on the main loop and return its result."""
+        if threading.current_thread() is threading.main_thread():
+            return show_dialog()
+
+        result = [None]
+        error = [None]
+        done = threading.Event()
+
+        def _show():
+            try:
+                result[0] = show_dialog()
+            except Exception as exc:  # pragma: no cover - defensive handoff
+                error[0] = exc
+            finally:
+                done.set()
+
+        self.after(0, _show)
+        while not done.wait(timeout=0.1):
+            pass
+
+        if error[0] is not None:
+            raise error[0]
+        return result[0]
+
     def ask_duplicate_resolution(self, prompt,
                                  retry_text="Swap and Retry",
                                  bypass_text="Not a Dup",
@@ -6280,115 +7495,14 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         Three-way decision prompt for duplicate-disc handling.
         Returns one of: 'retry', 'bypass', 'stop'.
         """
-        if threading.current_thread() is threading.main_thread():
-            return self._ask_duplicate_resolution_modal(
+        return self._run_modal_dialog(
+            lambda: self._ask_duplicate_resolution_modal(
                 prompt,
                 retry_text=retry_text,
                 bypass_text=bypass_text,
                 stop_text=stop_text,
             )
-
-        result = ["stop"]
-        done   = threading.Event()
-        finish_holder = {"fn": None}
-        timeout_seconds = self._get_user_prompt_timeout_seconds()
-        start = time.time()
-        colors = self._theme
-
-        def _show():
-            self.log_text.config(state="normal")
-            ts = datetime.now().strftime("%H:%M:%S")
-            self.log_text.insert(
-                "end", f"[{ts}] {prompt}\n", "prompt"
-            )
-
-            btn_frame = tk.Frame(self.log_text, bg=colors["surface"])
-
-            def finish(value, answer_text=None):
-                if done.is_set():
-                    return
-                result[0] = value
-                try:
-                    btn_frame.destroy()
-                except Exception:
-                    pass
-                if answer_text:
-                    self.log_text.config(state="normal")
-                    self.log_text.insert(
-                        "end",
-                        f"[{datetime.now().strftime('%H:%M:%S')}] "
-                        f"{answer_text}\n",
-                        "answer"
-                    )
-                    self.log_text.see("end")
-                    self.log_text.config(state="disabled")
-                done.set()
-
-            finish_holder["fn"] = finish
-
-            def choose_retry():
-                if done.is_set() or self.engine.abort_event.is_set():
-                    return
-                finish("retry", f"→ {retry_text}")
-
-            def choose_bypass():
-                if done.is_set() or self.engine.abort_event.is_set():
-                    return
-                finish("bypass", f"→ {bypass_text}")
-
-            def choose_stop():
-                if done.is_set() or self.engine.abort_event.is_set():
-                    return
-                finish("stop", f"→ {stop_text}")
-
-            tk.Button(
-                btn_frame, text=f"  {retry_text}  ",
-                bg=colors["green"], fg=colors["text"],
-                font=("Segoe UI", 10, "bold"),
-                command=choose_retry, relief="flat"
-            ).pack(side="left", padx=4, pady=4)
-
-            tk.Button(
-                btn_frame, text=f"  {bypass_text}  ",
-                bg=colors["blue"], fg=colors["text"],
-                font=("Segoe UI", 10, "bold"),
-                command=choose_bypass, relief="flat"
-            ).pack(side="left", padx=4, pady=4)
-
-            tk.Button(
-                btn_frame, text=f"  {stop_text}  ",
-                bg=colors["abort"], fg=colors["text"],
-                font=("Segoe UI", 10, "bold"),
-                command=choose_stop, relief="flat"
-            ).pack(side="left", padx=4, pady=4)
-
-            self.log_text.window_create("end", window=btn_frame)
-            self.log_text.insert("end", "\n")
-            self.log_text.see("end")
-            self.log_text.config(state="disabled")
-
-            def _abort_watch():
-                while not done.is_set():
-                    if self.engine.abort_event.is_set():
-                        self.after(0, lambda: finish("stop"))
-                        return
-                    time.sleep(0.1)
-
-            threading.Thread(
-                target=_abort_watch, daemon=True
-            ).start()
-
-        self.after(0, _show)
-        while not done.wait(timeout=0.1):
-            if self.engine.abort_event.is_set():
-                return "stop"
-            if (timeout_seconds is not None and
-                    time.time() - start >= timeout_seconds):
-                if finish_holder["fn"] is not None:
-                    self.after(0, lambda: finish_holder["fn"]("stop"))
-                    done.wait(timeout=1.0)
-                return "stop"
-        return result[0]
+        )
 
     def _get_user_prompt_timeout_seconds(self):
         if not self.cfg.get("opt_user_prompt_timeout_enabled", False):
@@ -6429,11 +7543,18 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         btn_row = tk.Frame(win, bg=colors["surface"])
         btn_row.pack(padx=18, pady=(0, 18))
 
+        finished = {"done": False}
+
         def finish(value):
+            if finished["done"]:
+                return
+            finished["done"] = True
             result[0] = value
             win.destroy()
 
         win.protocol("WM_DELETE_WINDOW", lambda: finish("stop"))
+        win.bind("<Escape>", lambda _e: finish("stop"))
+        win.bind("<Return>", lambda _e: finish("retry"))
 
         tk.Button(
             btn_row,
@@ -6466,6 +7587,22 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             width=12,
         ).pack(side="left", padx=4)
 
+        timeout_seconds = self._get_user_prompt_timeout_seconds()
+        if timeout_seconds is not None:
+            win.after(int(timeout_seconds * 1000), lambda: finish("stop"))
+
+        def _poll_abort():
+            if finished["done"]:
+                return
+            if self.engine.abort_event.is_set():
+                finish("stop")
+                return
+            try:
+                win.after(100, _poll_abort)
+            except tk.TclError:
+                return
+
+        win.after(100, _poll_abort)
         win.wait_window()
         return result[0]
 
@@ -6499,6 +7636,12 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             lambda: messagebox.showerror(title, msg, parent=self)
         )
 
+    def show_error_async(self, title, msg):
+        def _show():
+            messagebox.showerror(title, msg, parent=self)
+
+        self.after(0, _show)
+
     def _ffmpeg_version_ok(self, ffmpeg_exe: str) -> bool:
         """Return True if *ffmpeg_exe* meets the minimum version requirement.
 
@@ -6519,11 +7662,11 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         year   = info.get("build_year")
         year_s = f" (built {year})" if year else ""
         msg = (
-            f"The configured FFmpeg is too old to run JellyRip transcodes.\n\n"
+            f"The configured FFmpeg is too old to run {APP_DISPLAY_NAME} transcodes.\n\n"
             f"Detected version: {label}{year_s}\n"
             f"Required: FFmpeg 4.0+ (released April 2018)\n\n"
             f"The '-disposition:s:0' flag and modern GPU-encoder options used\n"
-            f"by JellyRip are not available in this build.\n\n"
+            f"by {APP_DISPLAY_NAME} are not available in this build.\n\n"
             f"Download a current FFmpeg from:\n"
             f"  https://ffmpeg.org/download.html\n\n"
             f"Then update Settings \u2192 Paths \u2192 FFmpeg path.\n\n"
@@ -6539,7 +7682,13 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
 
         try:
             if sys.platform == "win32":
-                os.startfile(normalized)
+                target = normalized
+                if not os.path.isdir(normalized):
+                    target = os.path.dirname(normalized) or normalized
+                subprocess.Popen(
+                    [get_explorer_executable(), target],
+                    shell=False,
+                )
             elif sys.platform == "darwin":
                 subprocess.Popen(["open", normalized])
             else:
@@ -6559,7 +7708,10 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 if os.path.isdir(normalized):
                     self._open_path_in_explorer(normalized)
                     return
-                subprocess.Popen(["explorer", f"/select,{target}"])
+                subprocess.Popen(
+                    [get_explorer_executable(), f"/select,{target}"],
+                    shell=False,
+                )
             elif sys.platform == "darwin":
                 subprocess.Popen(["open", "-R", normalized])
             else:
@@ -6578,7 +7730,11 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             return self.ask_directory("Browse", f"Choose {label.lower()}", initialdir=current_dir)
 
         if key == "log_file":
-            default_name = os.path.basename(normalized) if normalized else "jellyrip.log"
+            default_name = (
+                os.path.basename(normalized)
+                if normalized
+                else f"{APP_EXE_BASENAME.lower()}.log"
+            )
             return self.ask_save_file(
                 "Log File",
                 f"Choose {label.lower()}",
@@ -7434,646 +8590,14 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             if self.engine.abort_event.is_set():
                 return
 
-    def _open_ui_editor_safe(self):
-        try:
-            self.open_ui_editor()
-        except Exception as e:
-            self._ui_editor_window = None
-            import traceback
-            tb = traceback.format_exc()
-            try:
-                self.controller.log(f"Fatal UI editor callback error: {e}\n{tb}")
-            except Exception:
-                pass
-            try:
-                self.show_error("UI Editor Error", f"Could not open UI editor:\n{e}")
-            except Exception:
-                messagebox.showerror(
-                    "UI Editor Error",
-                    f"Could not open UI editor:\n{e}",
-                    parent=self,
-                )
-
-    def open_ui_editor(self):
-        if (
-            self._ui_editor_window is not None
-            and self._ui_editor_window.winfo_exists()
-        ):
-            try:
-                self._ui_editor_window.lift()
-                self._ui_editor_window.focus_force()
-            except Exception:
-                pass
-            return
-
-        colors = self._theme
-        win = tk.Toplevel(self)
-        self._ui_editor_window = win
-        win.title("Raw Jelly Ripper UI Editor")
-        win.configure(bg=colors["window_bg"])
-        win.geometry("1220x860")
-        win.minsize(1080, 760)
-
-        shell = tk.Frame(win, bg=colors["window_bg"])
-        shell.pack(fill="both", expand=True, padx=16, pady=16)
-
-        intro = tk.Frame(shell, bg=colors["window_bg"])
-        intro.pack(fill="x", pady=(0, 12))
-        tk.Label(
-            intro,
-            text="Bundled UI editor",
-            bg=colors["window_bg"],
-            fg=colors["title"],
-            font=("Segoe UI", 17, "bold"),
-            anchor="w",
-        ).pack(fill="x")
-        tk.Label(
-            intro,
-            text=(
-                "Edit the shared app palette, preview it here, and save overrides to config. "
-                "Saved changes apply the next time Raw Jelly Ripper starts."
-            ),
-            bg=colors["window_bg"],
-            fg=colors["muted"],
-            font=("Segoe UI", 10),
-            wraplength=1120,
-            justify="left",
-            anchor="w",
-        ).pack(fill="x", pady=(4, 0))
-
-        body = tk.Frame(shell, bg=colors["window_bg"])
-        body.pack(fill="both", expand=True)
-        body.grid_columnconfigure(0, weight=5)
-        body.grid_columnconfigure(1, weight=4)
-        body.grid_rowconfigure(0, weight=1)
-
-        controls_card = tk.Frame(
-            body,
-            bg=colors["surface"],
-            highlightbackground=colors["panel_border"],
-            highlightthickness=1,
-            bd=0,
-        )
-        controls_card.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-
-        preview_card = tk.Frame(
-            body,
-            bg=colors["surface"],
-            highlightbackground=colors["panel_border"],
-            highlightthickness=1,
-            bd=0,
-        )
-        preview_card.grid(row=0, column=1, sticky="nsew")
-
-        status_var = tk.StringVar(
-            value="Preview updates as you type. Save writes the theme overrides to config."
-        )
-
-        editable_keys = {
-            key
-            for _group_name, fields in THEME_EDITOR_GROUPS
-            for key, _label in fields
-        }
-        existing_overrides = sanitize_theme_overrides(self.cfg.get("opt_theme_overrides"))
-        theme_vars: dict[str, tk.StringVar] = {}
-        swatches: dict[str, tk.Label] = {}
-
-        def collect_theme_state():
-            cleaned: dict[str, str] = {}
-            invalid: list[str] = []
-            for key, var in theme_vars.items():
-                normalized = normalize_theme_color(var.get())
-                if normalized is None:
-                    invalid.append(key)
-                else:
-                    cleaned[key] = normalized
-            return cleaned, invalid
-
-        canvas = tk.Canvas(
-            controls_card,
-            bg=colors["surface"],
-            highlightthickness=0,
-            bd=0,
-        )
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar = ttk.Scrollbar(controls_card, orient="vertical", command=canvas.yview)
-        scrollbar.pack(side="right", fill="y")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        scroll_frame = tk.Frame(canvas, bg=colors["surface"])
-        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
-        scroll_frame.bind(
-            "<Configure>",
-            lambda _event: canvas.configure(scrollregion=canvas.bbox("all")),
-        )
-
-        tk.Label(
-            scroll_frame,
-            text="Theme Keys",
-            bg=colors["surface"],
-            fg=colors["text"],
-            font=("Segoe UI", 12, "bold"),
-            anchor="w",
-        ).pack(fill="x", padx=16, pady=(16, 4))
-
-        for group_name, fields in THEME_EDITOR_GROUPS:
-            tk.Label(
-                scroll_frame,
-                text=group_name,
-                bg=colors["surface"],
-                fg=colors["title"],
-                font=("Segoe UI", 11, "bold"),
-                anchor="w",
-            ).pack(fill="x", padx=16, pady=(12, 2))
-            tk.Frame(
-                scroll_frame,
-                bg=colors["panel_border"],
-                height=1,
-            ).pack(fill="x", padx=16, pady=(0, 6))
-            for key, label in fields:
-                row = tk.Frame(scroll_frame, bg=colors["surface"])
-                row.pack(fill="x", padx=16, pady=3)
-                tk.Label(
-                    row,
-                    text=label,
-                    bg=colors["surface"],
-                    fg=colors["text"],
-                    font=("Segoe UI", 10),
-                    width=24,
-                    anchor="w",
-                ).pack(side="left")
-                var = tk.StringVar(value=existing_overrides.get(key, APP_THEME[key]))
-                theme_vars[key] = var
-                tk.Entry(
-                    row,
-                    textvariable=var,
-                    bg=colors["surface_deep"],
-                    fg=colors["text"],
-                    insertbackground=colors["text"],
-                    font=("Consolas", 10),
-                    relief="flat",
-                    bd=3,
-                    width=12,
-                ).pack(side="left", padx=(0, 8))
-                swatch = tk.Label(
-                    row,
-                    text="      ",
-                    bg=APP_THEME[key],
-                    fg=APP_THEME[key],
-                    relief="flat",
-                    bd=0,
-                    highlightbackground=colors["panel_border"],
-                    highlightthickness=1,
-                )
-                swatch.pack(side="left", padx=(0, 8))
-                swatches[key] = swatch
-
-                def _pick_color(target_var=var):
-                    _rgb, chosen = colorchooser.askcolor(
-                        color=target_var.get().strip() or None,
-                        parent=win,
-                        title="Choose color",
-                    )
-                    if chosen:
-                        target_var.set(chosen)
-
-                tk.Button(
-                    row,
-                    text="Pick",
-                    bg=colors["toolbar_button"],
-                    fg=colors["toolbar_button_text"],
-                    font=("Segoe UI", 9),
-                    relief="flat",
-                    bd=0,
-                    padx=8,
-                    pady=2,
-                    cursor="hand2",
-                    command=_pick_color,
-                ).pack(side="left")
-
-        controls_footer = tk.Frame(scroll_frame, bg=colors["surface"])
-        controls_footer.pack(fill="x", padx=16, pady=(16, 16))
-        tk.Label(
-            controls_footer,
-            textvariable=status_var,
-            bg=colors["surface"],
-            fg=colors["muted"],
-            font=("Segoe UI", 9),
-            wraplength=600,
-            justify="left",
-            anchor="w",
-        ).pack(fill="x", pady=(0, 12))
-
-        preview_root = tk.Frame(preview_card, bg=APP_THEME["window_bg"])
-        preview_root.pack(fill="both", expand=True, padx=18, pady=18)
-
-        preview_header = tk.Frame(
-            preview_root,
-            bg=APP_THEME["header_bg"],
-            highlightbackground=APP_THEME["header_border"],
-            highlightthickness=1,
-            bd=0,
-        )
-        preview_header.pack(fill="x")
-        preview_title = tk.Label(
-            preview_header,
-            text="Raw Jelly Ripper",
-            bg=APP_THEME["header_bg"],
-            fg=APP_THEME["title"],
-            font=("Segoe UI", 20, "bold"),
-            pady=18,
-        )
-        preview_title.pack()
-
-        preview_toolbar = tk.Frame(
-            preview_root,
-            bg=APP_THEME["surface"],
-            highlightbackground=APP_THEME["panel_border"],
-            highlightthickness=1,
-            bd=0,
-        )
-        preview_toolbar.pack(fill="x", pady=(12, 12))
-        preview_toolbar_buttons = []
-        for text in ("Assistant", "Settings", "UI Editor"):
-            btn = tk.Label(
-                preview_toolbar,
-                text=text,
-                bg=APP_THEME["toolbar_button"],
-                fg=APP_THEME["toolbar_button_text"],
-                font=("Segoe UI", 10, "bold"),
-                padx=12,
-                pady=8,
-            )
-            btn.pack(side="left", padx=8, pady=10)
-            preview_toolbar_buttons.append(btn)
-
-        preview_tiles = tk.Frame(preview_root, bg=APP_THEME["window_bg"])
-        preview_tiles.pack(fill="x")
-        preview_tile_widgets = []
-        for text, color_key in (
-            ("Rip TV Show Disc", "green"),
-            ("Rip Movie Disc", "teal"),
-            ("Dump All Titles", "blue"),
-            ("Prep for FFmpeg or HandBrake", "orange"),
-        ):
-            tile = tk.Frame(preview_tiles, bg=APP_THEME[color_key], height=68, bd=0)
-            tile.pack(fill="x", pady=6)
-            tile.pack_propagate(False)
-            label = tk.Label(
-                tile,
-                text=text,
-                bg=APP_THEME[color_key],
-                fg=APP_THEME["text"],
-                font=("Segoe UI", 13, "bold"),
-            )
-            label.pack(expand=True)
-            preview_tile_widgets.append((tile, label, color_key))
-
-        preview_status_row = tk.Frame(preview_root, bg=APP_THEME["window_bg"])
-        preview_status_row.pack(fill="x", pady=(12, 12))
-        preview_brand = tk.Frame(
-            preview_status_row,
-            bg=APP_THEME["header_bg"],
-            highlightbackground=APP_THEME["header_border"],
-            highlightthickness=1,
-            bd=0,
-        )
-        preview_brand.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        preview_brand_labels = []
-        for text in ("Raw", "Jelly", "Ripper"):
-            label = tk.Label(
-                preview_brand,
-                text=text,
-                bg=APP_THEME["header_bg"],
-                fg=APP_THEME["title"],
-                font=("Segoe UI", 16, "bold"),
-                padx=18,
-                pady=12,
-            )
-            label.pack(side="left", expand=True)
-            preview_brand_labels.append(label)
-
-        preview_status_pill = tk.Frame(
-            preview_status_row,
-            bg=APP_THEME["pill_idle_bg"],
-            highlightbackground=APP_THEME["pill_idle_border"],
-            highlightthickness=1,
-            bd=0,
-        )
-        preview_status_pill.pack(side="right")
-        preview_status_label = tk.Label(
-            preview_status_pill,
-            text="Ready",
-            bg=APP_THEME["pill_idle_bg"],
-            fg=APP_THEME["ready_text"],
-            font=("Segoe UI", 16, "italic"),
-            padx=18,
-            pady=12,
-        )
-        preview_status_label.pack()
-
-        preview_progress = tk.Frame(
-            preview_root,
-            bg=APP_THEME["progress_trough"],
-            height=10,
-            bd=0,
-        )
-        preview_progress.pack(fill="x", pady=(0, 12))
-        preview_progress.pack_propagate(False)
-        preview_progress_fill = tk.Frame(
-            preview_progress,
-            bg=APP_THEME["progress_fill"],
-            width=180,
-            bd=0,
-        )
-        preview_progress_fill.pack(side="left", fill="y")
-
-        preview_log_card = tk.Frame(
-            preview_root,
-            bg=APP_THEME["surface_alt"],
-            highlightbackground=APP_THEME["panel_border"],
-            highlightthickness=1,
-            bd=0,
-        )
-        preview_log_card.pack(fill="both", expand=True)
-        tk.Label(
-            preview_log_card,
-            text="Live Log",
-            bg=APP_THEME["surface_alt"],
-            fg=APP_THEME["text"],
-            font=("Segoe UI", 11, "bold"),
-            anchor="w",
-            padx=14,
-            pady=12,
-        ).pack(fill="x")
-        preview_log_box = tk.Frame(
-            preview_log_card,
-            bg=APP_THEME["log_bg"],
-            highlightbackground=APP_THEME["panel_border"],
-            highlightthickness=1,
-            bd=0,
-        )
-        preview_log_box.pack(fill="both", expand=True, padx=14, pady=(0, 14))
-        preview_log_text = tk.Label(
-            preview_log_box,
-            text="[12:00:00] Raw Jelly Ripper started\n[12:00:02] Choose a mode to begin",
-            bg=APP_THEME["log_bg"],
-            fg=APP_THEME["log_text"],
-            font=("Consolas", 11),
-            justify="left",
-            anchor="nw",
-            padx=12,
-            pady=12,
-        )
-        preview_log_text.pack(fill="both", expand=True)
-
-        preview_abort = tk.Label(
-            preview_root,
-            text="ABORT SESSION",
-            bg=APP_THEME["abort"],
-            fg=APP_THEME["text"],
-            font=("Segoe UI", 14, "bold"),
-            pady=14,
-        )
-        preview_abort.pack(fill="x", pady=(12, 0))
-
-        save_btn = tk.Button(
-            controls_footer,
-            text="Save Theme",
-            bg=colors["green"],
-            fg=colors["text"],
-            font=("Segoe UI", 10, "bold"),
-            relief="flat",
-            bd=0,
-            padx=12,
-            pady=8,
-            cursor="hand2",
-        )
-
-        def refresh_preview(*_args):
-            cleaned, invalid = collect_theme_state()
-            preview_theme = build_app_theme(cleaned)
-            invalid_labels = []
-            for _group_name, fields in THEME_EDITOR_GROUPS:
-                for key, label in fields:
-                    normalized = normalize_theme_color(theme_vars[key].get())
-                    swatch = swatches[key]
-                    if normalized is None:
-                        swatch.configure(
-                            bg=colors["pill_error_bg"],
-                            fg=colors["pill_error_bg"],
-                            highlightbackground=colors["pill_error_border"],
-                        )
-                        invalid_labels.append(label)
-                    else:
-                        swatch.configure(
-                            bg=normalized,
-                            fg=normalized,
-                            highlightbackground=colors["panel_border"],
-                        )
-
-            preview_root.configure(bg=preview_theme["window_bg"])
-            preview_header.configure(
-                bg=preview_theme["header_bg"],
-                highlightbackground=preview_theme["header_border"],
-            )
-            preview_title.configure(
-                bg=preview_theme["header_bg"],
-                fg=preview_theme["title"],
-            )
-            preview_toolbar.configure(
-                bg=preview_theme["surface"],
-                highlightbackground=preview_theme["panel_border"],
-            )
-            for button in preview_toolbar_buttons:
-                button.configure(
-                    bg=preview_theme["toolbar_button"],
-                    fg=preview_theme["toolbar_button_text"],
-                )
-            preview_tiles.configure(bg=preview_theme["window_bg"])
-            for tile, label, color_key in preview_tile_widgets:
-                tile.configure(bg=preview_theme[color_key])
-                label.configure(bg=preview_theme[color_key], fg=preview_theme["text"])
-            preview_status_row.configure(bg=preview_theme["window_bg"])
-            preview_brand.configure(
-                bg=preview_theme["header_bg"],
-                highlightbackground=preview_theme["header_border"],
-            )
-            for label in preview_brand_labels:
-                label.configure(bg=preview_theme["header_bg"], fg=preview_theme["title"])
-            preview_status_pill.configure(
-                bg=preview_theme["pill_idle_bg"],
-                highlightbackground=preview_theme["pill_idle_border"],
-            )
-            preview_status_label.configure(
-                bg=preview_theme["pill_idle_bg"],
-                fg=preview_theme["ready_text"],
-            )
-            preview_progress.configure(bg=preview_theme["progress_trough"])
-            preview_progress_fill.configure(bg=preview_theme["progress_fill"])
-            preview_log_card.configure(
-                bg=preview_theme["surface_alt"],
-                highlightbackground=preview_theme["panel_border"],
-            )
-            preview_log_box.configure(
-                bg=preview_theme["log_bg"],
-                highlightbackground=preview_theme["panel_border"],
-            )
-            preview_log_text.configure(
-                bg=preview_theme["log_bg"],
-                fg=preview_theme["log_text"],
-            )
-            preview_abort.configure(
-                bg=preview_theme["abort"],
-                fg=preview_theme["text"],
-            )
-
-            if invalid_labels:
-                status_var.set(
-                    "Invalid colors ignored in preview: "
-                    + ", ".join(invalid_labels[:6])
-                    + ("..." if len(invalid_labels) > 6 else "")
-                )
-                save_btn.configure(state="disabled")
-            else:
-                status_var.set(
-                    "Preview is up to date. Save writes the palette overrides to config for the next launch."
-                )
-                save_btn.configure(state="normal")
-
-        for var in theme_vars.values():
-            var.trace_add("write", refresh_preview)
-
-        def restore_defaults():
-            for key, var in theme_vars.items():
-                var.set(APP_THEME[key])
-            status_var.set("Preview reset to the built-in theme. Save to clear overrides.")
-
-        def copy_theme_json():
-            cleaned, invalid = collect_theme_state()
-            if invalid:
-                messagebox.showerror(
-                    "Invalid Colors",
-                    "Fix invalid hex colors before copying theme JSON.",
-                    parent=win,
-                )
-                return
-            existing_non_editor = {
-                key: value
-                for key, value in existing_overrides.items()
-                if key not in editable_keys
-            }
-            payload = dict(existing_non_editor)
-            payload.update(
-                {
-                    key: value
-                    for key, value in cleaned.items()
-                    if value != APP_THEME[key]
-                }
-            )
-            win.clipboard_clear()
-            win.clipboard_append(json.dumps(payload, indent=2))
-            status_var.set("Theme override JSON copied to clipboard.")
-
-        def save_theme():
-            cleaned, invalid = collect_theme_state()
-            if invalid:
-                messagebox.showerror(
-                    "Invalid Colors",
-                    "Fix invalid hex colors before saving the theme.",
-                    parent=win,
-                )
-                return
-            existing_non_editor = {
-                key: value
-                for key, value in existing_overrides.items()
-                if key not in editable_keys
-            }
-            payload = dict(existing_non_editor)
-            payload.update(
-                {
-                    key: value
-                    for key, value in cleaned.items()
-                    if value != APP_THEME[key]
-                }
-            )
-            self.cfg["opt_theme_overrides"] = dict(payload)
-            self.engine.cfg["opt_theme_overrides"] = dict(payload)
-            try:
-                save_config(self.cfg)
-            except Exception as exc:
-                messagebox.showerror(
-                    "Save Failed",
-                    f"Theme could not be saved:\n{exc}",
-                    parent=win,
-                )
-                return
-            status_var.set(
-                "Theme saved to config. Restart Raw Jelly Ripper to apply it across the app."
-            )
-            self.controller.log(
-                f"UI theme saved with {len(payload)} override(s); restart required to apply."
-            )
-
-        tk.Button(
-            controls_footer,
-            text="Restore Defaults",
-            bg=colors["toolbar_button"],
-            fg=colors["toolbar_button_text"],
-            font=("Segoe UI", 10),
-            relief="flat",
-            bd=0,
-            padx=12,
-            pady=8,
-            cursor="hand2",
-            command=restore_defaults,
-        ).pack(side="left")
-        tk.Button(
-            controls_footer,
-            text="Copy JSON",
-            bg=colors["toolbar_button"],
-            fg=colors["toolbar_button_text"],
-            font=("Segoe UI", 10),
-            relief="flat",
-            bd=0,
-            padx=12,
-            pady=8,
-            cursor="hand2",
-            command=copy_theme_json,
-        ).pack(side="left", padx=(8, 0))
-        save_btn.configure(command=save_theme)
-        save_btn.pack(side="right")
-        close_btn = tk.Button(
-            controls_footer,
-            text="Close",
-            bg=colors["toolbar_button"],
-            fg=colors["toolbar_button_muted"],
-            font=("Segoe UI", 10),
-            relief="flat",
-            bd=0,
-            padx=12,
-            pady=8,
-            cursor="hand2",
-            command=lambda: None,
-        )
-        close_btn.pack(side="right", padx=(0, 8))
-
-        def _close_editor():
-            self._ui_editor_window = None
-            try:
-                win.destroy()
-            except Exception:
-                pass
-
-        win.protocol("WM_DELETE_WINDOW", _close_editor)
-        close_btn.configure(command=_close_editor)
-        refresh_preview()
-
-    def _open_settings_safe(self):
+    def _open_settings_safe(self, selected_tab: str | None = None):
         """Prevent callback exceptions from tearing down the main window."""
         try:
-            self.open_settings()
+            self.open_settings(selected_tab=selected_tab)
         except Exception as e:
             self._settings_window = None
+            self._settings_notebook = None
+            self._settings_tabs = {}
             import traceback
             tb = traceback.format_exc()
             try:
@@ -8090,7 +8614,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 )
 
 
-    def open_settings(self):
+    def open_settings(self, *, selected_tab: str | None = None):
         cfg = self.cfg
         colors = self._theme
         # Expert Mode toggle (persistent in config)
@@ -8109,6 +8633,14 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             and self._settings_window.winfo_exists()
         ):
             try:
+                notebook = getattr(self, "_settings_notebook", None)
+                tab_lookup = getattr(self, "_settings_tabs", {})
+                if (
+                    selected_tab
+                    and notebook is not None
+                    and selected_tab in tab_lookup
+                ):
+                    notebook.select(tab_lookup[selected_tab])
                 self._settings_window.lift()
                 self._settings_window.focus_force()
             except Exception:
@@ -8120,7 +8652,9 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
         def _show():
             win = tk.Toplevel(self)
             self._settings_window = win
-            win.title("JellyRip Settings")
+            self._settings_notebook = None
+            self._settings_tabs = {}
+            win.title(f"{APP_DISPLAY_NAME} Settings")
             expert_toggle_row = tk.Frame(win, bg=colors["window_bg"])
             expert_toggle_row.pack(fill="x", padx=16, pady=(8, 0))
             tk.Checkbutton(
@@ -8158,7 +8692,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             notebook = ttk.Notebook(win, style="JellyRip.TNotebook")
             notebook.pack(fill="both", expand=True, padx=8, pady=(8, 0))
 
-            def make_scroll_tab(title):
+            def make_scroll_tab(title, *, tab_key: str | None = None):
                 tab = tk.Frame(notebook, bg=colors["window_bg"])
                 canvas = tk.Canvas(
                     tab, bg=colors["window_bg"], highlightthickness=0
@@ -8181,51 +8715,30 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 canvas.pack(side="left", fill="both", expand=True)
                 scrollbar.pack(side="right", fill="y")
                 notebook.add(tab, text=title)
+                if tab_key:
+                    self._settings_tabs[tab_key] = tab
                 return scroll_frame
 
-            paths_tab = make_scroll_tab("Paths")
-            everyday_tab = make_scroll_tab("Everyday")
-            validation_tab = make_scroll_tab("Validation")
-            advanced_tab = make_scroll_tab("Advanced")
-            logs_tab = make_scroll_tab("Logs & Debug")
+            self._settings_notebook = notebook
+            paths_tab = make_scroll_tab("Paths", tab_key="paths")
+            everyday_tab = make_scroll_tab("Everyday", tab_key="everyday")
+            validation_tab = make_scroll_tab("Validation", tab_key="validation")
+            advanced_tab = make_scroll_tab("Advanced", tab_key="advanced")
+            ai_tab = make_scroll_tab("AI Assistant", tab_key="ai")
+            logs_tab = make_scroll_tab("Logs & Debug", tab_key="logs")
             expert_tab = None
             if expert_mode_var.get():
-                expert_tab = make_scroll_tab("Expert")
-            # --- Expert Tab (if enabled) ---
-            if expert_tab is not None:
-                section(expert_tab, "Transcode Profile (Expert)")
-                # Show all profile parameters for direct editing
-                from transcode.profiles import PROFILE_SCHEMA
-                expert_vars = {}
-                for section_name, keys in PROFILE_SCHEMA.items():
-                    section(expert_tab, section_name.capitalize())
-                    for key in keys:
-                        row = tk.Frame(expert_tab, bg=colors["window_bg"])
-                        row.pack(fill="x", padx=24, pady=2)
-                        tk.Label(
-                            row, text=key, bg=colors["window_bg"], fg=colors["text"],
-                            font=("Segoe UI", 10), width=18, anchor="w"
-                        ).pack(side="left")
-                        var = tk.StringVar()
-                        tk.Entry(
-                            row, textvariable=var,
-                            bg=colors["surface_deep"], fg=colors["text"],
-                            font=("Segoe UI", 10), relief="flat", bd=3, width=24
-                        ).pack(side="left")
-                        expert_vars[f"{section_name}.{key}"] = var
-                # Optionally: add a button to apply expert profile changes
-                def apply_expert_profile():
-                    # This is a placeholder for applying expert profile changes
-                    # You would parse and validate the values, then update the profile
-                    self.controller.log("Expert profile changes applied (not yet implemented)")
-                tk.Button(
-                    expert_tab, text="Apply Expert Profile Changes",
-                    bg=colors["green"], fg=colors["text"], font=("Segoe UI", 10, "bold"),
-                    command=apply_expert_profile
-                ).pack(pady=12)
-
+                expert_tab = make_scroll_tab("Expert", tab_key="expert")
             cfg      = self.cfg
             vars_map = {}
+            expert_vars: dict[str, dict[str, object]] = {}
+            expert_profile_state = {
+                "name": None,
+                "default_name": None,
+                "names": [],
+                "data": None,
+            }
+            expert_status_var = tk.StringVar()
             naming_mode_label_to_value = {
                 "Timestamp (default)": "timestamp",
                 "Auto title": "auto-title",
@@ -8413,6 +8926,570 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 vars_map[key] = ("choice_map", selected, label_to_value)
                 return selected
 
+            def multiline_text_row(
+                parent,
+                label,
+                initial_text="",
+                *,
+                height=5,
+            ):
+                row = tk.Frame(parent, bg=colors["window_bg"])
+                row.pack(fill="both", expand=False, padx=16, pady=2)
+                tk.Label(
+                    row, text=label,
+                    bg=colors["window_bg"], fg=colors["text"],
+                    font=("Segoe UI", 10), anchor="nw", width=36,
+                ).pack(side="left", anchor="nw", pady=(4, 0))
+                widget = tk.Text(
+                    row,
+                    height=height,
+                    width=38,
+                    wrap="word",
+                    bg=colors["surface_deep"],
+                    fg=colors["text"],
+                    insertbackground=colors["text"],
+                    relief="flat",
+                    bd=3,
+                    font=("Segoe UI", 10),
+                )
+                widget.pack(side="left", fill="both", expand=True)
+                widget.insert("1.0", str(initial_text or ""))
+                return widget
+
+            if expert_tab is not None:
+                section(expert_tab, "Transcode Profile (Expert)")
+                tk.Label(
+                    expert_tab,
+                    text=(
+                        "Pick a transcode profile to inspect or edit. Saving "
+                        "writes back to the selected profile."
+                    ),
+                    bg=colors["window_bg"],
+                    fg=colors["muted"],
+                    font=("Segoe UI", 9),
+                    wraplength=620,
+                    justify="left",
+                    anchor="w",
+                ).pack(fill="x", padx=16, pady=(0, 4))
+                expert_profile_name_var = tk.StringVar()
+                expert_summary_var = tk.StringVar()
+                expert_profile_combo = None
+
+                def _update_expert_status():
+                    profile_name = expert_profile_state.get("name")
+                    default_name = expert_profile_state.get("default_name")
+                    if not profile_name:
+                        return
+                    if default_name and profile_name == default_name:
+                        expert_status_var.set(
+                            f"Editing profile: {profile_name} (current default)"
+                        )
+                    elif default_name:
+                        expert_status_var.set(
+                            f"Editing profile: {profile_name} | "
+                            f"Current default: {default_name}"
+                        )
+                    else:
+                        expert_status_var.set(f"Editing profile: {profile_name}")
+
+                def _update_expert_summary():
+                    profile_data = expert_profile_state.get("data")
+                    if profile_data is None:
+                        expert_summary_var.set("Profile summary unavailable.")
+                        return
+                    try:
+                        expert_summary_var.set(
+                            self._summarize_expert_profile(profile_data)
+                        )
+                    except Exception:
+                        expert_summary_var.set("Profile summary unavailable.")
+
+                def _load_expert_profile(profile_name=None):
+                    snapshot = self._load_expert_profile_snapshot(profile_name)
+                    expert_profile_state.update(snapshot)
+                    expert_profile_name_var.set(snapshot["name"])
+                    if expert_profile_combo is not None:
+                        expert_profile_combo.configure(
+                            values=snapshot.get("names", [])
+                        )
+                    _update_expert_status()
+                    _update_expert_summary()
+                    return snapshot
+
+                try:
+                    _load_expert_profile()
+                except Exception as exc:
+                    expert_status_var.set(
+                        f"Could not load transcode profile: {exc}"
+                    )
+                    expert_summary_var.set("Profile summary unavailable.")
+
+                if expert_profile_state["data"] is not None:
+                    picker_row = tk.Frame(expert_tab, bg=colors["window_bg"])
+                    picker_row.pack(fill="x", padx=16, pady=(0, 6))
+                    tk.Label(
+                        picker_row,
+                        text="Profile:",
+                        bg=colors["window_bg"],
+                        fg=colors["text"],
+                        font=("Segoe UI", 10),
+                        width=12,
+                        anchor="w",
+                    ).pack(side="left")
+                    expert_profile_combo = ttk.Combobox(
+                        picker_row,
+                        textvariable=expert_profile_name_var,
+                        values=expert_profile_state.get("names", []),
+                        state="readonly",
+                        width=34,
+                    )
+                    expert_profile_combo.pack(side="left", fill="x", expand=True)
+
+                tk.Label(
+                    expert_tab,
+                    textvariable=expert_status_var,
+                    bg=colors["window_bg"],
+                    fg=colors["title"],
+                    font=("Segoe UI", 10, "bold"),
+                    wraplength=620,
+                    justify="left",
+                    anchor="w",
+                ).pack(fill="x", padx=16, pady=(0, 8))
+                tk.Label(
+                    expert_tab,
+                    textvariable=expert_summary_var,
+                    bg=colors["window_bg"],
+                    fg=colors["muted"],
+                    font=("Segoe UI", 9),
+                    wraplength=620,
+                    justify="left",
+                    anchor="w",
+                ).pack(fill="x", padx=16, pady=(0, 10))
+
+                if expert_profile_state["data"] is not None:
+                    expert_choice_values = {
+                        ("video", "codec"): ["h265", "h264", "copy"],
+                        ("video", "mode"): ["crf", "bitrate", "copy"],
+                        (
+                            "video",
+                            "preset",
+                        ): [
+                            "",
+                            "ultrafast",
+                            "superfast",
+                            "veryfast",
+                            "faster",
+                            "fast",
+                            "medium",
+                            "slow",
+                            "slower",
+                            "veryslow",
+                        ],
+                        (
+                            "video",
+                            "tune",
+                        ): [
+                            "",
+                            "film",
+                            "animation",
+                            "grain",
+                            "stillimage",
+                            "fastdecode",
+                            "zerolatency",
+                        ],
+                        (
+                            "video",
+                            "video_profile",
+                        ): ["", "main", "main10", "high", "high10", "baseline"],
+                        (
+                            "video",
+                            "pix_fmt",
+                        ): [
+                            "",
+                            "yuv420p",
+                            "yuv420p10le",
+                            "yuv422p10le",
+                            "yuv444p",
+                            "yuv444p10le",
+                        ],
+                        ("video", "hw_accel"): [
+                            "cpu",
+                            "auto_prefer",
+                            "nvenc",
+                            "qsv",
+                            "amf",
+                        ],
+                        ("audio", "mode"): [
+                            "copy",
+                            "aac",
+                            "ac3",
+                            "eac3",
+                            "mp3",
+                            "opus",
+                            "flac",
+                        ],
+                        ("audio", "tracks"): ["all", "main", "language"],
+                        ("audio", "channels"): ["", "1", "2", "6", "8"],
+                        ("audio", "sample_rate"): ["", "44100", "48000", "96000"],
+                        ("subtitles", "mode"): ["all", "forced", "language", "none"],
+                        ("output", "container"): ["mkv", "mp4", "mov"],
+                        ("metadata", "preserve"): ["", "true", "false"],
+                    }
+                    expert_bool_fields = {
+                        ("audio", "downmix"),
+                        ("subtitles", "burn"),
+                        ("output", "overwrite"),
+                        ("output", "auto_increment"),
+                        ("constraints", "skip_if_codec_matches"),
+                    }
+                    for section_name, schema in PROFILE_SCHEMA.items():
+                        section(expert_tab, section_name.capitalize())
+                        section_vars = {}
+                        expert_vars[section_name] = section_vars
+                        for key in schema:
+                            row = tk.Frame(expert_tab, bg=colors["window_bg"])
+                            row.pack(fill="x", padx=24, pady=2)
+                            tk.Label(
+                                row,
+                                text=key,
+                                bg=colors["window_bg"],
+                                fg=colors["text"],
+                                font=("Segoe UI", 10),
+                                width=18,
+                                anchor="w",
+                            ).pack(side="left")
+                            value = expert_profile_state["data"].get(
+                                section_name, {}
+                            ).get(key)
+                            field_name = (section_name, key)
+                            if field_name in expert_bool_fields:
+                                var = tk.BooleanVar(value=bool(value))
+                                tk.Checkbutton(
+                                    row,
+                                    variable=var,
+                                    bg=colors["window_bg"],
+                                    activebackground=colors["window_bg"],
+                                    selectcolor=colors["green"],
+                                ).pack(side="left")
+                                section_vars[key] = self._make_expert_var_handle(
+                                    var,
+                                    "bool",
+                                )
+                            elif field_name in expert_choice_values:
+                                var = tk.StringVar(
+                                    value=self._format_expert_profile_value(value)
+                                )
+                                ttk.Combobox(
+                                    row,
+                                    textvariable=var,
+                                    values=expert_choice_values[field_name],
+                                    state="readonly",
+                                    width=24,
+                                ).pack(side="left")
+                                section_vars[key] = self._make_expert_var_handle(var)
+                            else:
+                                var = tk.StringVar(
+                                    value=self._format_expert_profile_value(value)
+                                )
+                                tk.Entry(
+                                    row,
+                                    textvariable=var,
+                                    bg=colors["surface_deep"],
+                                    fg=colors["text"],
+                                    font=("Segoe UI", 10),
+                                    relief="flat",
+                                    bd=3,
+                                    width=24,
+                                ).pack(side="left")
+                                section_vars[key] = self._make_expert_var_handle(var)
+
+                    self._populate_expert_profile_vars(
+                        expert_vars,
+                        expert_profile_state["data"],
+                    )
+
+                    def _on_expert_profile_selected(_event=None):
+                        selected_name = expert_profile_name_var.get().strip()
+                        current_name = expert_profile_state.get("name")
+                        if not selected_name or selected_name == current_name:
+                            return
+                        if not self._confirm_discard_dirty_expert_changes(
+                            expert_profile_state.get("data"),
+                            expert_vars,
+                            (
+                                "Discard unsaved Expert profile edits and load "
+                                f"'{selected_name}'?"
+                            ),
+                            win,
+                        ):
+                            expert_profile_name_var.set(current_name or "")
+                            return
+                        try:
+                            snapshot = _load_expert_profile(selected_name)
+                        except Exception as exc:
+                            self.controller.log(
+                                f"Expert profile load failed: {exc}"
+                            )
+                            messagebox.showerror(
+                                "Expert Profile",
+                                f"Could not load expert profile:\n{exc}",
+                                parent=win,
+                            )
+                            expert_profile_name_var.set(current_name or "")
+                            return
+                        self._populate_expert_profile_vars(
+                            expert_vars,
+                            snapshot["data"],
+                        )
+
+                    expert_profile_combo.bind(
+                        "<<ComboboxSelected>>",
+                        _on_expert_profile_selected,
+                    )
+
+                    def apply_expert_profile():
+                        try:
+                            profile_name = expert_profile_state["name"]
+                            profile_data = self._collect_expert_profile_data(
+                                expert_profile_state["data"],
+                                expert_vars,
+                                profile_name,
+                            )
+                            if not self._confirm_profile_hdr_metadata_save(
+                                profile_data,
+                                win,
+                            ):
+                                return
+                            saved_name = self._save_expert_profile_data(
+                                profile_name,
+                                profile_data,
+                            )
+                        except Exception as exc:
+                            self.controller.log(
+                                f"Expert profile save failed: {exc}"
+                            )
+                            messagebox.showerror(
+                                "Expert Profile",
+                                f"Could not save expert profile:\n{exc}",
+                                parent=win,
+                            )
+                            return
+
+                        expert_profile_state["name"] = saved_name
+                        expert_profile_state["data"] = profile_data
+                        if not expert_profile_state.get("default_name"):
+                            expert_profile_state["default_name"] = saved_name
+                        expert_profile_name_var.set(saved_name)
+                        _update_expert_status()
+                        _update_expert_summary()
+                        self.controller.log(
+                            f"Expert profile saved: {saved_name}"
+                        )
+
+                    def set_default_expert_profile():
+                        try:
+                            default_name = self._set_default_expert_profile(
+                                expert_profile_state["name"]
+                            )
+                        except Exception as exc:
+                            self.controller.log(
+                                f"Expert profile default update failed: {exc}"
+                            )
+                            messagebox.showerror(
+                                "Expert Profile",
+                                f"Could not set default profile:\n{exc}",
+                                parent=win,
+                            )
+                            return
+
+                        expert_profile_state["default_name"] = default_name
+                        _update_expert_status()
+                        self.controller.log(
+                            f"Expert profile set as default: {default_name}"
+                        )
+
+                    def _prompt_expert_profile_name(
+                        title,
+                        prompt,
+                        default_value="",
+                    ):
+                        value = self.ask_input(
+                            title,
+                            prompt,
+                            default_value=default_value,
+                        )
+                        name = str(value or "").strip()
+                        return name or None
+
+                    def create_expert_profile():
+                        if not self._confirm_discard_dirty_expert_changes(
+                            expert_profile_state.get("data"),
+                            expert_vars,
+                            "Discard unsaved Expert profile edits and create a new profile?",
+                            win,
+                        ):
+                            return
+                        profile_name = _prompt_expert_profile_name(
+                            "New Profile",
+                            "Enter a name for the new transcode profile:",
+                        )
+                        if not profile_name:
+                            return
+                        try:
+                            created_name = self._create_expert_profile(profile_name)
+                            snapshot = _load_expert_profile(created_name)
+                        except Exception as exc:
+                            self.controller.log(
+                                f"Expert profile create failed: {exc}"
+                            )
+                            messagebox.showerror(
+                                "Expert Profile",
+                                f"Could not create profile:\n{exc}",
+                                parent=win,
+                            )
+                            return
+                        self._populate_expert_profile_vars(
+                            expert_vars,
+                            snapshot["data"],
+                        )
+                        self.controller.log(
+                            f"Expert profile created: {created_name}"
+                        )
+
+                    def duplicate_expert_profile():
+                        source_name = expert_profile_state.get("name")
+                        if not source_name:
+                            return
+                        new_name = _prompt_expert_profile_name(
+                            "Duplicate Profile",
+                            f"Enter a name for the duplicate of '{source_name}':",
+                            default_value=f"{source_name} Copy",
+                        )
+                        if not new_name:
+                            return
+                        try:
+                            profile_data = self._collect_expert_profile_data(
+                                expert_profile_state["data"],
+                                expert_vars,
+                                source_name,
+                            )
+                            if not self._confirm_profile_hdr_metadata_save(
+                                profile_data,
+                                win,
+                            ):
+                                return
+                            duplicated_name = self._duplicate_expert_profile(
+                                source_name,
+                                new_name,
+                                profile_data,
+                            )
+                            snapshot = _load_expert_profile(duplicated_name)
+                        except Exception as exc:
+                            self.controller.log(
+                                f"Expert profile duplicate failed: {exc}"
+                            )
+                            messagebox.showerror(
+                                "Expert Profile",
+                                f"Could not duplicate profile:\n{exc}",
+                                parent=win,
+                            )
+                            return
+                        self._populate_expert_profile_vars(
+                            expert_vars,
+                            snapshot["data"],
+                        )
+                        self.controller.log(
+                            f"Expert profile duplicated: {duplicated_name}"
+                        )
+
+                    def delete_expert_profile():
+                        profile_name = expert_profile_state.get("name")
+                        if not profile_name:
+                            return
+                        if not self._confirm_discard_dirty_expert_changes(
+                            expert_profile_state.get("data"),
+                            expert_vars,
+                            (
+                                "Discard unsaved Expert profile edits and delete "
+                                f"'{profile_name}'?"
+                            ),
+                            win,
+                        ):
+                            return
+                        if not messagebox.askyesno(
+                            "Delete Expert Profile",
+                            f"Delete transcode profile '{profile_name}'?",
+                            parent=win,
+                        ):
+                            return
+                        try:
+                            next_name = self._delete_expert_profile(profile_name)
+                            snapshot = _load_expert_profile(next_name)
+                        except Exception as exc:
+                            self.controller.log(
+                                f"Expert profile delete failed: {exc}"
+                            )
+                            messagebox.showerror(
+                                "Expert Profile",
+                                f"Could not delete profile:\n{exc}",
+                                parent=win,
+                            )
+                            return
+                        self._populate_expert_profile_vars(
+                            expert_vars,
+                            snapshot["data"],
+                        )
+                        self.controller.log(
+                            f"Expert profile deleted: {profile_name}"
+                        )
+
+                    expert_btn_row = tk.Frame(expert_tab, bg=colors["window_bg"])
+                    expert_btn_row.pack(fill="x", padx=16, pady=12)
+                    tk.Button(
+                        expert_btn_row,
+                        text="New",
+                        bg=colors["toolbar_button"],
+                        fg=colors["text"],
+                        font=("Segoe UI", 10, "bold"),
+                        command=create_expert_profile,
+                    ).pack(side="left")
+                    tk.Button(
+                        expert_btn_row,
+                        text="Duplicate",
+                        bg=colors["toolbar_button"],
+                        fg=colors["text"],
+                        font=("Segoe UI", 10, "bold"),
+                        command=duplicate_expert_profile,
+                    ).pack(side="left", padx=(8, 0))
+                    tk.Button(
+                        expert_btn_row,
+                        text="Delete",
+                        bg=colors["abort"],
+                        fg=colors["text"],
+                        font=("Segoe UI", 10, "bold"),
+                        command=delete_expert_profile,
+                    ).pack(side="left", padx=(8, 0))
+                    tk.Button(
+                        expert_btn_row,
+                        text="Apply Expert Profile Changes",
+                        bg=colors["green"],
+                        fg=colors["text"],
+                        font=("Segoe UI", 10, "bold"),
+                        command=apply_expert_profile,
+                    ).pack(side="left", padx=(16, 0))
+                    tk.Button(
+                        expert_btn_row,
+                        text="Set As Default",
+                        bg=colors["blue"],
+                        fg=colors["text"],
+                        font=("Segoe UI", 10, "bold"),
+                        command=set_default_expert_profile,
+                    ).pack(side="left", padx=(8, 0))
+
+            ai_profile = load_ai_profile(cfg)
+            ai_profile_vars: dict[str, tk.StringVar] = {}
+            ai_profile_instructions_widget = None
+
             section(paths_tab, "Apps")
             path_row(paths_tab, "makemkvcon_path", "MakeMKV app")
             path_row(paths_tab, "ffprobe_path",    "ffmpeg / ffprobe folder")
@@ -8423,23 +9500,44 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             _auto_status_var = tk.StringVar()
 
             def _do_auto_locate():
-                mkv, ffp = auto_locate_tools()
-                ffmpeg = auto_locate_ffmpeg()
-                handbrake = auto_locate_handbrake()
+                if "opt_allow_path_tool_resolution" in vars_map:
+                    allow_path_lookup = bool(
+                        vars_map["opt_allow_path_tool_resolution"][1].get()
+                    )
+                else:
+                    allow_path_lookup = self._allow_path_tool_resolution()
+                mkv_result = resolve_makemkvcon(
+                    "",
+                    allow_path_lookup=allow_path_lookup,
+                )
+                ffprobe_result = resolve_ffprobe(
+                    "",
+                    allow_path_lookup=allow_path_lookup,
+                )
+                ffmpeg_result = resolve_ffmpeg(
+                    "",
+                    allow_path_lookup=allow_path_lookup,
+                )
+                handbrake_result = resolve_handbrake(
+                    "",
+                    allow_path_lookup=allow_path_lookup,
+                )
                 results = []
                 notes = []
-                if mkv:
-                    vars_map["makemkvcon_path"][1].set(mkv)
-                    results.append("MakeMKV")
-                if ffp:
-                    vars_map["ffprobe_path"][1].set(ffp)
-                    results.append("FFprobe")
-                if ffmpeg:
-                    vars_map["ffmpeg_path"][1].set(ffmpeg)
-                    results.append("FFmpeg")
-                if handbrake:
-                    vars_map["handbrake_path"][1].set(handbrake)
-                    results.append("HandBrakeCLI")
+                if mkv_result.path:
+                    vars_map["makemkvcon_path"][1].set(mkv_result.path)
+                    results.append(f"MakeMKV ({mkv_result.source})")
+                if ffprobe_result.path:
+                    vars_map["ffprobe_path"][1].set(ffprobe_result.path)
+                    results.append(f"FFprobe ({ffprobe_result.source})")
+                if ffmpeg_result.path:
+                    vars_map["ffmpeg_path"][1].set(ffmpeg_result.path)
+                    results.append(f"FFmpeg ({ffmpeg_result.source})")
+                if handbrake_result.path:
+                    vars_map["handbrake_path"][1].set(handbrake_result.path)
+                    results.append(
+                        f"HandBrakeCLI ({handbrake_result.source})"
+                    )
                 elif handbrake_gui_installed():
                     notes.append(
                         "HandBrake GUI found but HandBrakeCLI is not installed "
@@ -8623,6 +9721,11 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             number_row(advanced_tab, "opt_hard_block_gb",
                        "Stop when free space is below (GB):", 20)
             section(advanced_tab, "FFmpeg")
+            toggle_row(
+                advanced_tab,
+                "opt_allow_path_tool_resolution",
+                "Allow PATH-based tool lookup (advanced, less predictable)",
+            )
             ffmpeg_source_mode_var = choice_map_row(
                 advanced_tab,
                 "opt_ffmpeg_source_mode",
@@ -8669,6 +9772,74 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 "opt_makemkv_rip_args",
                 "Extra MakeMKV args (rip commands):"
             )
+            section(ai_tab, "Assistant Profile")
+            tk.Label(
+                ai_tab,
+                text=(
+                    "These settings shape how the assistant explains things in chat "
+                    "and diagnostics. They do not let AI make hidden changes."
+                ),
+                bg=colors["window_bg"],
+                fg=colors["muted"],
+                font=("Segoe UI", 9),
+                wraplength=760,
+                justify="left",
+                anchor="w",
+            ).pack(fill="x", padx=16, pady=(0, 8))
+
+            for profile_key, profile_label in AI_PROFILE_FIELDS:
+                label_to_value = AI_PROFILE_CHOICE_LABELS[profile_key]
+                current_value = getattr(
+                    ai_profile,
+                    profile_key,
+                    DEFAULT_AI_PROFILE.get(profile_key, ""),
+                )
+                selected = tk.StringVar(
+                    value=AI_PROFILE_VALUE_LABELS[profile_key].get(
+                        current_value,
+                        next(iter(label_to_value.keys())),
+                    )
+                )
+                row = tk.Frame(ai_tab, bg=colors["window_bg"])
+                row.pack(fill="x", padx=16, pady=2)
+                tk.Label(
+                    row,
+                    text=profile_label,
+                    bg=colors["window_bg"],
+                    fg=colors["text"],
+                    font=("Segoe UI", 10),
+                    anchor="w",
+                    width=36,
+                ).pack(side="left")
+                combo = ttk.Combobox(
+                    row,
+                    textvariable=selected,
+                    values=list(label_to_value.keys()),
+                    state="readonly",
+                    width=24,
+                )
+                combo.pack(side="left")
+                ai_profile_vars[profile_key] = selected
+
+            ai_profile_instructions_widget = multiline_text_row(
+                ai_tab,
+                "Custom instructions (optional):",
+                ai_profile.custom_instructions,
+                height=6,
+            )
+            tk.Label(
+                ai_tab,
+                text=(
+                    "Use short factual guidance here, such as preferred tone, how much "
+                    "detail to include, or whether to stay conservative when uncertain."
+                ),
+                bg=colors["window_bg"],
+                fg=colors["muted"],
+                font=("Segoe UI", 9),
+                wraplength=760,
+                justify="left",
+                anchor="w",
+            ).pack(fill="x", padx=16, pady=(4, 2))
             section(logs_tab, "Log Storage")
             number_row(
                 logs_tab,
@@ -8714,14 +9885,60 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                        "Debug: log bad integer values")
             toggle_row(logs_tab, "opt_debug_duration",
                        "Debug: log bad duration values")
+            toggle_row(logs_tab, "opt_debug_state",
+                       "Debug: log UI state transitions")
+            toggle_row(logs_tab, "opt_debug_state_json",
+                       "Debug: format UI state logs as JSON")
+            section(logs_tab, "AI Replay")
+            tk.Label(
+                logs_tab,
+                text=(
+                    "Inspect append-only sidebar chat replay bundles without changing app behavior. "
+                    "Use this for request and response debugging only."
+                ),
+                bg=colors["window_bg"],
+                fg=colors["muted"],
+                font=("Segoe UI", 9),
+                wraplength=760,
+                justify="left",
+                anchor="w",
+            ).pack(fill="x", padx=16, pady=(0, 8))
+            replay_row = tk.Frame(logs_tab, bg=colors["window_bg"])
+            replay_row.pack(fill="x", padx=16, pady=(0, 4))
+            tk.Button(
+                replay_row,
+                text="Open Replay Browser...",
+                command=self._open_ai_chat_replay_inspector,
+                bg=colors["toolbar_button"],
+                fg=colors["title"],
+                font=("Segoe UI", 10),
+                relief="flat",
+                cursor="hand2",
+            ).pack(side="left")
+            tk.Label(
+                replay_row,
+                text=f"Stored at {ai_chat_replay_path()}",
+                bg=colors["window_bg"],
+                fg=colors["muted"],
+                font=("Consolas", 9),
+                wraplength=540,
+                justify="left",
+                anchor="w",
+            ).pack(side="left", padx=(10, 0))
+
+            if selected_tab and selected_tab in self._settings_tabs:
+                try:
+                    notebook.select(self._settings_tabs[selected_tab])
+                except Exception:
+                    pass
 
             btn_row = tk.Frame(win, bg=colors["window_bg"])
             btn_row.pack(fill="x", padx=16, pady=12)
 
             def save():
-                # Save expert mode toggle
-                cfg['opt_expert_mode'] = expert_mode_var.get()
                 try:
+                    staged_cfg = dict(cfg)
+                    staged_cfg["opt_expert_mode"] = expert_mode_var.get()
                     tool_validators = {
                         "makemkvcon_path": validate_makemkvcon,
                         "ffprobe_path": validate_ffprobe,
@@ -8729,9 +9946,9 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                         "handbrake_path": validate_handbrake,
                     }
 
-                    # Stage all changes before touching live config.
                     staged = {}
                     rejected_fields = []
+                    expert_profile_to_save = None
                     for key, entry in vars_map.items():
                         vtype = entry[0]
                         var = entry[1]
@@ -8783,20 +10000,57 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                                 selected, "timestamp"
                             )
 
-                    # Apply staged changes atomically.
-                    cfg.update(staged)
-                    cfg["opt_ai_cloud_timeout_seconds"] = max(
-                        10, int(cfg.get("opt_ai_cloud_timeout_seconds", 30))
+                    if expert_vars and expert_profile_state["name"] is not None:
+                        expert_profile_to_save = self._collect_expert_profile_data(
+                            expert_profile_state["data"],
+                            expert_vars,
+                            expert_profile_state["name"],
+                        )
+                        if not self._confirm_profile_hdr_metadata_save(
+                            expert_profile_to_save,
+                            win,
+                        ):
+                            return
+
+                    ai_profile_raw: dict[str, object] = {}
+                    for profile_key, selected in ai_profile_vars.items():
+                        label_to_value = AI_PROFILE_CHOICE_LABELS[profile_key]
+                        ai_profile_raw[profile_key] = label_to_value.get(
+                            selected.get().strip(),
+                            DEFAULT_AI_PROFILE.get(profile_key, ""),
+                        )
+                    if ai_profile_instructions_widget is not None:
+                        ai_profile_raw["custom_instructions"] = (
+                            ai_profile_instructions_widget.get("1.0", "end-1c").strip()
+                        )
+                    staged["opt_ai_profile"] = AIProfile.from_mapping(
+                        ai_profile_raw
+                    ).to_dict()
+                    staged["opt_ai_profile_onboarded"] = True
+
+                    staged_cfg.update(staged)
+                    staged_cfg["opt_ai_cloud_timeout_seconds"] = max(
+                        10, int(staged_cfg.get("opt_ai_cloud_timeout_seconds", 30))
                     )
-                    cfg["opt_ai_local_timeout_seconds"] = max(
-                        10, int(cfg.get("opt_ai_local_timeout_seconds", 90))
+                    staged_cfg["opt_ai_local_timeout_seconds"] = max(
+                        10, int(staged_cfg.get("opt_ai_local_timeout_seconds", 90))
                     )
-                    self.engine.cfg = cfg
                     if rejected_fields:
                         names = ", ".join(rejected_fields)
                         self.controller.log(
                             f"Settings: invalid numeric input ignored for: {names}"
                         )
+                    saved_name = self._persist_settings_and_profile(
+                        staged_cfg,
+                        expert_profile_name=expert_profile_state["name"],
+                        expert_profile_data=expert_profile_to_save,
+                    )
+                    if saved_name is not None:
+                        expert_profile_state["name"] = saved_name
+                        expert_profile_state["data"] = expert_profile_to_save
+                    cfg.clear()
+                    cfg.update(staged_cfg)
+                    self.engine.cfg = cfg
                     configure_safe_int_debug(
                         cfg.get("opt_debug_safe_int", False),
                         self.controller.log
@@ -8805,7 +10059,6 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                         cfg.get("opt_debug_duration", False),
                         self.controller.log
                     )
-                    save_config(cfg)
                     self.controller.log("Settings saved.")
                 except Exception as e:
                     self.controller.log(f"Error saving settings: {e}")
@@ -8814,21 +10067,32 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                         f"Settings could not be saved:\n{e}",
                         parent=win,
                     )
-                finally:
-                    try:
-                        win.destroy()
-                    except Exception:
-                        pass
-                    self._settings_window = None
-                    done.set()
+                    return
+                try:
+                    win.destroy()
+                except Exception:
+                    pass
+                self._settings_window = None
+                self._settings_notebook = None
+                self._settings_tabs = {}
+                done.set()
 
             def cancel():
+                if not self._confirm_discard_dirty_expert_changes(
+                    expert_profile_state.get("data"),
+                    expert_vars,
+                    "Discard unsaved Expert profile edits and close Settings?",
+                    win,
+                ):
+                    return
                 try:
                     win.destroy()
                 except Exception:
                     pass
                 finally:
                     self._settings_window = None
+                    self._settings_notebook = None
+                    self._settings_tabs = {}
                     done.set()
 
             win.protocol("WM_DELETE_WINDOW", cancel)
@@ -8851,6 +10115,8 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 _show()
             except Exception as e:
                 self._settings_window = None
+                self._settings_notebook = None
+                self._settings_tabs = {}
                 self.controller.log(f"Error opening settings: {e}")
                 self.show_error("Settings Error", f"Could not open Settings:\n{e}")
                 done.set()
@@ -8911,17 +10177,15 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 "$x.CreateTextNode($args[1])) | Out-Null;"
                 "$n = [Windows.UI.Notifications.ToastNotification]::new($x);"
                 "[Windows.UI.Notifications.ToastNotificationManager]"
-                "::CreateToastNotifier('JellyRip.App.1').Show($n);"
+                "::CreateToastNotifier($args[2]).Show($n);"
             )
-            _ps = (
-                shutil.which("powershell")
-                or r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-            )
+            _ps = get_powershell_executable()
             subprocess.Popen(
                 [_ps, "-NoProfile", "-WindowStyle", "Hidden", "-Command", ps,
-                 title, message],
+                 title, message, APP_AUMID],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                shell=False,
                 **({"creationflags": 0x08000000} if sys.platform == "win32" else {}),
             )
         except Exception:
@@ -9029,9 +10293,6 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             btn.config(state=state)
         if hasattr(self, "settings_btn"):
             self.settings_btn.config(state="disabled")
-        ui_editor_btn = self.__dict__.get("ui_editor_btn")
-        if ui_editor_btn is not None:
-            ui_editor_btn.config(state="disabled")
         if hasattr(self, "update_btn"):
             self.update_btn.config(state="disabled")
         if hasattr(self, "abort_btn"):
@@ -9043,13 +10304,10 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             btn.config(state="normal")
         if hasattr(self, "settings_btn"):
             self.settings_btn.config(state="normal")
-        ui_editor_btn = self.__dict__.get("ui_editor_btn")
-        if ui_editor_btn is not None:
-            ui_editor_btn.config(state="normal")
         if hasattr(self, "update_btn"):
             self.update_btn.config(state="normal")
         if hasattr(self, "abort_btn"):
-            self.abort_btn.config(text="ABORT SESSION", state="normal")
+            self.abort_btn.config(text="ABORT SESSION", state="disabled")
 
     def _has_abortable_session(self):
         if getattr(self, "_task_active", False):
@@ -9178,20 +10436,27 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 "Use Smart Rip for this movie disc?\n\n"
                 "Yes = auto-pick main feature\n"
                 "No = manual title selection\n"
-                "Cancel = manual title selection",
+                "Cancel = stop",
                 parent=self,
             )
         )
+        self._debug_ui_event(
+            "movie_mode_prompt",
+            choice=(
+                "cancel" if choice is None else
+                "yes" if choice else
+                "no"
+            ),
+        )
         if choice is None:
-            self.controller.log(
-                "Movie mode prompt closed — defaulting to manual selection."
-            )
-            return self.controller.run_movie_disc
+            self.controller.log("Movie mode prompt cancelled before scan.")
+            return None
         if choice:
             return self.controller.run_smart_rip
         return self.controller.run_movie_disc
 
     def start_task(self, mode):
+        self._debug_ui_event("start_task_enter", mode=mode)
         if self.rip_thread and self.rip_thread.is_alive():
             messagebox.showwarning(
                 "Busy",
@@ -9207,9 +10472,19 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
             )
             return
 
-        src = getattr(self.engine, "_ffprobe_source", "")
-        if src:
-            self.controller.log(f"ffprobe resolved via: {src}")
+        makemkv_src = getattr(self.engine, "_makemkvcon_source", "")
+        makemkv_path = getattr(self.engine, "_resolved_makemkvcon", "")
+        if makemkv_src and makemkv_path:
+            self.controller.log(
+                f"MakeMKV resolved via {makemkv_src}: {makemkv_path}"
+            )
+
+        ffprobe_src = getattr(self.engine, "_ffprobe_source", "")
+        ffprobe_path = getattr(self.engine, "_resolved_ffprobe", "")
+        if ffprobe_src and ffprobe_path:
+            self.controller.log(
+                f"ffprobe resolved via {ffprobe_src}: {ffprobe_path}"
+            )
 
         temp_folder = os.path.normpath(
             self.cfg.get("temp_folder", DEFAULTS["temp_folder"])
@@ -9301,7 +10576,7 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                 except Exception:
                     pass
                 self.after(0, lambda msg=str(e): self._notify_complete(
-                    "JellyRip — Error", f"Rip failed: {msg}"
+                    f"{APP_DISPLAY_NAME} - Error", f"Rip failed: {msg}"
                 ))
             finally:
                 # Restore safe-mode-overridden config keys so Settings shows
@@ -9325,14 +10600,15 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                     is_partial = (not is_full_success) and bool(files)
                     if is_full_success:
                         self.after(0, lambda: self._notify_complete(
-                            "JellyRip", "Rip complete!"
+                            APP_DISPLAY_NAME, "Rip complete!"
                         ))
                     elif is_partial:
                         def handle_partial():
                             accept = self.ask_accept_partial()
                             if accept:
                                 self._notify_complete(
-                                    "JellyRip", "Partial rip accepted. Files and metadata kept."
+                                    APP_DISPLAY_NAME,
+                                    "Partial rip accepted. Files and metadata kept.",
                                 )
                             else:
                                 # Delete session folder and metadata
@@ -9342,20 +10618,23 @@ class JellyRipperGUI(tk.Tk, UIAdapter):
                                     try:
                                         shutil.rmtree(session_dir)
                                         self._notify_complete(
-                                            "JellyRip", "Partial rip deleted. Session and files removed."
+                                            APP_DISPLAY_NAME,
+                                            "Partial rip deleted. Session and files removed.",
                                         )
                                     except Exception as e:
                                         self._notify_complete(
-                                            "JellyRip", f"Error deleting session: {e}"
+                                            APP_DISPLAY_NAME,
+                                            f"Error deleting session: {e}",
                                         )
                                 else:
                                     self._notify_complete(
-                                        "JellyRip", "Session directory not found. Nothing deleted."
+                                        APP_DISPLAY_NAME,
+                                        "Session directory not found. Nothing deleted.",
                                     )
                         self.after(0, handle_partial)
                     else:
                         self.after(0, lambda: self._notify_complete(
-                            "JellyRip", "Rip failed. No files kept."
+                            APP_DISPLAY_NAME, "Rip failed. No files kept."
                         ))
 
         self.rip_thread = threading.Thread(

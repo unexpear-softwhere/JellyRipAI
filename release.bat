@@ -3,14 +3,14 @@ REM ============================================================
 REM  JellyRip AI release pipeline — enforces correct order:
 REM    git-check -> tests -> build -> verify -> push -> publish
 REM
-REM  Usage:  release.bat 1.0.17
+REM  Usage:  release.bat 1.0.18
 REM ============================================================
 setlocal enabledelayedexpansion
 
 set VERSION=%~1
 if "%VERSION%"=="" (
     echo Usage: release.bat ^<version^>
-    echo Example: release.bat 1.0.17
+    echo Example: release.bat 1.0.18
     exit /b 1
 )
 set "RELEASE_BRANCH=ai"
@@ -21,6 +21,8 @@ if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set ISCC_EXE=C:\Program Files (x86)\Inno Setup 6\ISCC.exe
 if not exist "%ISCC_EXE%" set ISCC_EXE=C:\Program Files\Inno Setup 6\ISCC.exe
 if not exist "%ISCC_EXE%" set ISCC_EXE=%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe
+set "ARTIFACT_DIR=dist\ai"
+set "BUILD_DIR=build\ai"
 
 echo.
 echo ========================================
@@ -109,35 +111,37 @@ echo.
 
 REM ---- Step 4: Build exe ----
 echo [4/8] Building JellyRipAI.exe...
-if exist dist rmdir /s /q dist >nul 2>&1
-if exist build rmdir /s /q build >nul 2>&1
-%PYTHON_EXE% -m PyInstaller JellyRip.spec >nul 2>&1
+if exist "%ARTIFACT_DIR%" rmdir /s /q "%ARTIFACT_DIR%" >nul 2>&1
+if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%" >nul 2>&1
+if not exist "%ARTIFACT_DIR%" mkdir "%ARTIFACT_DIR%"
+type nul > "%ARTIFACT_DIR%\.gitkeep"
+%PYTHON_EXE% -m PyInstaller --distpath "%ARTIFACT_DIR%" --workpath "%BUILD_DIR%" JellyRip.spec >nul 2>&1
 if errorlevel 1 (
     echo ABORT: PyInstaller build failed.
     exit /b 1
 )
-if not exist dist\JellyRipAI.exe (
-    echo ABORT: dist\JellyRipAI.exe not found after build.
+if not exist "%ARTIFACT_DIR%\JellyRipAI.exe" (
+    echo ABORT: %ARTIFACT_DIR%\JellyRipAI.exe not found after build.
     exit /b 1
 )
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\stage_ffmpeg_bundle.ps1 >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\stage_ffmpeg_bundle.ps1 -DistDir "%ARTIFACT_DIR%" >nul 2>&1
 if errorlevel 1 (
     echo ABORT: FFmpeg bundle staging failed.
     exit /b 1
 )
-for %%F in (dist\ffmpeg.exe dist\ffprobe.exe dist\ffplay.exe) do (
+for %%F in ("%ARTIFACT_DIR%\ffmpeg.exe" "%ARTIFACT_DIR%\ffprobe.exe" "%ARTIFACT_DIR%\ffplay.exe") do (
     if not exist %%F (
         echo ABORT: %%F is missing; JellyRip AI releases intentionally bundle FFmpeg.
         exit /b 1
     )
 )
-for %%F in (dist\FFmpeg-LICENSE.txt dist\FFmpeg-README.txt) do (
+for %%F in ("%ARTIFACT_DIR%\FFmpeg-LICENSE.txt" "%ARTIFACT_DIR%\FFmpeg-README.txt") do (
     if not exist %%F (
         echo ABORT: %%F is missing; FFmpeg notices must ship with bundled FFmpeg.
         exit /b 1
     )
 )
-echo       dist\JellyRipAI.exe built.
+echo       %ARTIFACT_DIR%\JellyRipAI.exe built.
 echo.
 
 REM ---- Step 5: Build installer ----
@@ -151,26 +155,34 @@ if errorlevel 1 (
     echo ABORT: Installer build failed.
     exit /b 1
 )
-if not exist dist\JellyRipAIInstaller.exe (
-    echo ABORT: dist\JellyRipAIInstaller.exe not found after build.
+if not exist "%ARTIFACT_DIR%\JellyRipAIInstaller.exe" (
+    echo ABORT: %ARTIFACT_DIR%\JellyRipAIInstaller.exe not found after build.
     exit /b 1
 )
-echo       dist\JellyRipAIInstaller.exe built.
+echo       %ARTIFACT_DIR%\JellyRipAIInstaller.exe built.
 echo.
 
 REM ---- Step 6: Verify build outputs ----
 echo [6/8] Verifying build outputs...
-for %%F in (dist\JellyRipAI.exe) do (
-    if %%~zF LSS 1000000 (
-        echo ABORT: JellyRipAI.exe is suspiciously small (%%~zF bytes).
-        exit /b 1
-    )
+set "APP_EXE_SIZE="
+for %%F in (%ARTIFACT_DIR%\JellyRipAI.exe) do set "APP_EXE_SIZE=%%~zF"
+if not defined APP_EXE_SIZE (
+    echo ABORT: Could not determine size for %ARTIFACT_DIR%\JellyRipAI.exe.
+    exit /b 1
 )
-for %%F in (dist\JellyRipAIInstaller.exe) do (
-    if %%~zF LSS 1000000 (
-        echo ABORT: JellyRipAIInstaller.exe is suspiciously small (%%~zF bytes).
-        exit /b 1
-    )
+if !APP_EXE_SIZE! LSS 1000000 (
+    echo ABORT: JellyRipAI.exe is suspiciously small - !APP_EXE_SIZE! bytes.
+    exit /b 1
+)
+set "INSTALLER_EXE_SIZE="
+for %%F in (%ARTIFACT_DIR%\JellyRipAIInstaller.exe) do set "INSTALLER_EXE_SIZE=%%~zF"
+if not defined INSTALLER_EXE_SIZE (
+    echo ABORT: Could not determine size for %ARTIFACT_DIR%\JellyRipAIInstaller.exe.
+    exit /b 1
+)
+if !INSTALLER_EXE_SIZE! LSS 1000000 (
+    echo ABORT: JellyRipAIInstaller.exe is suspiciously small - !INSTALLER_EXE_SIZE! bytes.
+    exit /b 1
 )
 echo       Both executables verified.
 echo.
@@ -187,7 +199,7 @@ echo.
 
 REM ---- Step 8: Create release with assets ----
 echo [8/8] Publishing release %RELEASE_TAG% with assets...
-gh release create %RELEASE_TAG% dist\JellyRipAI.exe dist\JellyRipAIInstaller.exe LICENSE THIRD_PARTY_NOTICES.md dist\FFmpeg-LICENSE.txt dist\FFmpeg-README.txt --title "JellyRip AI v%VERSION% (UNSTABLE)" --notes-file release_notes.txt --prerelease
+gh release create %RELEASE_TAG% "%ARTIFACT_DIR%\JellyRipAI.exe" "%ARTIFACT_DIR%\JellyRipAIInstaller.exe" LICENSE THIRD_PARTY_NOTICES.md "%ARTIFACT_DIR%\FFmpeg-LICENSE.txt" "%ARTIFACT_DIR%\FFmpeg-README.txt" --title "JellyRip AI v%VERSION% (UNSTABLE)" --notes-file release_notes.txt --prerelease
 if errorlevel 1 (
     echo ABORT: gh release create failed.
     exit /b 1

@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Generator, List
+from typing import Any, Generator, List, Mapping, Sequence
 
 _POPEN_FLAGS = {"creationflags": 0x08000000} if _sys.platform == "win32" else {}
 
@@ -20,9 +20,20 @@ from shared.runtime import RIP_ATTEMPT_FLAGS
 from shared.ai_diagnostics import (
     ProcessCapture, diag_exception, diag_process, diag_record, get_diagnostics,
 )
+from shared.disc_memory import (
+    build_disc_memory_record,
+    compare_disc_memory_records,
+)
 
 from config import resolve_ffprobe, resolve_makemkvcon
-from utils.helpers import clean_name
+from controller.naming import build_movie_main_filename
+from utils.helpers import (
+    MakeMKVDrive,
+    clean_name,
+    format_makemkv_drive_label,
+    get_available_drives,
+    parse_makemkv_drive_row,
+)
 from utils.parsing import (
     parse_cli_args,
     parse_duration_to_seconds,
@@ -201,30 +212,57 @@ class RipperEngine:
         with self._abort_lock:
             self.abort_event.clear()
 
+    def _allow_path_tool_resolution(self) -> bool:
+        return (
+            _sys.platform == "win32"
+            and bool(self.cfg.get("opt_allow_path_tool_resolution", False))
+        )
+
     def validate_tools(self) -> tuple[bool, str]:
         """Validate configured MakeMKV and ffprobe paths before starting work."""
         makemkvcon = resolve_makemkvcon(
-            os.path.normpath(self.cfg.get("makemkvcon_path", ""))
+            os.path.normpath(self.cfg.get("makemkvcon_path", "")),
+            allow_path_lookup=self._allow_path_tool_resolution(),
         )
-        ffprobe, ffprobe_source = resolve_ffprobe(
-            os.path.normpath(self.cfg.get("ffprobe_path", ""))
+        ffprobe = resolve_ffprobe(
+            os.path.normpath(self.cfg.get("ffprobe_path", "")),
+            allow_path_lookup=self._allow_path_tool_resolution(),
         )
-        if not os.path.isfile(makemkvcon):
-            return False, (
-                f"MakeMKV not found at:\n{makemkvcon}"
-                f"\n\nPlease check Settings."
-            )
-        if not os.path.isfile(ffprobe):
-            return False, (
-                "ffprobe not found."
-                "\n\nDownload ffmpeg from https://ffmpeg.org and point"
-                "\nSettings -> Paths -> ffprobe folder to its bin directory."
-            )
-        self._resolved_makemkvcon = makemkvcon
+        if not makemkvcon.path:
+            msg = makemkvcon.error or "MakeMKV executable not found."
+            if makemkvcon.suggestion_path:
+                msg += (
+                    "\n\nDetected MakeMKV via "
+                    f"{makemkvcon.suggestion_source}: {makemkvcon.suggestion_path}"
+                    "\nUpdate Settings to use it."
+                )
+            else:
+                msg += "\n\nPlease check Settings."
+            return False, msg
+        if not ffprobe.path:
+            msg = ffprobe.error or "ffprobe executable not found."
+            if ffprobe.suggestion_path:
+                msg += (
+                    "\n\nDetected ffprobe via "
+                    f"{ffprobe.suggestion_source}: {ffprobe.suggestion_path}"
+                    "\nUpdate Settings to use it."
+                )
+            else:
+                msg += (
+                    "\n\nDownload ffmpeg from https://ffmpeg.org and point"
+                    "\nSettings -> Paths -> ffprobe folder to its bin directory."
+                )
+            return False, msg
+        self._resolved_makemkvcon = makemkvcon.path
         self._resolved_makemkvcon_src = os.path.normpath(
             self.cfg.get("makemkvcon_path", "")
         )
-        self._ffprobe_source = ffprobe_source
+        self._makemkvcon_source = makemkvcon.source
+        self._resolved_ffprobe = ffprobe.path
+        self._resolved_ffprobe_src = os.path.normpath(
+            self.cfg.get("ffprobe_path", "")
+        )
+        self._ffprobe_source = ffprobe.source
         return True, ""
 
     def _get_makemkvcon(self) -> str:
@@ -232,10 +270,141 @@ class RipperEngine:
         current = os.path.normpath(self.cfg.get("makemkvcon_path", ""))
         if cached and getattr(self, "_resolved_makemkvcon_src", None) == current:
             return cached
-        resolved = resolve_makemkvcon(current)
-        self._resolved_makemkvcon = resolved
+        resolved = resolve_makemkvcon(
+            current,
+            allow_path_lookup=self._allow_path_tool_resolution(),
+        )
+        self._resolved_makemkvcon = resolved.path
         self._resolved_makemkvcon_src = current
-        return resolved
+        self._makemkvcon_source = resolved.source
+        return resolved.path
+
+    def _get_ffprobe(self) -> str:
+        cached = getattr(self, "_resolved_ffprobe", None)
+        current = os.path.normpath(self.cfg.get("ffprobe_path", ""))
+        if cached and getattr(self, "_resolved_ffprobe_src", None) == current:
+            return cached
+        resolved = resolve_ffprobe(
+            current,
+            allow_path_lookup=self._allow_path_tool_resolution(),
+        )
+        self._resolved_ffprobe = resolved.path
+        self._resolved_ffprobe_src = current
+        self._ffprobe_source = resolved.source
+        return resolved.path
+
+    def _selected_drive_index(self) -> int:
+        return safe_int(self.cfg.get("opt_drive_index", 0))
+
+    def _refresh_drive_probe_state(
+        self,
+        selected_drive: MakeMKVDrive | None,
+        *,
+        missing_reason: str = "",
+    ) -> None:
+        info = dict(getattr(self, "last_drive_info", {}) or {})
+        info["drive_index"] = self._selected_drive_index()
+        if selected_drive is not None:
+            info.update(
+                {
+                    "drive_name": selected_drive.drive_name,
+                    "disc_name": selected_drive.disc_name,
+                    "device_path": selected_drive.device_path,
+                    "visible": selected_drive.visible,
+                    "enabled": selected_drive.enabled,
+                    "flags": selected_drive.flags,
+                    "usability_state": selected_drive.usability_state,
+                }
+            )
+        elif missing_reason:
+            info["usability_state"] = missing_reason
+            info.setdefault("visible", 0)
+            info.setdefault("enabled", 0)
+            info.setdefault("flags", 0)
+        self.last_drive_info = info
+
+    def _probe_selected_drive(self) -> tuple[MakeMKVDrive | None, list[MakeMKVDrive]]:
+        drives = get_available_drives(self._get_makemkvcon(), allow_fallback=False)
+        selected_index = self._selected_drive_index()
+        selected_drive = next(
+            (drive for drive in drives if drive.index == selected_index),
+            None,
+        )
+        self._refresh_drive_probe_state(
+            selected_drive,
+            missing_reason=(
+                "selected drive not detected"
+                if selected_drive is None
+                else ""
+            ),
+        )
+        return selected_drive, drives
+
+    def _wait_for_drive_ready(self, on_log, *, context: str) -> bool:
+        probe_attempts = max(1, int(self.cfg.get("opt_drive_probe_retries", 5) or 5))
+        backoff_base = max(
+            0.25,
+            float(self.cfg.get("opt_drive_probe_backoff_seconds", 1.0) or 1.0),
+        )
+        selected_index = self._selected_drive_index()
+
+        for probe_num in range(1, probe_attempts + 1):
+            if self.abort_event.is_set():
+                return False
+
+            selected_drive, drives = self._probe_selected_drive()
+            if selected_drive is not None and selected_drive.is_accessible:
+                if probe_num > 1:
+                    on_log(
+                        f"Drive probe recovered for {context} on check "
+                        f"{probe_num}/{probe_attempts}: "
+                        f"{format_makemkv_drive_label(selected_drive)} "
+                        f"({selected_drive.usability_state})"
+                    )
+                return True
+
+            if selected_drive is None:
+                if drives:
+                    available = ", ".join(
+                        format_makemkv_drive_label(drive) for drive in drives[:3]
+                    )
+                    detail = (
+                        f"selected drive disc:{selected_index} not listed; "
+                        f"available: {available}"
+                    )
+                else:
+                    detail = "MakeMKV reported no drives"
+            else:
+                detail = (
+                    f"{format_makemkv_drive_label(selected_drive)} "
+                    f"({selected_drive.usability_state})"
+                )
+
+            on_log(
+                f"Drive probe {probe_num}/{probe_attempts} failed for {context}: "
+                f"{detail}"
+            )
+            if probe_num >= probe_attempts:
+                break
+
+            delay_seconds = min(8.0, backoff_base * (2 ** (probe_num - 1)))
+            on_log(
+                f"Waiting {delay_seconds:.1f}s and refreshing drives before retrying..."
+            )
+            time.sleep(delay_seconds)
+
+        diag_record(
+            "warning",
+            "drive_probe_failed",
+            "Drive stayed unavailable before rip launch",
+            details={
+                "context": context,
+                "drive_index": selected_index,
+                "probe_attempts": probe_attempts,
+                "drive_info": dict(getattr(self, "last_drive_info", {}) or {}),
+            },
+        )
+        return False
 
     def cleanup_partial_files(self, root_path, on_log):
         """Remove stale `.partial` files without touching completed MKVs."""
@@ -306,6 +475,12 @@ class RipperEngine:
         self.last_drive_info: dict = {}
         self.last_process_issue_summary: MakeMKVIssueSummary | None = None
         self.last_scan_issue_summary: MakeMKVIssueSummary | None = None
+        self._resolved_makemkvcon = ""
+        self._resolved_makemkvcon_src = ""
+        self._makemkvcon_source = ""
+        self._resolved_ffprobe = ""
+        self._resolved_ffprobe_src = ""
+        self._ffprobe_source = ""
         self._ffprobe_cache = {}  # LRU cache with 1000-entry limit
         self._ffprobe_cache_lock = threading.Lock()
         self._ffprobe_cache_max_size = 1000
@@ -314,6 +489,8 @@ class RipperEngine:
         self._last_scan_target = None
         self.last_disc_info = {}
         self.last_classification: list = []
+        self.last_disc_memory: dict[str, Any] | None = None
+        self.current_disc_memory: dict[str, Any] | None = None
 
     @staticmethod
     def _io_path(path):
@@ -434,7 +611,8 @@ class RipperEngine:
                     )
 
     def write_temp_metadata(self, rip_path, title, disc_number,
-                            season=None, year=None, media_type=None,
+                            season=None, year=None, edition="",
+                            media_type=None,
                             selected_titles=None, episode_names=None,
                             episode_numbers=None, dest_folder=None,
                             completed_titles=None, phase="ripping"):
@@ -442,6 +620,7 @@ class RipperEngine:
         meta = {
             "title":            title,
             "year":             year,
+            "edition":          edition,
             "media_type":       media_type,
             "season":           season,
             "selected_titles":  list(selected_titles or []),
@@ -494,6 +673,121 @@ class RipperEngine:
                 return json.load(f)
         except Exception:
             return None
+
+    def _disc_memory_path(self) -> str:
+        from shared.runtime import get_config_dir
+
+        return os.path.join(get_config_dir(), "last_disc_memory.json")
+
+    def build_disc_memory_record(
+        self,
+        titles: Sequence[Mapping[str, Any]],
+        *,
+        disc_info: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        return build_disc_memory_record(
+            titles,
+            disc_info=disc_info or self.last_disc_info,
+        )
+
+    def read_last_disc_memory(self) -> dict[str, Any] | None:
+        path = self._disc_memory_path()
+        try:
+            with open(self._io_path(path), encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return None
+
+        if not isinstance(data, dict):
+            return None
+        self.last_disc_memory = dict(data)
+        return dict(data)
+
+    def write_last_disc_memory(self, record: Mapping[str, Any]) -> None:
+        payload = dict(record)
+        if not payload.get("identity_hash") or not payload.get("structure_hash"):
+            return
+        self._atomic_write_json(self._disc_memory_path(), payload)
+        self.last_disc_memory = payload
+
+    def remember_last_disc_scan(
+        self,
+        titles: Sequence[Mapping[str, Any]],
+        *,
+        disc_info: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        record = self.build_disc_memory_record(
+            titles,
+            disc_info=disc_info,
+        )
+        if not record:
+            return None
+        self.current_disc_memory = dict(record)
+        return record
+
+    def commit_current_disc_memory(
+        self,
+        *,
+        preserve_session_info: bool = False,
+    ) -> dict[str, Any] | None:
+        current = dict(self.current_disc_memory or {})
+        if not current:
+            return None
+
+        if preserve_session_info:
+            previous = self.read_last_disc_memory()
+            match = compare_disc_memory_records(previous, current)
+            if match and isinstance(previous, Mapping):
+                previous_session = previous.get("session_info")
+                if isinstance(previous_session, Mapping):
+                    current["session_info"] = dict(previous_session)
+
+        self.write_last_disc_memory(current)
+        return current
+
+    def update_last_disc_session_state(
+        self,
+        session_info: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        base = dict(
+            self.last_disc_memory
+            or self.read_last_disc_memory()
+            or self.current_disc_memory
+            or {}
+        )
+        if not base:
+            return None
+
+        existing = base.get("session_info")
+        merged_session: dict[str, Any] = (
+            dict(existing) if isinstance(existing, Mapping) else {}
+        )
+        for key, value in session_info.items():
+            merged_session[str(key)] = value
+
+        base["session_info"] = merged_session
+        self.write_last_disc_memory(base)
+        return base
+
+    def match_last_disc_memory(
+        self,
+        titles: Sequence[Mapping[str, Any]],
+        *,
+        disc_info: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        current = self.current_disc_memory or self.build_disc_memory_record(
+            titles,
+            disc_info=disc_info,
+        )
+        previous = self.read_last_disc_memory()
+        match = compare_disc_memory_records(previous, current)
+        if not match or not previous or not current:
+            return None
+        return {
+            "match_type": match["match_type"],
+            "saved": previous,
+            "current": current,
+        }
 
     def delete_temp_metadata(self, rip_path, on_log=None):
         """Delete session JSON sidecars from a temp folder after success."""
@@ -555,6 +849,7 @@ class RipperEngine:
         self.last_drive_info = {}
         self.last_scan_issue_summary = None
         _msg_lines: list[str] = []
+        _drive_rows = []
         _scan_cmd = (
             [makemkvcon] + global_args +
             ["-r", "info", disc_target] + minlength_args + info_args
@@ -613,6 +908,10 @@ class RipperEngine:
                         disc_info["lang_name"] = val
                     elif attr == 32:
                         disc_info["volume_id"] = val
+                elif line.startswith("DRV:"):
+                    drive_row = parse_makemkv_drive_row(line)
+                    if drive_row is not None:
+                        _drive_rows.append(drive_row)
                 elif line.startswith("TINFO:"):
                     parts = line[6:].split(",", 3)
                     if len(parts) < 4:
@@ -845,7 +1144,11 @@ class RipperEngine:
         try:
             from engine.scan_ops import _parse_drive_info
 
-            self.last_drive_info = _parse_drive_info(_msg_lines)
+            self.last_drive_info = _parse_drive_info(
+                _msg_lines,
+                drive_rows=_drive_rows,
+                selected_drive_index=safe_int(self.cfg.get("opt_drive_index", 0)),
+            )
         except Exception:
             self.last_drive_info = {}
 
@@ -860,6 +1163,10 @@ class RipperEngine:
             for t in sorted(result, key=lambda t: int(t.get("id", -1)))
         )
         self.last_disc_info = disc_info
+        self.remember_last_disc_scan(
+            result,
+            disc_info=disc_info,
+        )
 
         if disc_info.get("title"):
             on_log(f"Disc title (CINFO): {disc_info['title']}")
@@ -1604,9 +1911,7 @@ class RipperEngine:
         pathname order for determinism. Unknown-duration files are appended
         at the end and sorted largest-first.
         """
-        ffprobe = resolve_ffprobe(
-            os.path.normpath(self.cfg["ffprobe_path"])
-        )[0]
+        ffprobe = self._get_ffprobe()
         abort   = self.abort_event
         results = []
         total   = len(mkv_files)
@@ -1700,9 +2005,7 @@ class RipperEngine:
             if cached is not None:
                 return cached
 
-        ffprobe_exe = ffprobe or resolve_ffprobe(
-            os.path.normpath(self.cfg["ffprobe_path"])
-        )[0]
+        ffprobe_exe = ffprobe or self._get_ffprobe()
         mb = stat.st_size // (1024**2)
         dur = -1.0
         out = ""
@@ -1789,9 +2092,7 @@ class RipperEngine:
     def _quick_ffprobe_ok(self, path, on_log):
         """Fast container integrity check: ffprobe must return duration > 0."""
         try:
-            ffprobe = resolve_ffprobe(
-                os.path.normpath(self.cfg["ffprobe_path"])
-            )[0]
+            ffprobe = self._get_ffprobe()
             duration, _mb = self._probe_file_duration_and_size(
                 path, ffprobe=ffprobe, honor_abort=False, on_log=on_log
             )
@@ -1809,7 +2110,13 @@ class RipperEngine:
             )
             return False
 
-    def move_file_atomic(self, source, final_path, on_log):
+    def move_file_atomic(
+        self,
+        source,
+        final_path,
+        on_log,
+        replace_existing=False,
+    ):
         """
         Move a file safely using copy+rename (atomic move).
         Preserves timestamps via shutil.copystat.
@@ -1847,10 +2154,14 @@ class RipperEngine:
                 on_log(f"ERROR checking source stability: {e}")
                 return False
 
-        if os.path.exists(final_path):
+        if os.path.exists(final_path) and not replace_existing:
             final_path = self.unique_path(final_path)
             on_log(
                 f"Destination exists. Using unique path: {final_path}"
+            )
+        elif os.path.exists(final_path):
+            on_log(
+                f"Destination exists. Replacing: {final_path}"
             )
 
         verify_retries = max(
@@ -1923,7 +2234,7 @@ class RipperEngine:
                 shutil.copystat(io_source, io_temp_dest)
             except Exception:
                 pass
-            if os.path.exists(io_final_path):
+            if os.path.exists(io_final_path) and not replace_existing:
                 new_final = self.unique_path(final_path)
                 on_log(
                     "Destination appeared during move; "
@@ -2000,7 +2311,8 @@ class RipperEngine:
                    real_names, extra_indices, is_tv, title, dest_folder,
                    extras_folder, season, year, extra_counter,
                    on_progress, on_log,
-                   bonus_indices=None, bonus_folder=None):
+                   bonus_indices=None, bonus_folder=None,
+                   replace_main_existing=False, edition=""):
         """Move selected main/extras/bonus files into final library structure.
 
         extra_indices: None = keep all non-main as extras,
@@ -2068,14 +2380,23 @@ class RipperEngine:
                         f"S{season:02d}E{ep_num:02d} - {ep_name}.mkv"
                     )
                 else:
-                    name = f"{clean_name(title)} ({year}).mkv"
+                    name = build_movie_main_filename(
+                        clean_name(title),
+                        year,
+                        str(edition or "").strip(),
+                    )
 
-                final_path = self.unique_path(
-                    os.path.join(dest_folder, name)
-                )
+                final_path = os.path.join(dest_folder, name)
+                if not replace_main_existing:
+                    final_path = self.unique_path(final_path)
                 on_log(f"Moving: {os.path.basename(source)}")
                 on_log(f"    To: {final_path}")
-                ok = self.move_file_atomic(source, final_path, on_log)
+                ok = self.move_file_atomic(
+                    source,
+                    final_path,
+                    on_log,
+                    replace_existing=bool(replace_main_existing),
+                )
                 if not ok:
                     return False, extra_counter, moved_paths
 

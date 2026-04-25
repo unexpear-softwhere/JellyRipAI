@@ -46,14 +46,16 @@ class OpenAIProvider(BaseProvider):
     def is_available(self) -> bool:
         return bool(self._api_key)
 
-    def _chat(self, system: str, user: str, max_tokens: int, timeout: float) -> str:
+    def _chat_completion(
+        self,
+        messages: list[dict[str, str]],
+        max_tokens: int,
+        timeout: float,
+    ) -> str:
         body = json.dumps({
             "model": self._model,
             "max_tokens": max_tokens,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": messages,
         }).encode("utf-8")
         req = urllib.request.Request(
             f"{self._BASE_URL}/chat/completions",
@@ -74,7 +76,14 @@ class OpenAIProvider(BaseProvider):
     def test_connection(self, timeout: float = 10.0) -> ConnectionResult:
         try:
             start = time.time()
-            self._chat("You are a test.", "ping", max_tokens=5, timeout=timeout)
+            self._chat_completion(
+                [
+                    {"role": "system", "content": "You are a test."},
+                    {"role": "user", "content": "ping"},
+                ],
+                max_tokens=5,
+                timeout=timeout,
+            )
             ms = (time.time() - start) * 1000
             return ConnectionResult(
                 success=True,
@@ -84,10 +93,28 @@ class OpenAIProvider(BaseProvider):
         except Exception as e:
             return ConnectionResult(success=False, error=str(e))
 
+    def chat(self, messages: list[dict[str, str]],
+             max_tokens: int = 800, timeout: float = 30.0) -> str:
+        return self._chat_completion(list(messages or []), max_tokens, timeout)
+
     def diagnose(self, payload_json: str, system_prompt: str,
                  max_tokens: int = 800, timeout: float = 30.0) -> str:
-        return self._chat(system_prompt, payload_json, max_tokens, timeout)
+        return self._chat_completion(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": payload_json},
+            ],
+            max_tokens,
+            timeout,
+        )
 
     def summarize(self, payload_json: str, system_prompt: str,
                   max_tokens: int = 1200, timeout: float = 30.0) -> str:
-        return self._chat(system_prompt, payload_json, max_tokens, timeout)
+        return self._chat_completion(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": payload_json},
+            ],
+            max_tokens,
+            timeout,
+        )

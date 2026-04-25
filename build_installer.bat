@@ -6,18 +6,22 @@ if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
 set ISCC_EXE=C:\Program Files (x86)\Inno Setup 6\ISCC.exe
 if not exist "%ISCC_EXE%" set ISCC_EXE=C:\Program Files\Inno Setup 6\ISCC.exe
 if not exist "%ISCC_EXE%" set ISCC_EXE=%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe
+set "ARTIFACT_DIR=dist\ai"
+set "BUILD_DIR=build\ai"
 
-if exist dist rmdir /s /q dist >nul 2>&1
-if exist build rmdir /s /q build >nul 2>&1
+if exist "%ARTIFACT_DIR%" rmdir /s /q "%ARTIFACT_DIR%" >nul 2>&1
+if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%" >nul 2>&1
+if not exist "%ARTIFACT_DIR%" mkdir "%ARTIFACT_DIR%"
+type nul > "%ARTIFACT_DIR%\.gitkeep"
 
 echo Building JellyRipAI.exe...
-%PYTHON_EXE% -m PyInstaller JellyRip.spec
+%PYTHON_EXE% -m PyInstaller --distpath "%ARTIFACT_DIR%" --workpath "%BUILD_DIR%" JellyRip.spec
 if errorlevel 1 (
     echo EXE build failed.
     exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\stage_ffmpeg_bundle.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\stage_ffmpeg_bundle.ps1 -DistDir "%ARTIFACT_DIR%"
 if errorlevel 1 (
     echo FFmpeg bundle staging failed.
     exit /b 1
@@ -38,10 +42,10 @@ if errorlevel 1 (
 
 echo.
 echo Build complete:
-echo   dist\JellyRipAI.exe
-echo   dist\JellyRipAIInstaller.exe
-echo   dist\ffmpeg.exe
-echo   dist\ffprobe.exe
-echo   dist\ffplay.exe
-echo   dist\FFmpeg-LICENSE.txt
-echo   dist\FFmpeg-README.txt
+echo   %ARTIFACT_DIR%\JellyRipAI.exe
+echo   %ARTIFACT_DIR%\JellyRipAIInstaller.exe
+echo   %ARTIFACT_DIR%\ffmpeg.exe
+echo   %ARTIFACT_DIR%\ffprobe.exe
+echo   %ARTIFACT_DIR%\ffplay.exe
+echo   %ARTIFACT_DIR%\FFmpeg-LICENSE.txt
+echo   %ARTIFACT_DIR%\FFmpeg-README.txt

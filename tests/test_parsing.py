@@ -1,4 +1,4 @@
-﻿"""Parsing regression tests focused on malformed real-world inputs."""
+"""Parsing regression tests focused on malformed real-world inputs."""
 
 import os
 import sys

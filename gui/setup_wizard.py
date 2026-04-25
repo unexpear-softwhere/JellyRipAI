@@ -18,6 +18,7 @@ from tkinter import ttk
 from typing import Sequence
 
 from gui.theme import CLASSIFICATION_LABEL_COLORS, dialog_palette
+from shared.runtime import APP_DISPLAY_NAME
 from utils.classifier import ClassifiedTitle
 
 # ---------------------------------------------------------------------------
@@ -72,7 +73,142 @@ class OutputPlan:
     base_folder: str = ""
     main_file_label: str = ""
     extras: dict[str, list[str]] = field(default_factory=dict)
+    suggested_base_folder: str = ""
+    destination_edited: bool = False
+    action: str = "cancel"
     confirmed: bool = False
+
+
+def show_same_disc_prompt(
+    parent: tk.Misc,
+    context_summary: str = "",
+) -> str:
+    """Ask how to handle a disc that matches the previous session."""
+
+    result = ["cancel"]
+
+    win = tk.Toplevel(parent)
+    win.title("Same Disc Detected")
+    win.configure(bg=_BG2)
+    win.resizable(False, False)
+    win.transient(parent.winfo_toplevel())
+    win.grab_set()
+    win.focus_force()
+
+    tk.Label(
+        win,
+        text="Same Disc Detected",
+        bg=_BG2,
+        fg=_ACCENT,
+        font=("Segoe UI", 14, "bold"),
+    ).pack(pady=(18, 4), padx=20, anchor="w")
+
+    tk.Label(
+        win,
+        text="This appears to be the same disc as your last session.\nWhat do you want to do?",
+        bg=_BG2,
+        fg=_FG,
+        font=("Segoe UI", 10),
+        justify="left",
+        anchor="w",
+        wraplength=440,
+    ).pack(padx=20, anchor="w")
+
+    if context_summary:
+        tk.Label(
+            win,
+            text=context_summary,
+            bg=_BG2,
+            fg=_FG_DIM,
+            font=("Segoe UI", 9),
+            justify="left",
+            anchor="w",
+            wraplength=440,
+        ).pack(padx=20, pady=(8, 0), anchor="w")
+
+    _section_header(win, "OPTIONS")
+
+    options = tk.Frame(win, bg=_BG2)
+    options.pack(fill="x", padx=20, pady=(8, 4))
+
+    tk.Label(
+        options,
+        text="Continue with previous info: reuse saved identity and selections when available.",
+        bg=_BG2,
+        fg=_FG_DIM,
+        font=("Segoe UI", 9),
+        justify="left",
+        anchor="w",
+        wraplength=440,
+    ).pack(fill="x", pady=(0, 6))
+    tk.Label(
+        options,
+        text="Start fresh: treat this as a new session and ask everything again.",
+        bg=_BG2,
+        fg=_FG_DIM,
+        font=("Segoe UI", 9),
+        justify="left",
+        anchor="w",
+        wraplength=440,
+    ).pack(fill="x", pady=(0, 6))
+    tk.Label(
+        options,
+        text="Cancel: stop now without changing the saved previous session info.",
+        bg=_BG2,
+        fg=_FG_DIM,
+        font=("Segoe UI", 9),
+        justify="left",
+        anchor="w",
+        wraplength=440,
+    ).pack(fill="x")
+
+    tk.Frame(win, bg=_BG3, height=1).pack(fill="x", padx=0, pady=(16, 0))
+    btn_row = tk.Frame(win, bg=_BG2)
+    btn_row.pack(pady=14, padx=20)
+
+    def _finish(choice: str) -> None:
+        result[0] = choice
+        win.destroy()
+
+    tk.Button(
+        btn_row,
+        text="Continue with previous info",
+        command=lambda: _finish("continue"),
+        bg=_GREEN,
+        fg=_COLORS["primary_button_fg"],
+        font=("Segoe UI", 10, "bold"),
+        relief="flat",
+        padx=8,
+        pady=5,
+    ).pack(side="left", padx=(0, 6))
+    tk.Button(
+        btn_row,
+        text="Start fresh",
+        command=lambda: _finish("fresh"),
+        bg=_ACCENT,
+        fg=_COLORS["primary_button_fg"],
+        font=("Segoe UI", 10, "bold"),
+        relief="flat",
+        padx=8,
+        pady=5,
+    ).pack(side="left", padx=(0, 6))
+    tk.Button(
+        btn_row,
+        text="Cancel",
+        command=lambda: _finish("cancel"),
+        bg=_CANCEL_BG,
+        fg=_COLORS["secondary_button_fg"],
+        font=("Segoe UI", 10),
+        relief="flat",
+        padx=8,
+        pady=5,
+    ).pack(side="left")
+
+    _center_over(win, parent)
+    win.bind("<Escape>", lambda _e: _finish("cancel"))
+    win.protocol("WM_DELETE_WINDOW", lambda: _finish("cancel"))
+    win.wait_window()
+    return result[0]
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +251,29 @@ def _format_size(size_bytes: float) -> str:
     return f"{size_bytes / (1024 ** 2):.0f} MB"
 
 
+def _build_content_selection(
+    classified: Sequence[ClassifiedTitle],
+    checked_title_ids: set[int],
+) -> ContentSelection:
+    """Build a content-selection model from checked title ids."""
+    main_ids: list[int] = []
+    extra_ids: list[int] = []
+    skip_ids: list[int] = []
+
+    for ct in classified:
+        tid = ct.title_id
+        if tid not in checked_title_ids:
+            skip_ids.append(tid)
+        elif ct.label == "MAIN":
+            main_ids.append(tid)
+        else:
+            extra_ids.append(tid)
+
+    return ContentSelection(
+        main_title_ids=main_ids,
+        extra_title_ids=extra_ids,
+        skip_title_ids=skip_ids,
+    )
 # ---------------------------------------------------------------------------
 # Step 1: Scan Results
 # ---------------------------------------------------------------------------
@@ -126,8 +285,7 @@ def show_scan_results(
 ) -> str | None:
     """Show scan + classification results.
 
-    Returns "movie", "tv", "manual_movie", or "manual_tv",
-    or None if cancelled.
+    Returns "movie", "tv", or "standard", or None if cancelled.
     """
 
     result: list[str | None] = [None]
@@ -146,7 +304,7 @@ def show_scan_results(
         font=("Segoe UI", 14, "bold"),
     ).pack(pady=(18, 4), padx=20, anchor="w")
     tk.Label(
-        win, text="JellyRip has scanned and classified the disc titles.",
+        win, text=f"{APP_DISPLAY_NAME} has scanned and classified the disc titles.",
         bg=_BG2, fg=_FG_DIM,
         font=("Segoe UI", 10),
     ).pack(padx=20, anchor="w")
@@ -155,10 +313,37 @@ def show_scan_results(
     if drive_info:
         disc_type = drive_info.get("disc_type")
         libre = drive_info.get("libre_drive")
-        if disc_type or libre:
+        drive_name = str(drive_info.get("drive_name", "") or "").strip()
+        disc_name = str(drive_info.get("disc_name", "") or "").strip()
+        device_path = str(drive_info.get("device_path", "") or "").strip()
+        usability_state = str(drive_info.get("usability_state", "") or "").strip()
+        if disc_type or libre or drive_name or disc_name or device_path or usability_state:
             _section_header(win, "DRIVE STATUS")
             info_frame = tk.Frame(win, bg=_BG2)
             info_frame.pack(fill="x", padx=24, pady=(4, 0))
+            if drive_name:
+                drive_text = f"Drive: {drive_name}"
+                if device_path:
+                    drive_text += f" [{device_path}]"
+                tk.Label(
+                    info_frame, text=drive_text,
+                    bg=_BG2, fg=_FG, font=("Segoe UI", 10), anchor="w",
+                ).pack(fill="x")
+            elif device_path:
+                tk.Label(
+                    info_frame, text=f"Drive path: {device_path}",
+                    bg=_BG2, fg=_FG, font=("Segoe UI", 10), anchor="w",
+                ).pack(fill="x")
+            if disc_name:
+                tk.Label(
+                    info_frame, text=f"Disc label: {disc_name}",
+                    bg=_BG2, fg=_FG, font=("Segoe UI", 10), anchor="w",
+                ).pack(fill="x")
+            if usability_state:
+                tk.Label(
+                    info_frame, text=f"MakeMKV state: {usability_state}",
+                    bg=_BG2, fg=_FG_DIM, font=("Segoe UI", 10), anchor="w",
+                ).pack(fill="x")
             if disc_type:
                 tk.Label(
                     info_frame, text=f"Disc type: {disc_type}",
@@ -275,13 +460,8 @@ def show_scan_results(
     type_frame = tk.Frame(win, bg=_BG2)
     type_frame.pack(fill="x", padx=24, pady=(8, 0))
 
-    manual_picker_var = tk.BooleanVar(value=False)
-
     def _select(media_type: str) -> None:
-        if manual_picker_var.get():
-            result[0] = f"manual_{media_type}"
-        else:
-            result[0] = media_type
+        result[0] = media_type
         win.destroy()
 
     def _cancel() -> None:
@@ -302,30 +482,13 @@ def show_scan_results(
         font=("Segoe UI", 12, "bold"),
         width=14, relief="flat",
     ).pack(side="left")
-
-    _section_header(win, "ADVANCED")
-    advanced_frame = tk.Frame(win, bg=_BG2)
-    advanced_frame.pack(fill="x", padx=24, pady=(8, 0))
-    tk.Checkbutton(
-        advanced_frame,
-        text="Use manual title picker (legacy flow)",
-        variable=manual_picker_var,
-        bg=_BG2,
-        fg=_FG,
-        selectcolor=_BG3,
-        activebackground=_BG2,
-        activeforeground=_FG,
-        font=("Segoe UI", 10),
-        anchor="w",
-    ).pack(anchor="w")
-    tk.Label(
-        advanced_frame,
-        text="Use this only when the guided content mapping is not what you want.",
-        bg=_BG2,
-        fg=_FG_DIM,
-        font=("Segoe UI", 9),
-        anchor="w",
-    ).pack(fill="x", pady=(4, 0))
+    tk.Button(
+        type_frame, text="Standard",
+        command=lambda: _select("standard"),
+        bg=_BG3, fg=_FG,
+        font=("Segoe UI", 12, "bold"),
+        width=14, relief="flat",
+    ).pack(side="left", padx=(12, 0))
 
     # Cancel
     tk.Frame(win, bg=_BG3, height=1).pack(fill="x", padx=0, pady=(16, 0))
@@ -480,31 +643,17 @@ def show_content_mapping(
     btn_row.pack(pady=14, padx=20)
 
     def _submit() -> None:
-        main_ids: list[int] = []
-        extra_ids: list[int] = []
-        skip_ids: list[int] = []
+        checked_title_ids = {
+            ct.title_id
+            for ct in classified
+            if check_vars[ct.title_id].get()
+        }
+        selection = _build_content_selection(classified, checked_title_ids)
 
-        for ct in classified:
-            tid = ct.title_id
-            checked = check_vars[tid].get()
-            if not checked:
-                skip_ids.append(tid)
-            elif ct.label == "MAIN":
-                main_ids.append(tid)
-            elif ct.label in ("EXTRA", "UNKNOWN"):
-                extra_ids.append(tid)
-            else:
-                # DUPLICATE that user explicitly checked
-                extra_ids.append(tid)
-
-        if not main_ids and not extra_ids:
+        if not selection.main_title_ids and not selection.extra_title_ids:
             return  # nothing selected
 
-        result[0] = ContentSelection(
-            main_title_ids=main_ids,
-            extra_title_ids=extra_ids,
-            skip_title_ids=skip_ids,
-        )
+        result[0] = selection
         win.destroy()
 
     def _cancel() -> None:
@@ -694,9 +843,21 @@ def show_output_plan(
     base_folder: str,
     main_label: str,
     extras_map: dict[str, list[str]],
+    detail_lines: list[str] | None = None,
+    header_text: str = "Step 5: Output Plan",
+    subtitle_text: str = (
+        f"This is exactly what {APP_DISPLAY_NAME} will create. No guessing, no surprises."
+    ),
+    confirm_text: str = "Start Rip",
+    *,
+    suggested_base_folder: str | None = None,
 ) -> bool:
     """Show the planned output folder structure. Returns True to confirm, False to cancel."""
 
+    suggested_folder = os.path.normpath(
+        suggested_base_folder or base_folder or ""
+    )
+    current_folder = os.path.normpath(base_folder or suggested_folder)
     result: list[bool] = [False]
 
     win = tk.Toplevel(parent)
@@ -708,19 +869,32 @@ def show_output_plan(
 
     # Header
     tk.Label(
-        win, text="Step 5: Output Plan",
+        win, text=header_text,
         bg=_BG2, fg=_ACCENT,
         font=("Segoe UI", 14, "bold"),
     ).pack(pady=(18, 4), padx=20, anchor="w")
     tk.Label(
-        win, text="This is exactly what JellyRip will create. No guessing, no surprises.",
+        win, text=subtitle_text,
         bg=_BG2, fg=_FG_DIM,
         font=("Segoe UI", 10),
     ).pack(padx=20, anchor="w")
 
+    if detail_lines:
+        _section_header(win, "SESSION SUMMARY")
+        for line in detail_lines:
+            tk.Label(
+                win,
+                text=f"  {line}",
+                bg=_BG2,
+                fg=_FG,
+                font=("Segoe UI", 10),
+                justify="left",
+                anchor="w",
+            ).pack(fill="x", padx=20, pady=(2, 0))
+
     _section_header(win, "FOLDER STRUCTURE")
 
-    tree_lines = build_output_tree(base_folder, main_label, extras_map)
+    tree_lines = build_output_tree(current_folder, main_label, extras_map)
 
     tree_frame = tk.Frame(win, bg=_BG)
     tree_frame.pack(fill="both", expand=True, padx=20, pady=(6, 4))
@@ -739,10 +913,11 @@ def show_output_plan(
     tree_text.configure(state="disabled")
     tree_text.pack(fill="both", expand=True)
 
-    # Destination path
     tk.Label(
-        win, text=f"Destination: {base_folder}",
-        bg=_BG2, fg=_FG_DIM,
+        win,
+        text=f"Destination: {current_folder}",
+        bg=_BG2,
+        fg=_FG_DIM,
         font=("Segoe UI", 9),
     ).pack(padx=20, pady=(4, 0), anchor="w")
 
@@ -767,7 +942,7 @@ def show_output_plan(
         width=10, relief="flat",
     ).pack(side="left", padx=(0, 8))
     tk.Button(
-        btn_row, text="Start Rip",
+        btn_row, text=confirm_text,
         command=_confirm,
         bg=_GREEN, fg=_COLORS["primary_button_fg"],
         font=("Segoe UI", 12, "bold"),

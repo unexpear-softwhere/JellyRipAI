@@ -1,6 +1,12 @@
-# Placeholder for dialogs related to transcoding pipeline (e.g., per-job override, log viewing)
-# To be implemented with actual GUI framework
+"""Shared modal dialog helpers."""
 
-# Example structure:
-# - Per-job override dialog
-# - View log dialog
+from __future__ import annotations
+
+from tkinter import messagebox
+
+
+def ask_yes_no(title: str, message: str, *, parent=None, icon: str | None = None) -> bool:
+    kwargs = {"parent": parent}
+    if icon:
+        kwargs["icon"] = icon
+    return bool(messagebox.askyesno(title, message, **kwargs))

@@ -21,6 +21,7 @@ from typing import Any, Callable
 import re
 
 from gui.theme import dialog_palette
+from shared.runtime import APP_DISPLAY_NAME
 
 # Style constants matching the shared app theme
 _COLORS = dialog_palette()
@@ -272,7 +273,7 @@ class AIProviderDialog:
         ).pack(fill="x", padx=16, pady=(14, 2))
         tk.Label(
             win,
-            text="Configure which AI backends JellyRip can use for diagnostics.",
+            text=f"Configure which AI backends {APP_DISPLAY_NAME} can use for diagnostics.",
             bg=_BG, fg=_FG_DIM,
             font=("Segoe UI", 10),
         ).pack(fill="x", padx=16, pady=(0, 10))

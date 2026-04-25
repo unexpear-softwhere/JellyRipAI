@@ -153,6 +153,24 @@ class LocalProvider(BaseProvider):
             result = json.loads(resp.read())
         return result.get("response", "(no response)")
 
+    def _chat(self, messages: list[dict[str, str]], max_tokens: int, timeout: float) -> str:
+        actual_model = self._require_model_name()
+        body = json.dumps({
+            "model": actual_model,
+            "messages": list(messages or []),
+            "stream": False,
+            "options": {"num_predict": max_tokens},
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self._base_url}/api/chat",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            result = json.loads(resp.read())
+        return result.get("message", {}).get("content", "(no response)")
+
     def test_connection(self, timeout: float = 10.0) -> ConnectionResult:
         try:
             # First check if Ollama is reachable
@@ -185,6 +203,10 @@ class LocalProvider(BaseProvider):
             )
         except Exception as e:
             return ConnectionResult(success=False, error=str(e))
+
+    def chat(self, messages: list[dict[str, str]],
+             max_tokens: int = 800, timeout: float = 20.0) -> str:
+        return self._chat(messages, max_tokens, timeout)
 
     def diagnose(self, payload_json: str, system_prompt: str,
                  max_tokens: int = 800, timeout: float = 20.0) -> str:

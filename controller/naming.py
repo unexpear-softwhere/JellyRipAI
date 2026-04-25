@@ -7,6 +7,8 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import Literal, TypeAlias
 
+from utils.helpers import clean_name
+
 NamingMode = Literal["disc-title", "disc-title+timestamp", "timestamp"]
 ConfigLike: TypeAlias = Mapping[str, object]
 TitleLike: TypeAlias = Mapping[str, object]
@@ -85,16 +87,34 @@ def parse_metadata_id(raw: str | None, provider: str | None = None) -> str:
     return f"[{normalized_provider}id-{value}]"
 
 
+def build_movie_base_name(
+    title_clean: str,
+    year: str | int,
+    edition: str = "",
+) -> str:
+    base = f"{title_clean} ({year})"
+    cleaned_edition = clean_name(edition).strip() if edition else ""
+    if cleaned_edition:
+        base = f"{base} - {cleaned_edition}"
+    return base
+
+
+def build_movie_main_filename(
+    title_clean: str,
+    year: str | int,
+    edition: str = "",
+) -> str:
+    return f"{build_movie_base_name(title_clean, year, edition)}.mkv"
+
+
 def build_movie_folder_name(
     title_clean: str,
     year: str | int,
     metadata_id: str = "",
     edition: str = "",
 ) -> str:
+    base = build_movie_base_name(title_clean, year, edition)
     tag  = parse_metadata_id(metadata_id)
-    base = f"{title_clean} ({year})"
-    if edition:
-        base = f"{base} - {edition}"
     return f"{base} {tag}" if tag else base
 
 

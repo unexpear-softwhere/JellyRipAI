@@ -3,6 +3,8 @@
 from collections.abc import Callable
 from typing import Protocol, TypeAlias
 
+from shared.ai_profile import DEFAULT_AI_PROFILE
+
 
 class GuiCallbacks(Protocol):
     def append_log(self, msg: str) -> None: ...
@@ -26,7 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-__version__ = "1.0.17"
+__version__ = "1.0.18"
 APP_VARIANT = "ai"
 APP_DISPLAY_NAME = "JellyRip AI"
 APP_EXE_BASENAME = "JellyRipAI"
@@ -82,9 +84,14 @@ _DEFAULT_MOVIES = (
     if platform.system() == "Windows"
     else os.path.expanduser("~/Videos/Movies")
 )
+_DEFAULT_MAKEMKVCON = (
+    r"C:\Program Files (x86)\MakeMKV\makemkvcon64.exe"
+    if platform.system() == "Windows" and os.environ.get("ProgramW6432")
+    else r"C:\Program Files (x86)\MakeMKV\makemkvcon.exe"
+)
 
 DEFAULTS: dict[str, ConfigScalar] = {
-    "makemkvcon_path": r"C:\Program Files (x86)\MakeMKV\makemkvcon.exe",
+    "makemkvcon_path": _DEFAULT_MAKEMKVCON,
     "ffprobe_path": "",
     "ffmpeg_path": "",
     "handbrake_path": "",
@@ -119,6 +126,7 @@ DEFAULTS: dict[str, ConfigScalar] = {
     "opt_confirm_before_move": True,
     "opt_atomic_move": True,
     "opt_fsync": True,
+    "opt_allow_path_tool_resolution": False,
     "opt_show_temp_manager": True,
     "opt_auto_delete_temp": True,
     "opt_auto_delete_session_metadata": True,
@@ -165,6 +173,8 @@ DEFAULTS: dict[str, ConfigScalar] = {
     "opt_ai_disable_after_failures": 3,
     # AI provider connection (managed via gui/ai_provider_dialog.py)
     "opt_ai_active_cloud_provider": "",  # "claude" | "openai" | "gemini" | ""
+    "opt_ai_profile": dict(DEFAULT_AI_PROFILE),
+    "opt_ai_profile_onboarded": False,
     "opt_ai_sidebar_open": False,
     "opt_ai_sidebar_width": 360,
     "opt_theme_overrides": {},

@@ -180,6 +180,8 @@ class TranscodeQueue:
         if feedback_cb:
             feedback_cb(f"Starting job: {getattr(job, 'input_path', job)}")
         last_job_percent = {"value": 0.0}
+        retry_pending = False
+        final_job_total = total_jobs
 
         def _engine_progress(event):
             payload = dict(event or {})
@@ -212,6 +214,8 @@ class TranscodeQueue:
                 if fallback is not None:
                     self.jobs.insert(0, fallback)
                     self.degraded.append((job, log_path, verification))
+                    retry_pending = True
+                    final_job_total = total_jobs + 1
                     # Don't emit "Completed" — the fallback is still pending.
                 else:
                     self.failed.append((job, log_path))
@@ -251,31 +255,37 @@ class TranscodeQueue:
             if ret == TRANSCODE_ABORT_RETURN_CODE
             else 100.0
         )
+        final_phase = (
+            "retry_pending"
+            if retry_pending
+            else "complete" if ret == 0
+            else "aborted" if ret == TRANSCODE_ABORT_RETURN_CODE
+            else "failed"
+        )
+        final_message = (
+            ""
+            if retry_pending
+            else f"Completed: {getattr(job, 'output_path', job)}"
+            if ret == 0
+            else f"ABORTED: {getattr(job, 'input_path', job)}"
+            if ret == TRANSCODE_ABORT_RETURN_CODE
+            else f"FAILED: {getattr(job, 'input_path', job)}"
+        )
         final_percent = (
-            ((current_index - 1) + (final_job_percent / 100.0)) / total_jobs
-        ) * 100.0 if total_jobs > 0 else final_job_percent
+            ((current_index - 1) + (final_job_percent / 100.0)) / final_job_total
+        ) * 100.0 if final_job_total > 0 else final_job_percent
         _safe_progress_event(
             progress_cb,
             {
-                "phase": (
-                    "complete" if ret == 0
-                    else "aborted" if ret == TRANSCODE_ABORT_RETURN_CODE
-                    else "failed"
-                ),
+                "phase": final_phase,
                 "percent": 100.0,
                 "job_percent": final_job_percent,
                 "overall_percent": final_percent,
                 "job_index": current_index,
-                "job_total": total_jobs,
+                "job_total": final_job_total,
                 "input_path": getattr(job, "input_path", ""),
                 "output_path": getattr(job, "output_path", ""),
-                "message": (
-                    f"Completed: {getattr(job, 'output_path', job)}"
-                    if ret == 0
-                    else f"ABORTED: {getattr(job, 'input_path', job)}"
-                    if ret == TRANSCODE_ABORT_RETURN_CODE
-                    else f"FAILED: {getattr(job, 'input_path', job)}"
-                ),
+                "message": final_message,
             },
         )
         return ret, log_path

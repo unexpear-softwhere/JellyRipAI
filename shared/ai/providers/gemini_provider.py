@@ -71,6 +71,49 @@ class GeminiProvider(BaseProvider):
             return "(no response)"
         return parts[0].get("text", "(no response)")
 
+    def _chat(self, messages: list[dict[str, str]], max_tokens: int, timeout: float) -> str:
+        system_parts: list[str] = []
+        contents: list[dict[str, object]] = []
+        for item in list(messages or []):
+            role = str(item.get("role", "") or "").strip().lower()
+            content = str(item.get("content", "") or "")
+            if not content.strip():
+                continue
+            if role == "system":
+                system_parts.append(content)
+                continue
+            if role == "assistant":
+                role = "model"
+            if role not in {"user", "model"}:
+                continue
+            contents.append({"role": role, "parts": [{"text": content}]})
+        if not contents:
+            raise RuntimeError("No chat messages provided.")
+        body = json.dumps({
+            "system_instruction": {"parts": [{"text": "\n\n".join(system_parts)}]},
+            "contents": contents,
+            "generationConfig": {"maxOutputTokens": max_tokens},
+        }).encode("utf-8")
+        url = (
+            f"{self._BASE_URL}/{self._model}:generateContent"
+            f"?key={self._api_key}"
+        )
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            result = json.loads(resp.read())
+        candidates = result.get("candidates", [])
+        if not candidates:
+            return "(no response)"
+        parts = candidates[0].get("content", {}).get("parts", [])
+        if not parts:
+            return "(no response)"
+        return parts[0].get("text", "(no response)")
+
     def test_connection(self, timeout: float = 10.0) -> ConnectionResult:
         try:
             start = time.time()
@@ -83,6 +126,10 @@ class GeminiProvider(BaseProvider):
             )
         except Exception as e:
             return ConnectionResult(success=False, error=str(e))
+
+    def chat(self, messages: list[dict[str, str]],
+             max_tokens: int = 800, timeout: float = 30.0) -> str:
+        return self._chat(messages, max_tokens, timeout)
 
     def diagnose(self, payload_json: str, system_prompt: str,
                  max_tokens: int = 800, timeout: float = 30.0) -> str:

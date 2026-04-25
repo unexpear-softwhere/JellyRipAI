@@ -41,8 +41,14 @@ def folder_scan_requires_ffprobe(mode: int | str) -> bool:
 
 
 def build_folder_scan_log_path(main_log: str, home_dir: str | None = None) -> str:
-    log_dir = os.path.dirname(str(main_log or "").strip())
-    if not log_dir:
+    raw_main_log = str(main_log or "").strip()
+    if raw_main_log:
+        normalized = os.path.normpath(raw_main_log)
+        if os.path.isdir(normalized):
+            log_dir = normalized
+        else:
+            log_dir = os.path.dirname(os.path.abspath(normalized))
+    else:
         log_dir = str(home_dir or os.path.expanduser("~"))
     return os.path.join(log_dir, "folder_scan_log.txt")
 
@@ -55,12 +61,16 @@ def build_folder_scan_request(
     ffprobe_path: str,
     include_dirs: bool = False,
     home_dir: str | None = None,
+    allow_path_lookup: bool = False,
 ) -> FolderScanRequest:
     mode = scan_options.get("mode", "size_desc")
     recursive = bool(scan_options.get("recursive", True))
     ffprobe_exe = None
     if folder_scan_requires_ffprobe(mode):
-        ffprobe_exe = resolve_ffprobe(os.path.normpath(ffprobe_path))[0] or None
+        ffprobe_exe = resolve_ffprobe(
+            os.path.normpath(ffprobe_path),
+            allow_path_lookup=allow_path_lookup,
+        ).path or None
     return FolderScanRequest(
         folder=os.path.normpath(folder),
         mode=mode,

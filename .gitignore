@@ -5,6 +5,8 @@
 
 # Keep bundled runtime files explicit and ignore generated app binaries
 build/
+dist/ai/*
+!dist/ai/.gitkeep
 dist/ffmpeg.exe
 dist/ffplay.exe
 dist/ffprobe.exe
@@ -49,3 +51,11 @@ rip_log.txt
 # Local snapshot helpers
 .git_head_now.txt
 .git_status_now.txt
+
+# Session debris (pytest log, diff scratch, codex auto-backups)
+..txt
+origin_main_controller.tmp
+.codex_backup/
+
+# Nested Claude worktrees (per-session working copies live here)
+.claude/worktrees/

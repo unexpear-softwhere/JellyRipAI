@@ -74,6 +74,14 @@ def rip_all_titles(self, rip_path, on_progress, on_log):
     for attempt_num, flags in enumerate(attempts, start=1):
         if self.abort_event.is_set():
             return False
+        if not self._wait_for_drive_ready(
+            on_log,
+            context=f"all-title rip attempt {attempt_num}/{len(attempts)}",
+        ):
+            if attempt_num > 1:
+                self._clean_new_mkv_files(rip_path, before, on_log)
+            on_log("Drive did not become ready before rip launch.")
+            return False
         if attempt_num > 1:
             self._clean_new_mkv_files(rip_path, before, on_log)
             before = self._snapshot_mkv_files(rip_path)
@@ -154,6 +162,20 @@ def rip_selected_titles(self, rip_path, title_ids, on_progress, on_log):
         for attempt_num, flags in enumerate(attempts, start=1):
             if self.abort_event.is_set():
                 return False, failed_titles
+            if not self._wait_for_drive_ready(
+                on_log,
+                context=(
+                    f"title {tid+1} launch {attempt_num}/{len(attempts)} "
+                    f"({idx+1}/{len(title_ids)})"
+                ),
+            ):
+                if attempt_num > 1:
+                    self._clean_new_mkv_files(rip_path, before, on_log)
+                on_log(
+                    f"Drive did not become ready before title {tid+1} launch. "
+                    "Skipping this title without burning a rip attempt."
+                )
+                break
             if attempt_num > 1:
                 self._clean_new_mkv_files(
                     rip_path, before, on_log

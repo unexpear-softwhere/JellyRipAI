@@ -72,6 +72,32 @@ class ClaudeProvider(BaseProvider):
         except Exception as e:
             return ConnectionResult(success=False, error=str(e))
 
+    def chat(self, messages: list[dict[str, str]],
+             max_tokens: int = 800, timeout: float = 30.0) -> str:
+        client = self._get_client()
+        system_parts: list[str] = []
+        chat_messages: list[dict[str, str]] = []
+        for item in list(messages or []):
+            role = str(item.get("role", "") or "").strip().lower()
+            content = str(item.get("content", "") or "")
+            if not content.strip():
+                continue
+            if role == "system":
+                system_parts.append(content)
+                continue
+            if role in {"user", "assistant"}:
+                chat_messages.append({"role": role, "content": content})
+        if not chat_messages:
+            raise RuntimeError("No chat messages provided.")
+        message = client.messages.create(
+            model=self._model,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            system="\n\n".join(system_parts),
+            messages=chat_messages,
+        )
+        return message.content[0].text if message.content else "(no response)"
+
     def diagnose(self, payload_json: str, system_prompt: str,
                  max_tokens: int = 800, timeout: float = 30.0) -> str:
         client = self._get_client()

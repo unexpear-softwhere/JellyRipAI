@@ -1,4 +1,4 @@
-# JellyRip AI v1.0.17 Release Notes
+# JellyRip AI v1.0.18 Release Notes
 
 ## Release Channel
 
@@ -6,25 +6,29 @@ Unstable pre-release.
 
 ## Download
 
-- Direct download: [JellyRipAI.exe](https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.17/JellyRipAI.exe)
-- Installer: [JellyRipAIInstaller.exe](https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.17/JellyRipAIInstaller.exe)
-- Release page: [ai-v1.0.17 release](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.17)
+- Direct download: [JellyRipAI.exe](https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.18/JellyRipAI.exe)
+- Installer: [JellyRipAIInstaller.exe](https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.18/JellyRipAIInstaller.exe)
+- Release page: [ai-v1.0.18 release](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.18)
 - All releases: [GitHub Releases](https://github.com/unexpear/JellyRip/releases)
 
-## What's New in 1.0.17
+## What's New in 1.0.18
 
-### FFmpeg and transcode reliability
+### Startup and update hardening
 
-- Improved FFmpeg abort handling so queued work shuts down more cleanly.
-- Expanded copy-progress logging and transcode validation around FFmpeg workflows.
+- Startup no longer loads an adjacent app-directory `.env` file before the UI opens.
+- Update cleanup and completion notifications now launch PowerShell from the trusted Windows system location.
+- The signed-update block path now shows the intended GUI error instead of throwing a callback arity exception.
 
-### Release bundling and packaging
+### Manual movie edition handling
 
-- Bundled FFmpeg runtime assets and notices more intentionally for packaged releases.
-- Restored the richer PyInstaller spec so release builds carry version metadata and bundled runtime dependencies consistently.
+- Manual movie-disc runs now carry the selected edition into controller state, temp metadata, and destination folder naming.
+- Alternate cuts no longer collapse into the base movie folder during the manual flow.
+
+### Transcode reliability
+
+- Verification fallback retries no longer announce a rejected transcode as completed before the retry starts.
 
 ### Release hygiene
 
-- Release metadata now aligns on the `1.0.17` line across the app, installer, docs, and release notes.
-- Build output remains a GitHub Releases artifact instead of a tracked repository binary.
-- In-app update checks now follow the newest published release, including unstable prereleases.
+- Release metadata now aligns on the `1.0.18` line across the app, installer, docs, tester worksheet, and release notes.
+- AI builds now stage artifacts and bundled FFmpeg notices under `dist/ai` while keeping the `ai-v*` release lane separate from main.

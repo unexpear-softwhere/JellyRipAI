@@ -1,9 +1,11 @@
 from core.media_scan import (
+    build_folder_scan_log_path,
     build_folder_scan_request,
     build_folder_scan_results_model,
     select_folder_scan_entries,
     select_folder_scan_paths,
 )
+from config import ResolvedTool
 from tools.folder_scanner import FolderScanEntry
 
 
@@ -34,11 +36,14 @@ def test_build_folder_scan_request_resolves_duration_scan_ffprobe(monkeypatch, t
     ffprobe_path = tmp_path / "ffmpeg" / "ffprobe.exe"
     ffprobe_path.parent.mkdir(parents=True, exist_ok=True)
     ffprobe_path.write_text("stub", encoding="utf-8")
+    seen = {}
 
-    monkeypatch.setattr(
-        "core.media_scan.resolve_ffprobe",
-        lambda configured_path: (str(ffprobe_path), "configured"),
-    )
+    def _fake_resolve(configured_path, *, allow_path_lookup=False):
+        seen["configured_path"] = configured_path
+        seen["allow_path_lookup"] = allow_path_lookup
+        return ResolvedTool(path=str(ffprobe_path), source="configured")
+
+    monkeypatch.setattr("core.media_scan.resolve_ffprobe", _fake_resolve)
 
     request = build_folder_scan_request(
         folder=str(tmp_path / "library"),
@@ -51,12 +56,61 @@ def test_build_folder_scan_request_resolves_duration_scan_ffprobe(monkeypatch, t
     assert request.mode == "duration_desc"
     assert request.recursive is False
     assert request.include_dirs is False
+    assert seen["configured_path"] == str(ffprobe_path.parent)
+    assert seen["allow_path_lookup"] is False
     assert request.ffprobe_exe == str(ffprobe_path)
     assert request.log_path.endswith("folder_scan_log.txt")
 
 
+def test_build_folder_scan_request_honors_path_lookup_toggle(monkeypatch, tmp_path):
+    ffprobe_path = tmp_path / "ffmpeg" / "ffprobe.exe"
+    ffprobe_path.parent.mkdir(parents=True, exist_ok=True)
+    ffprobe_path.write_text("stub", encoding="utf-8")
+    seen = {}
+
+    def _fake_resolve(configured_path, *, allow_path_lookup=False):
+        seen["configured_path"] = configured_path
+        seen["allow_path_lookup"] = allow_path_lookup
+        return ResolvedTool(path=str(ffprobe_path), source="PATH via advanced toggle")
+
+    monkeypatch.setattr("core.media_scan.resolve_ffprobe", _fake_resolve)
+
+    request = build_folder_scan_request(
+        folder=str(tmp_path / "library"),
+        scan_options={"mode": "duration_desc", "recursive": True},
+        main_log="",
+        ffprobe_path=str(ffprobe_path.parent),
+        include_dirs=False,
+        allow_path_lookup=True,
+    )
+
+    assert seen["configured_path"] == str(ffprobe_path.parent)
+    assert seen["allow_path_lookup"] is True
+    assert request.ffprobe_exe == str(ffprobe_path)
+
+
+def test_build_folder_scan_log_path_uses_directory_when_main_log_is_folder(tmp_path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+
+    path = build_folder_scan_log_path(str(log_dir))
+
+    assert path == str(log_dir / "folder_scan_log.txt")
+
+
+def test_build_folder_scan_log_path_uses_absolute_parent_for_relative_log_file(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.chdir(tmp_path)
+
+    path = build_folder_scan_log_path("jellyrip.log")
+
+    assert path == str(tmp_path / "folder_scan_log.txt")
+
+
 def test_build_folder_scan_request_skips_ffprobe_for_non_duration_modes(monkeypatch, tmp_path):
-    def _unexpected(_configured_path):
+    def _unexpected(_configured_path, *, allow_path_lookup=False):
         raise AssertionError("resolve_ffprobe should not run for size-only scans")
 
     monkeypatch.setattr("core.media_scan.resolve_ffprobe", _unexpected)

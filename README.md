@@ -10,7 +10,7 @@ should be treated as non-final.
 
 ## Project Status
 
-- Current unstable line: `ai-v1.0.17` (latest unstable AI pre-release)
+- Current unstable line: `ai-v1.0.18` (latest unstable AI pre-release)
 - Platform target: Windows
 - Runtime target: Python 3.13+
 - Distribution target: standalone `JellyRipAI.exe` and optional installer
@@ -48,9 +48,9 @@ Branch-specific documentation for the assist line:
 
 ### From GitHub release
 
-(recommended, currently `ai-v1.0.17` unstable AI pre-release)
+(recommended, currently `ai-v1.0.18` unstable AI pre-release)
 
-1. Go to the [current unstable AI release page](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.17).
+1. Go to the [current unstable AI release page](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.18).
 2. Download `JellyRipAIInstaller.exe` (installer) or `JellyRipAI.exe` (standalone).
 3. If SmartScreen/Defender flags the file, whitelist the download folder
   first (common PyInstaller false positive).
@@ -98,12 +98,18 @@ Settings are stored at `%APPDATA%\JellyRipAI\config.json` on Windows.
 You can configure:
 
 - MakeMKV and ffprobe paths
+- optional FFmpeg and HandBrakeCLI executable paths
 - temp, movie, and TV folders
 - retry behavior and quiet/stall warnings
 - file stabilization and validation thresholds
 - unattended prompt and disc-swap timeout behavior
 - update-signature settings
 - debug logging options
+
+Windows tool lookup prefers explicit configured paths, bundled binaries,
+and known install locations before falling back to PATH discovery.
+
+App-directory `.env` files are no longer loaded at startup.
 
 ## Development
 
@@ -142,14 +148,16 @@ Contribution and security guidance:
 ### Standalone executable
 
 ```bash
-pip install pyinstaller
-pyinstaller JellyRip.spec
+build.bat
 ```
 
+The AI build scripts place standalone build artifacts under `dist\ai`.
+`build.bat` wraps `pyinstaller JellyRip.spec` with the AI artifact and
+work directories preconfigured.
 The spec bundles the Gyan FFmpeg full build (`ffmpeg.exe`, `ffprobe.exe`,
-and `ffplay.exe`). Release builds prefer the extracted build at
-`%USERPROFILE%\Desktop\ffmpeg`, then fall back to `.\ffmpeg\`, `..\ffmpeg\`,
-or `JELLYRIP_FFMPEG_DIR` / `FFMPEG_DIR`. Release builds must also ship
+and `ffplay.exe`). Put the extracted build under
+`%USERPROFILE%\Desktop\ffmpeg`, `.\ffmpeg\`, or `..\ffmpeg\`, or set
+`JELLYRIP_FFMPEG_DIR` before building. Release builds must also ship
 `FFmpeg-LICENSE.txt` and `FFmpeg-README.txt`.
 
 ### Executable plus installer
@@ -162,10 +170,10 @@ Commercial installer builds require an appropriate Inno Setup license.
 
 Expected outputs:
 
-- `dist/JellyRipAI.exe`
-- `dist/JellyRipAIInstaller.exe`
-- `dist\ffmpeg.exe`, `dist\ffprobe.exe`, and `dist\ffplay.exe`
-- `dist\FFmpeg-LICENSE.txt` and `dist\FFmpeg-README.txt`
+- `dist/ai/JellyRipAI.exe`
+- `dist/ai/JellyRipAIInstaller.exe`
+- `dist\ai\ffmpeg.exe`, `dist\ai\ffprobe.exe`, and `dist\ai\ffplay.exe`
+- `dist\ai\FFmpeg-LICENSE.txt` and `dist\ai\FFmpeg-README.txt`
 
 Build output is intentionally git-ignored and should be published
 through GitHub Releases rather than committed to the repository.
@@ -173,7 +181,7 @@ through GitHub Releases rather than committed to the repository.
 ### Full release pipeline
 
 ```bash
-release.bat 1.0.17
+release.bat 1.0.18
 ```
 
 This runs tests, checks version consistency, builds both executables,

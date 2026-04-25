@@ -2,6 +2,22 @@
 
 <!-- markdownlint-disable MD013 -->
 
+## [1.0.18] - 2026-04-19
+
+### Changed
+
+- Carried the AI release lane forward to `1.0.18` across runtime, installer, docs, tester worksheet, and release notes.
+- AI builds now stage `JellyRipAI.exe`, `JellyRipAIInstaller.exe`, bundled FFmpeg binaries, and notice files under `dist/ai`.
+- The AI update and packaging lane remains isolated with `ai-v*` tags and JellyRip AI app identities.
+
+### Fixed
+
+- Startup no longer loads an adjacent app-directory `.env` file before opening the GUI.
+- Manual movie-disc runs now preserve the selected edition in controller state, temp metadata, and destination folder naming.
+- Signed-update cleanup and completion notifications now launch PowerShell from the trusted Windows system location.
+- The signed-update block path now shows the intended GUI error instead of throwing a callback arity exception.
+- Verification fallback retries no longer report a rejected transcode as completed before the retry starts.
+
 ## [1.0.17] - 2026-04-15
 
 ### Changed

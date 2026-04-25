@@ -1,3 +1,5 @@
+import inspect
+
 from gui.ai_provider_dialog import (
     _classify_connection_error,
     _resolve_local_model_selection,
@@ -112,3 +114,12 @@ def test_sync_scroll_canvas_width_updates_canvas_window_and_scrollregion():
     assert dialog._scroll_canvas.configure_calls == [
         {"scrollregion": (0, 0, 640, 900)}
     ]
+
+
+def test_provider_dialog_uses_runtime_display_name_in_header_copy():
+    from gui.ai_provider_dialog import AIProviderDialog
+
+    source = inspect.getsource(AIProviderDialog.show)
+
+    assert "APP_DISPLAY_NAME" in source
+    assert "Configure which AI backends JellyRip can use for diagnostics." not in source
