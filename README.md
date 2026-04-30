@@ -66,6 +66,7 @@ git fetch origin
 # git switch --track origin/main
 # assist/AI line
 git switch --track origin/ai
+# installs the Anthropic SDK for Claude support on the AI branch
 pip install -r requirements.txt
 python main.py
 ```
@@ -76,6 +77,7 @@ paths before the first rip.
 ## Requirements
 
 - Windows
+- Python 3.13 with `tkinter`
 - MakeMKV
 - FFmpeg (`ffmpeg` and `ffprobe`) for source runs; release builds bundle
   the GPLv3 Gyan full build

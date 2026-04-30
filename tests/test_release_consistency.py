@@ -55,6 +55,14 @@ def test_readme_points_to_spec_build_and_release_notes_txt():
     assert "%USERPROFILE%\\Desktop\\ffmpeg" in readme
 
 
+def test_ai_branch_declares_claude_runtime_dependency():
+    readme = _read("README.md")
+    requirements = _read("requirements.txt")
+
+    assert "pip install -r requirements.txt" in readme
+    assert re.search(r"^anthropic\s*$", requirements, re.MULTILINE)
+
+
 def test_release_script_checks_git_state_and_release_notes():
     release_script = _read("release.bat")
     version = _current_version()
@@ -115,6 +123,7 @@ def test_spec_bundles_ffmpeg_intentionally():
     assert "binaries=FFMPEG_BINARIES" in spec
     assert "*FFMPEG_NOTICE_DATAS" in spec
     assert "THIRD_PARTY_NOTICES.md" in spec
+    assert '"anthropic"' in spec
     assert 'APP_EXE_BASENAME = "JellyRipAI"' in spec
     assert 'name=APP_EXE_BASENAME' in spec
     assert 'StringStruct("OriginalFilename", APP_EXE_NAME)' in spec

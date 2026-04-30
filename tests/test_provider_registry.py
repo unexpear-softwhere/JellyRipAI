@@ -43,7 +43,7 @@ def test_connection_summary_marks_local_not_connected_without_installed_models(m
     assert summary["local"]["model"] == ""
 
 
-def test_connect_single_provider_replaces_previous_provider(monkeypatch):
+def test_connect_single_provider_preserves_other_saved_backends(monkeypatch):
     store = {
         "_active_provider": {"id": "openai"},
         "openai": {"api_key": "old-key", "model": "gpt-4o"},
@@ -64,6 +64,32 @@ def test_connect_single_provider_replaces_previous_provider(monkeypatch):
         base_url="http://localhost:11434",
     )
 
-    assert "openai" not in saved["data"]
+    assert saved["data"]["openai"]["api_key"] == "old-key"
     assert saved["data"]["local"]["model"] == "llama3.1:8b"
-    assert saved["data"]["_active_provider"] == {"id": "local"}
+    assert saved["data"]["_active_provider"] == {"id": "openai"}
+
+
+def test_connect_single_provider_promotes_cloud_without_dropping_local(monkeypatch):
+    store = {
+        "_active_provider": {"id": "openai"},
+        "openai": {"api_key": "old-key", "model": "gpt-4o"},
+        "local": {"model": "qwen2.5-coder:14b", "base_url": "http://localhost:11434"},
+    }
+    saved: dict[str, dict] = {}
+
+    monkeypatch.setattr(credential_store, "load_credentials", lambda: dict(store))
+    monkeypatch.setattr(
+        credential_store,
+        "save_credentials",
+        lambda creds: saved.setdefault("data", creds),
+    )
+
+    credential_store.connect_single_provider(
+        "claude",
+        api_key="new-key",
+        model="claude-sonnet-4-20250514",
+    )
+
+    assert saved["data"]["local"]["model"] == "qwen2.5-coder:14b"
+    assert saved["data"]["claude"]["api_key"] == "new-key"
+    assert saved["data"]["_active_provider"] == {"id": "claude"}

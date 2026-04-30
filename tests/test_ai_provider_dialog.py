@@ -1,4 +1,5 @@
 import inspect
+from types import SimpleNamespace
 
 from gui.ai_provider_dialog import (
     _classify_connection_error,
@@ -123,3 +124,90 @@ def test_provider_dialog_uses_runtime_display_name_in_header_copy():
 
     assert "APP_DISPLAY_NAME" in source
     assert "Configure which AI backends JellyRip can use for diagnostics." not in source
+
+
+def test_handle_save_result_persists_only_after_success():
+    from gui.ai_provider_dialog import AIProviderDialog
+
+    events = []
+    persisted = []
+    dialog = object.__new__(AIProviderDialog)
+    dialog._persist_provider_credentials = (
+        lambda pid, kwargs, *, make_active: persisted.append(
+            (pid, dict(kwargs), make_active)
+        )
+    )
+    dialog._refresh_provider_cards = lambda: events.append("refresh")
+    dialog._handle_test_result = (
+        lambda pid, result: events.append(("test", pid, result.success))
+    )
+    dialog._set_provider_status = (
+        lambda pid, state, *, detail="": events.append(
+            ("status", pid, state, detail)
+        )
+    )
+    dialog._apply_parent_mode = lambda pid: events.append(("mode", pid))
+    dialog._on_change = lambda: events.append("changed")
+
+    dialog._handle_save_result(
+        "openai",
+        {"api_key": "test-key", "model": "gpt-4o-mini"},
+        make_active=False,
+        result=SimpleNamespace(
+            success=True,
+            latency_ms=25.0,
+            model_confirmed="gpt-4o-mini",
+        ),
+    )
+
+    assert persisted == [
+        ("openai", {"api_key": "test-key", "model": "gpt-4o-mini"}, False)
+    ]
+    assert "refresh" in events
+    assert "changed" in events
+    assert ("mode", "openai") not in events
+    assert ("test", "openai", True) in events
+
+
+def test_handle_save_result_failed_validation_keeps_existing_credentials():
+    from gui.ai_provider_dialog import AIProviderDialog
+
+    events = []
+    persisted = []
+    dialog = object.__new__(AIProviderDialog)
+    dialog._persist_provider_credentials = (
+        lambda pid, kwargs, *, make_active: persisted.append(
+            (pid, dict(kwargs), make_active)
+        )
+    )
+    dialog._refresh_provider_cards = lambda: events.append("refresh")
+    dialog._handle_test_result = (
+        lambda pid, result: events.append(("test", pid, result.success))
+    )
+    dialog._set_provider_status = (
+        lambda pid, state, *, detail="": events.append(
+            ("status", pid, state, detail)
+        )
+    )
+    dialog._apply_parent_mode = lambda pid: events.append(("mode", pid))
+    dialog._on_change = lambda: events.append("changed")
+
+    dialog._handle_save_result(
+        "claude",
+        {"api_key": "bad-key", "model": "claude-sonnet-4-20250514"},
+        make_active=True,
+        result=SimpleNamespace(
+            success=False,
+            error="HTTP Error 429: Too Many Requests",
+        ),
+    )
+
+    assert persisted == []
+    assert events == [
+        (
+            "status",
+            "claude",
+            "rate_limited",
+            "Rate limited / out of quota. Check billing, usage caps, or retry later.",
+        )
+    ]

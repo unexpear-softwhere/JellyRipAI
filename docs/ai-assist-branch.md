@@ -65,6 +65,11 @@ Supported providers in this branch:
 - Gemini
 - Local (Ollama)
 
+Install note:
+
+- `pip install -r requirements.txt` installs the Anthropic SDK used by
+  the Claude provider
+
 ### AI diagnostics
 
 The diagnostic bus is implemented in
@@ -111,6 +116,9 @@ Credential persistence lives in
 Current storage model:
 
 - file path: `%APPDATA%\\JellyRipAI\\ai_credentials.json`
+- credentials are stored per provider so cloud and local backends can
+  coexist for fallback
+- the active cloud choice is tracked separately from the local provider
 - Windows-first protection with DPAPI for sensitive values
 - plaintext fallback only when DPAPI is unavailable or fails
 - transparent migration of older plaintext entries on load

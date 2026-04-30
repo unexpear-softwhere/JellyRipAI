@@ -762,75 +762,134 @@ class AIProviderDialog:
             kwargs["model"] = widgets["model_var"].get().strip()
         return kwargs
 
-    def _save_provider(self, pid: str) -> None:
-        """Save one exclusive provider, then auto-validate the connection."""
-        from shared.ai.credential_store import connect_single_provider
-        from shared.ai.provider_registry import get_provider
-
-        kwargs = self._collect_provider_kwargs(pid)
-        provider = get_provider(pid)
-        should_activate = False
-        if provider:
-            provider.configure(**kwargs)
-            info = provider.info()
-            if info.category == "local":
-                installed_models, selected_model = _resolve_local_model_selection(
-                    kwargs.get("model", ""),
-                    list(info.available_models),
-                )
-                if not installed_models:
-                    self._set_provider_status(
-                        pid,
-                        "failed",
-                        detail="No pulled Ollama models found on this PC at this URL.",
-                    )
-                    self._apply_parent_mode(None)
-                    return
-                kwargs["model"] = selected_model
-                widgets = self._provider_frames.get(pid, {})
-                model_var = widgets.get("model_var")
-                if model_var is not None:
-                    try:
-                        model_var.set(selected_model)
-                    except Exception:
-                        pass
-            if info.requires_api_key:
-                should_activate = bool(kwargs.get("api_key"))
-            else:
-                should_activate = any(bool(value) for value in kwargs.values())
-        try:
-            connect_single_provider(pid, **kwargs)
-            self._refresh_provider_cards()
-            self._apply_parent_mode(pid if should_activate else None)
-            if self._on_change:
-                self._on_change()
-        except Exception as e:
-            self._set_provider_status(pid, "failed", detail=f"Save error: {e}")
-            return
-
-        # Auto-validate: kick off a lightweight test immediately
-        self._test_provider(pid)
-
-    def _test_provider(self, pid: str) -> None:
-        """Test connection in a background thread."""
+    def _prepare_provider_request(self, pid: str) -> tuple[Any, dict[str, str], Any] | None:
+        """Build a configured provider instance from the current dialog values."""
         from shared.ai.provider_registry import get_provider
 
         kwargs = self._collect_provider_kwargs(pid)
         provider = get_provider(pid)
         if not provider:
             self._set_provider_status(pid, "failed", detail="Unknown provider")
-            return
+            return None
 
-        # Apply current (unsaved) values for the test
         provider.configure(**kwargs)
+        info = provider.info()
+        if info.category == "local":
+            installed_models, selected_model = _resolve_local_model_selection(
+                kwargs.get("model", ""),
+                list(info.available_models),
+            )
+            if not installed_models:
+                self._set_provider_status(
+                    pid,
+                    "failed",
+                    detail="No pulled Ollama models found on this PC at this URL.",
+                )
+                return None
+            kwargs["model"] = selected_model
+            widgets = self._provider_frames.get(pid, {})
+            model_var = widgets.get("model_var")
+            if model_var is not None:
+                try:
+                    model_var.set(selected_model)
+                except Exception:
+                    pass
+        return (provider, kwargs, info)
+
+    def _run_provider_check(
+        self,
+        pid: str,
+        provider: Any,
+        on_result: Callable[[Any], None],
+    ) -> None:
+        """Run a provider validation check in the background."""
         self._set_provider_status(pid, "validating")
 
         def _run() -> None:
             result = provider.test_connection(timeout=15.0)
             if self._win and self._win.winfo_exists():
-                self._win.after(0, lambda: self._handle_test_result(pid, result))
+                self._win.after(0, lambda: on_result(result))
 
         threading.Thread(target=_run, daemon=True).start()
+
+    def _persist_provider_credentials(
+        self,
+        pid: str,
+        kwargs: dict[str, str],
+        *,
+        make_active: bool,
+    ) -> None:
+        """Persist validated credentials and optionally promote a cloud provider."""
+        from shared.ai.credential_store import (
+            set_active_provider_id,
+            set_provider_credentials,
+        )
+
+        set_provider_credentials(pid, **kwargs)
+        if make_active and pid != "local":
+            set_active_provider_id(pid)
+
+    def _save_provider(self, pid: str, *, make_active: bool = False) -> None:
+        """Validate current values first, then persist them on success only."""
+        prepared = self._prepare_provider_request(pid)
+        if prepared is None:
+            return
+        provider, kwargs, _info = prepared
+
+        self._run_provider_check(
+            pid,
+            provider,
+            lambda result: self._handle_save_result(
+                pid,
+                kwargs,
+                make_active=make_active,
+                result=result,
+            ),
+        )
+
+    def _handle_save_result(
+        self,
+        pid: str,
+        kwargs: dict[str, str],
+        *,
+        make_active: bool,
+        result: Any,
+    ) -> None:
+        """Persist provider settings only after validation succeeds."""
+        if not result.success:
+            state, detail = _classify_connection_error(result.error)
+            self._set_provider_status(pid, state, detail=detail)
+            return
+
+        try:
+            self._persist_provider_credentials(
+                pid,
+                kwargs,
+                make_active=make_active,
+            )
+            self._refresh_provider_cards()
+            if self._on_change:
+                self._on_change()
+        except Exception as e:
+            self._set_provider_status(pid, "failed", detail=f"Save error: {e}")
+            return
+
+        if make_active and pid != "local":
+            self._apply_parent_mode(pid)
+        self._handle_test_result(pid, result)
+
+    def _test_provider(self, pid: str) -> None:
+        """Test connection in a background thread."""
+        prepared = self._prepare_provider_request(pid)
+        if prepared is None:
+            return
+        provider, _kwargs, _info = prepared
+
+        self._run_provider_check(
+            pid,
+            provider,
+            lambda result: self._handle_test_result(pid, result),
+        )
 
     def _handle_test_result(self, pid: str, result: Any) -> None:
         from shared.ai.credential_store import get_active_provider_id
@@ -850,8 +909,8 @@ class AIProviderDialog:
             )
 
     def _set_active(self, pid: str) -> None:
-        """Make this provider the only connected backend."""
-        self._save_provider(pid)
+        """Validate the provider and then promote it as the active cloud backend."""
+        self._save_provider(pid, make_active=True)
 
     def _disconnect_provider(self, pid: str) -> None:
         """Remove saved credentials for a provider after confirmation."""
@@ -897,7 +956,6 @@ class AIProviderDialog:
             widgets.pop("security_label", None)
 
         self._refresh_provider_cards()
-        self._apply_parent_mode(None)
 
         if self._on_change:
             self._on_change()

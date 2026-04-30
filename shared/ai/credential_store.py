@@ -138,9 +138,6 @@ def _dpapi_decrypt(b64_ciphertext: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 _SENSITIVE_KEYS = frozenset({"api_key"})
-_PROVIDER_KEYS = frozenset({"claude", "openai", "gemini", "local"})
-
-
 def _encrypt_value(value: str) -> str:
     """Encrypt a sensitive value if DPAPI is available."""
     if not value or value.startswith(_ENC_PREFIX):
@@ -310,25 +307,25 @@ def set_provider_credentials(provider_id: str, **kwargs: Any) -> None:
 
 
 def connect_single_provider(provider_id: str, **kwargs: Any) -> None:
-    """Persist exactly one connected provider and clear all others.
+    """Persist or update one provider without discarding the others.
 
-    The chosen provider becomes the sole saved backend for the app. Any
-    previously saved provider credentials are removed so the UI and runtime
-    cannot drift into a multi-provider state.
+    Cloud providers become the active cloud selection when credentials are
+    saved through this helper. Local provider settings are stored alongside
+    any cloud credentials so cloud/local fallback remains possible.
     """
     creds = load_credentials()
-
-    for pid in list(creds.keys()):
-        if pid in _PROVIDER_KEYS and pid != provider_id:
-            del creds[pid]
 
     connected = {k: v for k, v in kwargs.items() if v}
     if connected:
         creds[provider_id] = connected
-        creds["_active_provider"] = {"id": provider_id}
+        if provider_id != "local":
+            creds["_active_provider"] = {"id": provider_id}
     else:
         creds.pop(provider_id, None)
-        if str(creds.get("_active_provider", {}).get("id", "")) == provider_id:
+        if (
+            provider_id != "local"
+            and str(creds.get("_active_provider", {}).get("id", "")) == provider_id
+        ):
             creds["_active_provider"] = {"id": ""}
 
     save_credentials(creds)

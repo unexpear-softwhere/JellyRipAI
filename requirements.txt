@@ -1,12 +1,11 @@
-# JellyRip dependencies
+# JellyRip AI dependencies
 # Install with: pip install -r requirements.txt
 
-# No external runtime dependencies required
+# Claude provider support
+anthropic
+
 # tkinter is included with Python on Windows
-# All imports are standard library:
-# - subprocess, os, glob, shutil, json, re, platform
-# - datetime, concurrent.futures, time, threading, queue
-# - tkinter (built-in)
+# OpenAI, Gemini, and local-provider adapters use stdlib HTTP clients
 
 # For building the executable:
 # pip install pyinstaller

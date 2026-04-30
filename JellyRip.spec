@@ -211,6 +211,7 @@ a = Analysis(
         "tkinter.filedialog",
         "tkinter.simpledialog",
         "_tkinter",
+        "anthropic",
     ],
     hookspath=[],
     hooksconfig={},
