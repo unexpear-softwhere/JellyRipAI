@@ -227,6 +227,7 @@ class DiagnosticsManager:
         self._gui_log_fn = gui_log_fn
         self._session_dir = session_dir
         self._lock = threading.Lock()
+        self._save_logs = bool(self._config.get("opt_save_logs", True))
 
         # Ring buffer
         self._ring_buffer: deque[DiagnosticEvent] = deque(maxlen=ring_buffer_size)
@@ -245,13 +246,7 @@ class DiagnosticsManager:
 
         # System logger (persistent, survives GUI failure)
         self._system_logger: Optional[Any] = None
-        try:
-            from shared.ai.diagnostics import get_system_logger, init_system_logger
-            self._system_logger = get_system_logger()
-            if self._system_logger is None:
-                self._system_logger = init_system_logger(gui_log_fn=gui_log_fn)
-        except Exception:
-            pass
+        self._ensure_system_logger()
 
         # Log credential storage mode on init
         try:
@@ -308,10 +303,26 @@ class DiagnosticsManager:
 
     def _init_log_files(self, session_dir: str) -> None:
         """Create log file paths (files created on first write)."""
+        if not self._save_logs:
+            self._ai_log_path = None
+            self._state_json_path = None
+            self._session_log_path = None
+            return
         os.makedirs(session_dir, exist_ok=True)
         self._ai_log_path = os.path.join(session_dir, "session.ai.log")
         self._state_json_path = os.path.join(session_dir, "session.state.json")
         self._session_log_path = os.path.join(session_dir, "session.log")
+
+    def _ensure_system_logger(self) -> None:
+        if not self._save_logs:
+            return
+        try:
+            from shared.ai.diagnostics import get_system_logger, init_system_logger
+            self._system_logger = get_system_logger()
+            if self._system_logger is None:
+                self._system_logger = init_system_logger(gui_log_fn=self._gui_log_fn)
+        except Exception:
+            pass
 
     def set_session_dir(self, session_dir: str) -> None:
         """Update session directory (e.g., after temp folder is resolved)."""
@@ -327,6 +338,11 @@ class DiagnosticsManager:
     def set_config(self, config: dict[str, Any]) -> None:
         """Update config reference (call after config reload)."""
         self._config = config
+        self._save_logs = bool(config.get("opt_save_logs", True))
+        if self._session_dir:
+            self._init_log_files(self._session_dir)
+        if self._save_logs and self._system_logger is None:
+            self._ensure_system_logger()
         self._ai_enabled = bool(config.get("opt_ai_diagnostics_enabled", True))
         self._ai_suggest_mode = str(config.get("opt_ai_diagnostics_mode", "suggest"))
         self._ai_log_to_gui = bool(config.get("opt_ai_log_to_gui", True))
@@ -827,6 +843,8 @@ class DiagnosticsManager:
 
     def _write_session_log(self, event: DiagnosticEvent) -> None:
         """Append event to session.log."""
+        if not self._save_logs or not self._ai_log_to_file:
+            return
         if not self._session_log_path:
             return
         try:
@@ -838,6 +856,8 @@ class DiagnosticsManager:
 
     def _write_ai_log(self, text: str) -> None:
         """Append to session.ai.log."""
+        if not self._save_logs or not self._ai_log_to_file:
+            return
         if not self._ai_log_path:
             return
         try:
@@ -848,6 +868,8 @@ class DiagnosticsManager:
 
     def _write_state_json(self) -> None:
         """Dump current state snapshot to session.state.json."""
+        if not self._save_logs or not self._ai_log_to_file:
+            return
         if not self._state_json_path:
             return
         try:
@@ -878,6 +900,8 @@ class DiagnosticsManager:
 
     def _sys_log(self, level: str, message: str) -> None:
         """Write to the persistent system log."""
+        if not self._save_logs:
+            return
         if not self._system_logger:
             return
         try:
@@ -887,6 +911,8 @@ class DiagnosticsManager:
 
     def _sys_log_ai(self, analysis: str, backend: str) -> None:
         """Write full AI analysis to the persistent system log."""
+        if not self._save_logs:
+            return
         if not self._system_logger:
             return
         try:
@@ -900,6 +926,8 @@ class DiagnosticsManager:
 
     def dump_ring_buffer(self, path: Optional[str] = None) -> str:
         """Dump ring buffer to a crash file. Returns the path written."""
+        if not self._save_logs:
+            return ""
         if path is None:
             if self._session_dir:
                 path = os.path.join(self._session_dir, "crash_buffer.json")

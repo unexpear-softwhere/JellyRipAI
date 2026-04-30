@@ -9841,6 +9841,8 @@ class JellyRipperGUI(SecureTk, UIAdapter):
                 anchor="w",
             ).pack(fill="x", padx=16, pady=(4, 2))
             section(logs_tab, "Log Storage")
+            toggle_row(logs_tab, "opt_save_logs",
+                       "Save logs to disk")
             number_row(
                 logs_tab,
                 "opt_log_cap_lines", "Max log lines kept in memory:", 300000

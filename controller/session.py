@@ -75,6 +75,8 @@ class SessionHelpers:
     def flush_log(self):
         if not self.controller:
             return
+        if not self.controller.engine.cfg.get("opt_save_logs", True):
+            return
         log_file = os.path.normpath(
             self.controller.engine.cfg.get("log_file", "")
         )

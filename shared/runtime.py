@@ -99,6 +99,7 @@ DEFAULTS: dict[str, ConfigScalar] = {
     "tv_folder": _DEFAULT_TV,
     "movies_folder": _DEFAULT_MOVIES,
     "log_file": os.path.expanduser("~/Downloads/rip_log.txt"),
+    "opt_save_logs": True,
     "opt_drive_index": 0,
     "opt_safe_mode": True,
     "opt_first_run_done": False,
