@@ -18,7 +18,16 @@ The GUI should stay thin. It is responsible for presentation and user interactio
 
 ### Controller
 
-Files: `controller/controller.py`, `controller/naming.py`
+Files:
+
+- `controller/controller.py` - workflow orchestration entrypoint
+- `controller/legacy_compat.py` - compatibility helpers carried from the pre-refactor controller
+- `controller/library_scan.py` - episode-name parsing and existing-library scanning
+- `controller/naming.py` - title and preview naming, metadata provider aliasing
+- `controller/rip_validation.py` - rip output size and integrity validation
+- `controller/session.py` - per-session callback helpers and log routing
+- `controller/session_paths.py` - temp/movie/TV path setup and validation
+- `controller/session_recovery.py` - resumable session selection and title restoration
 
 Responsibilities:
 
@@ -65,6 +74,7 @@ Files:
 - `gui/ai_provider_dialog.py`
 - `shared/ai/`
 - `shared/ai_diagnostics.py`
+- `controller/assist.py` - assist-layer helpers (identity suggestions) kept separate from the deterministic workflow
 
 Responsibilities:
 

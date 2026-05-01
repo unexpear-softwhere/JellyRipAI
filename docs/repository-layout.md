@@ -14,6 +14,7 @@ That is intentional for this project type because the main workflow is running a
 - `utils/` - helper modules
 - `shared/` - shared runtime defaults and cross-module constants
 - `shared/ai/` - provider registry, credential storage, and provider adapters
+- `tools/` - developer utilities (folder scanner, ffmpeg staging script)
 - `tests/` - automated regression coverage
 - `docs/` - repository and architecture documentation
 - `installer/` - installer definition assets
