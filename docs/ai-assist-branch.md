@@ -115,7 +115,7 @@ Credential persistence lives in
 
 Current storage model:
 
-- file path: `%APPDATA%\\JellyRipAI\\ai_credentials.json`
+- file path: `%APPDATA%\JellyRipAI\ai_credentials.json`
 - credentials are stored per provider so cloud and local backends can
   coexist for fallback
 - the active cloud choice is tracked separately from the local provider
@@ -131,7 +131,7 @@ separate on purpose.
 The diagnostics manager fans out to several outputs:
 
 - GUI log mirror
-- persistent system log at `%LOCALAPPDATA%\\JellyRipAI\\logs\\system.log`
+- persistent system log at `%LOCALAPPDATA%\JellyRipAI\logs\system.log`
 - `session.log`
 - `session.ai.log`
 - `session.state.json`

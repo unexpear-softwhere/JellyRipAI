@@ -70,6 +70,9 @@ AI-assisted logic must not silently choose final rip targets, extras,
 episode numbering, metadata IDs, or move destinations without a manual
 confirmation layer.
 
+See [docs/branch-workflow.md](docs/branch-workflow.md) for the working
+rules and example commands.
+
 ## Development setup
 
 Requirements:
