@@ -28,7 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-__version__ = "1.0.18"
+__version__ = "1.0.19"
 APP_VARIANT = "ai"
 APP_DISPLAY_NAME = "JellyRip AI"
 APP_EXE_BASENAME = "JellyRipAI"
@@ -48,6 +48,40 @@ ConfigScalar: TypeAlias = str | int | bool | float | dict[str, str]
 LogFn: TypeAlias = Callable[[str], None]
 
 
+_PROFILE_ENV_VAR = "JELLYRIP_PROFILE"
+_PROFILE_NAME_RE = __import__("re").compile(r"[^A-Za-z0-9_\-]")
+
+
+def _sanitize_profile_name(name: str) -> str:
+    """Strip filesystem-unsafe characters from a profile name.
+
+    Profiles map to a directory under
+    ``%APPDATA%\\<APP_CONFIG_DIR_NAME>\\profiles\\<NAME>``, so any
+    character a path-aware OS would hate (slashes, colons, periods,
+    spaces) gets replaced with ``_``.  Empty after sanitization →
+    treat as no profile (use the default config dir).
+    """
+    cleaned = _PROFILE_NAME_RE.sub("_", str(name or "").strip())
+    cleaned = cleaned.strip("_")
+    return cleaned
+
+
+def get_active_profile() -> str:
+    """Return the active profile name, or empty string for the
+    default (no-profile) install.
+
+    Profile is selected via the ``JELLYRIP_PROFILE`` environment
+    variable.  ``main.py`` parses ``--profile NAME`` from
+    ``sys.argv`` very early and sets this env var so that every
+    subsequent ``shared.runtime`` import sees the same profile —
+    including ``CONFIG_FILE`` which is computed at module-load time.
+
+    Empty string is the default profile (legacy behavior; backwards
+    compatible with installs that predate profile support).
+    """
+    return _sanitize_profile_name(os.environ.get(_PROFILE_ENV_VAR, ""))
+
+
 def _config_dir_path() -> str:
     system = platform.system()
     if system == "Windows":
@@ -58,7 +92,11 @@ def _config_dir_path() -> str:
         base = os.environ.get(
             "XDG_CONFIG_HOME", os.path.expanduser("~/.config")
         )
-    return os.path.join(base, APP_CONFIG_DIR_NAME)
+    root = os.path.join(base, APP_CONFIG_DIR_NAME)
+    profile = get_active_profile()
+    if profile:
+        return os.path.join(root, "profiles", profile)
+    return root
 
 
 def get_config_dir(create: bool = True) -> str:
@@ -66,6 +104,32 @@ def get_config_dir(create: bool = True) -> str:
     if create:
         os.makedirs(config_dir, exist_ok=True)
     return config_dir
+
+
+def get_profile_aumid(base: str = APP_AUMID) -> str:
+    """AUMID extended with the active profile so Windows treats
+    each profile as a separate app on the taskbar.  No profile →
+    returns ``base`` unchanged."""
+    profile = get_active_profile()
+    return f"{base}.{profile}" if profile else base
+
+
+def get_profile_window_title(base: str = APP_DISPLAY_NAME) -> str:
+    """Window-title string with the active profile suffixed in
+    parens.  No profile → returns ``base`` unchanged."""
+    profile = get_active_profile()
+    return f"{base} — {profile}" if profile else base
+
+
+def get_profile_log_file_default() -> str:
+    """Default log-file path that's distinct per profile so two
+    instances don't trample each other.  Used as the default for
+    ``DEFAULTS['log_file']`` when no profile config exists yet."""
+    profile = get_active_profile()
+    base = os.path.expanduser("~/Downloads/rip_log")
+    if profile:
+        return f"{base}_{profile}.txt"
+    return f"{base}.txt"
 
 
 CONFIG_FILE = os.path.join(_config_dir_path(), "config.json")
@@ -98,7 +162,7 @@ DEFAULTS: dict[str, ConfigScalar] = {
     "temp_folder": _DEFAULT_TEMP,
     "tv_folder": _DEFAULT_TV,
     "movies_folder": _DEFAULT_MOVIES,
-    "log_file": os.path.expanduser("~/Downloads/rip_log.txt"),
+    "log_file": get_profile_log_file_default(),
     "opt_save_logs": True,
     "opt_drive_index": 0,
     "opt_safe_mode": True,
@@ -141,6 +205,7 @@ DEFAULTS: dict[str, ConfigScalar] = {
     "opt_debug_state_json": False,
     "opt_strict_mode": False,
     "opt_session_failure_report": True,
+    "opt_plain_english_profile_summary": False,
     "opt_log_cap_lines": 300000,
     "opt_log_trim_lines": 200000,
     "opt_smart_rip_mode": False,
@@ -155,6 +220,20 @@ DEFAULTS: dict[str, ConfigScalar] = {
     "opt_makemkv_rip_args": "",
     "opt_update_require_signature": True,
     "opt_update_signer_thumbprint": "",
+    # PySide6 UI (Phase 4 — AI BRANCH inherits MAIN's Qt UI defaults).
+    # Selected QSS theme name (without .qss extension); switchable
+    # live from Settings -> Themes.  Available themes live under
+    # ``gui_qt/qss/``.
+    "opt_pyside6_theme": "dark_github",
+    # Appearance-tab toggles inherited from MAIN.  All default True
+    # so existing AI BRANCH config.json files see no behavior change
+    # after the Phase 4 graft; see
+    # ``docs/handoffs/appearance-tab-spec.md`` for the rationale.
+    "opt_log_color_levels": True,    # auto-color warn/error in the live log
+    "opt_log_glyph_prefix": True,    # prepend ⚠/✗ to warn/error log lines
+    "opt_drive_state_glyph": True,   # prefix ◉/⊚/◌ before disc name in drive picker
+    "opt_tray_icon_enabled": True,   # system-tray companion for long rips
+    "opt_show_splash": True,         # startup splash screen (next-launch only)
     # AI diagnostics
     "opt_ai_diagnostics_enabled": True,
     "opt_ai_diagnostics_mode": "suggest",

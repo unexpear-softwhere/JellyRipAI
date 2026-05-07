@@ -16,6 +16,10 @@ Responsibilities:
 
 The GUI should stay thin. It is responsible for presentation and user interaction, not MakeMKV policy.
 
+A migration of this layer to PySide6 is under consideration, with the AI branch as the likely starting point. See [pyside6-migration-plan.md](pyside6-migration-plan.md) for rationale, scope, trade-offs, and open questions. Status is Proposed; the plan is not scheduled.
+
+A separate audit of user-visible copy and accessibility in this layer captured contrast, focus-indicator, jargon, AI-prompt, and live-log issues. See [ux-copy-and-accessibility-plan.md](ux-copy-and-accessibility-plan.md). Quick-win items there don't depend on the PySide6 migration; framework-limited items do.
+
 ### Controller
 
 Files:

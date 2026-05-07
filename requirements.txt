@@ -1,11 +1,20 @@
-# JellyRip AI dependencies
+# JellyRip AI runtime dependencies
 # Install with: pip install -r requirements.txt
+#
+# For tests + building the bundle, use requirements-dev.txt instead.
 
-# Claude provider support
+# ===== GUI =====
+# PySide6 is the Qt GUI toolkit.  Phase 4 (the AI BRANCH PySide6
+# port) brings AI BRANCH onto the same Qt foundation as MAIN.
+# >=6.5 required for QtMultimedia (MKV preview dialog).
+PySide6>=6.5
+
+# ===== AI providers =====
+# Claude provider support.  The other providers (OpenAI, Gemini,
+# local) use stdlib HTTP clients and don't need extra packages here.
 anthropic
 
-# tkinter is included with Python on Windows
-# OpenAI, Gemini, and local-provider adapters use stdlib HTTP clients
-
-# For building the executable:
-# pip install pyinstaller
+# ===== Standard library only beyond the above =====
+# Everything else JellyRip uses comes from the Python standard
+# library (subprocess, os, glob, shutil, json, re, platform,
+# datetime, concurrent.futures, time, threading, queue).

@@ -20,8 +20,8 @@ from utils.session_result import normalize_session_result
 from utils.state_machine import SessionState, SessionStateMachine
 from utils.scoring import choose_best_title
 from utils.classifier import ClassifiedTitle
-from gui.session_setup_dialog import DumpSessionSetup, MovieSessionSetup, TVSessionSetup
-from gui.setup_wizard import JELLYFIN_EXTRAS_CATEGORIES
+from shared.session_setup_types import DumpSessionSetup, MovieSessionSetup, TVSessionSetup
+from shared.wizard_types import JELLYFIN_EXTRAS_CATEGORIES
 from utils.makemkv_log import MakeMKVIssueSummary
 
 
@@ -113,14 +113,14 @@ class DummyGUI:
         return "fresh"
 
     def show_content_mapping_step(self, classified):
-        from gui.setup_wizard import ContentSelection
+        from shared.wizard_types import ContentSelection
         main_ids = [ct.title_id for ct in classified if ct.label == "MAIN"]
         extra_ids = [ct.title_id for ct in classified if ct.label == "EXTRA"]
         skip_ids = [ct.title_id for ct in classified if ct.label not in ("MAIN", "EXTRA")]
         return ContentSelection(main_title_ids=main_ids, extra_title_ids=extra_ids, skip_title_ids=skip_ids)
 
     def show_extras_classification_step(self, _extra_titles):
-        from gui.setup_wizard import ExtrasAssignment
+        from shared.wizard_types import ExtrasAssignment
         return ExtrasAssignment()
 
     def show_output_plan_step(
@@ -143,7 +143,7 @@ class DummyGUI:
         return True
 
     def ask_movie_setup(self, **_kwargs):
-        from gui.session_setup_dialog import MovieSessionSetup
+        from shared.session_setup_types import MovieSessionSetup
         return MovieSessionSetup(
             title="Untitled", year="2024", edition="",
             metadata_provider="TMDB", metadata_id="",
@@ -151,7 +151,7 @@ class DummyGUI:
         )
 
     def ask_tv_setup(self, **_kwargs):
-        from gui.session_setup_dialog import TVSessionSetup
+        from shared.session_setup_types import TVSessionSetup
         return TVSessionSetup(
             title="Untitled", year="", season=1, starting_disc=1,
             episode_mapping="auto", metadata_provider="TMDB", metadata_id="",
@@ -5111,7 +5111,7 @@ def test_run_smart_rip_wizard_flow_completes_movie(tmp_path, monkeypatch):
     )
 
     # Step 3: content mapping -> select main only
-    from gui.setup_wizard import ContentSelection
+    from shared.wizard_types import ContentSelection
     controller.gui.show_content_mapping_step = lambda _cl: ContentSelection(
         main_title_ids=[0], extra_title_ids=[], skip_title_ids=[1],
     )
@@ -5240,7 +5240,7 @@ def test_run_smart_rip_movie_setup_normalizes_numeric_metadata_id_with_provider(
         extras_mode="ask",
     )
 
-    from gui.setup_wizard import ContentSelection
+    from shared.wizard_types import ContentSelection
 
     controller.gui.show_content_mapping_step = lambda _cl: ContentSelection(
         main_title_ids=[0], extra_title_ids=[], skip_title_ids=[],
@@ -5332,7 +5332,7 @@ def test_run_smart_rip_movie_setup_uses_0000_when_year_blank(
         extras_mode="ask",
     )
 
-    from gui.setup_wizard import ContentSelection
+    from shared.wizard_types import ContentSelection
 
     controller.gui.show_content_mapping_step = lambda _cl: ContentSelection(
         main_title_ids=[0], extra_title_ids=[], skip_title_ids=[],
@@ -5432,7 +5432,7 @@ def test_run_smart_rip_tv_setup_normalizes_numeric_metadata_id_with_provider(
         keep_raw=False,
     )
 
-    from gui.setup_wizard import ContentSelection
+    from shared.wizard_types import ContentSelection
 
     controller.gui.show_content_mapping_step = lambda _cl: ContentSelection(
         main_title_ids=[0], extra_title_ids=[], skip_title_ids=[],
@@ -5518,7 +5518,7 @@ def test_run_smart_rip_splits_main_and_extras_phases(tmp_path, monkeypatch):
         replace_existing=False, keep_raw=False, extras_mode="ask",
     )
 
-    from gui.setup_wizard import ContentSelection, ExtrasAssignment
+    from shared.wizard_types import ContentSelection, ExtrasAssignment
 
     controller.gui.show_content_mapping_step = lambda _cl: ContentSelection(
         main_title_ids=[0], extra_title_ids=[1], skip_title_ids=[],
@@ -5691,7 +5691,7 @@ def test_run_smart_rip_preserves_main_when_extras_fail(tmp_path, monkeypatch):
         replace_existing=False, keep_raw=False, extras_mode="ask",
     )
 
-    from gui.setup_wizard import ContentSelection, ExtrasAssignment
+    from shared.wizard_types import ContentSelection, ExtrasAssignment
     controller.gui.show_content_mapping_step = lambda _cl: ContentSelection(
         main_title_ids=[0], extra_title_ids=[1], skip_title_ids=[],
     )
@@ -6157,7 +6157,7 @@ def test_run_smart_rip_movie_dialog_receives_identity_defaults_and_ai_prompt(
 
     controller.gui.ask_movie_setup = _ask_movie_setup
 
-    from gui.setup_wizard import ContentSelection
+    from shared.wizard_types import ContentSelection
 
     controller.gui.show_content_mapping_step = lambda _cl: ContentSelection(
         main_title_ids=[0], extra_title_ids=[], skip_title_ids=[],
@@ -6298,7 +6298,7 @@ def test_run_smart_rip_movie_ai_accept_opens_dialog_with_suggested_fields(
 
     controller.gui.ask_movie_setup = _ask_movie_setup
 
-    from gui.setup_wizard import ContentSelection
+    from shared.wizard_types import ContentSelection
 
     controller.gui.show_content_mapping_step = lambda _cl: ContentSelection(
         main_title_ids=[0], extra_title_ids=[], skip_title_ids=[],
@@ -7047,7 +7047,7 @@ def test_run_smart_rip_cancel_at_output_plan_stops(tmp_path, monkeypatch):
         replace_existing=False, keep_raw=False, extras_mode="ask",
     )
 
-    from gui.setup_wizard import ContentSelection
+    from shared.wizard_types import ContentSelection
     controller.gui.show_content_mapping_step = lambda _cl: ContentSelection(
         main_title_ids=[0], extra_title_ids=[], skip_title_ids=[],
     )
@@ -7688,7 +7688,7 @@ def test_run_smart_rip_persists_path_and_output_plan_state(tmp_path, monkeypatch
         extras_mode="ask",
     )
 
-    from gui.setup_wizard import ContentSelection
+    from shared.wizard_types import ContentSelection
 
     controller.gui.show_content_mapping_step = lambda _cl: ContentSelection(
         main_title_ids=[0],
@@ -7802,7 +7802,7 @@ def test_run_smart_rip_same_disc_start_fresh_uses_normal_flow(tmp_path, monkeypa
     controller.gui.show_scan_results_step = _show_scan_results
     controller.gui.ask_movie_setup = _ask_movie_setup
 
-    from gui.setup_wizard import ContentSelection
+    from shared.wizard_types import ContentSelection
 
     controller.gui.show_content_mapping_step = lambda _cl: ContentSelection(
         main_title_ids=[0], extra_title_ids=[], skip_title_ids=[],

@@ -1,0 +1,27 @@
+# JellyRip AI development dependencies
+# Install with: pip install -r requirements-dev.txt
+#
+# These are the dependencies needed to run the test suite and
+# build the bundle, in addition to the runtime requirements in
+# requirements.txt.
+
+# ===== Build =====
+# PyInstaller bundles the .exe.  Pinned at >=6 because Phase 3f's
+# spec uses the windowed-mode flag introduced in 6.x.
+pyinstaller>=6.0
+
+# ===== Runtime that the tests + bundle need =====
+PySide6>=6.5
+anthropic
+
+# ===== Test framework =====
+# pytest is the test runner.  Behavior-first tests make up the
+# majority of the suite.
+pytest>=7.0
+
+# pytest-qt is required for any test that constructs a Qt widget.
+# Tests that don't need widgets (pure helpers, file-content
+# introspection, etc.) skip pytest-qt via
+# ``pytest.importorskip("pytestqt")`` at module level so they still
+# run on environments without it.
+pytest-qt>=4.0

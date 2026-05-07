@@ -60,12 +60,9 @@ from engine.ripper_engine import RipperEngine  # pyright: ignore[reportMissingIm
 
 from controller.controller import RipperController  # pyright: ignore[reportMissingImports]
 
-from gui.main_window import JellyRipperGUI  # pyright: ignore[reportMissingImports]
-
 __all__ = [
     "CONFIG_FILE",
     "DEFAULTS",
-    "JellyRipperGUI",
     "RIP_ATTEMPT_FLAGS",
     "RipperController",
     "RipperEngine",
