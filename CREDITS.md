@@ -64,14 +64,25 @@ all-local heuristics — no provider needed.
 
 ## AI-assisted development
 
-A substantial portion of v1.0.x development — including the
-Phase 4 Qt port, the chat backend (with on-device fallback +
-replay logging), the AI provider dialog Qt rewrite, the
-multi-instance `--profile` feature, and the smoke-session
-hardening backports — was paired with
-**[Claude Code](https://claude.com/claude-code)** (Anthropic).
-Commits in the project history show
-`Co-Authored-By: Claude Opus 4.7 …` where this happened.
+A substantial portion of v1.0.x development was paired with
+multiple AI coding assistants over the project's lifespan.  Each
+contributed to different stretches of the work:
+
+* **[Claude Code](https://claude.com/claude-code)** (Anthropic) —
+  the Phase 4 Qt port, the chat backend (with on-device fallback +
+  replay logging), the AI provider dialog Qt rewrite, the
+  multi-instance `--profile` feature, the settings tabs, and the
+  smoke-session hardening backports.  Commits show
+  `Co-Authored-By: Claude Opus 4.7 …` where this happened.
+* **[Codex](https://github.com/openai/codex)** (OpenAI) — earlier
+  development passes; local `.codex_backup/` snapshots of those
+  sessions are gitignored.
+* **[Grok](https://x.ai/)** (xAI) — additional pairing during
+  development.
+
+The maintainer reviewed and accepted every change before it
+landed; the AI assistants were collaborators, not autonomous
+authors.
 
 ## License
 
