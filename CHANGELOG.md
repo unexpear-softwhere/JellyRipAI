@@ -2,6 +2,248 @@
 
 <!-- markdownlint-disable MD013 -->
 
+## [1.0.19] - 2026-05-04
+
+Phase 4 — the AI BRANCH PySide6 port. AI BRANCH inherits MAIN's Qt UI
+foundation (`gui_qt/`) and ports the AI Provider Setup dialog onto
+it. Chat sidebar still ships on tkinter for this release; the Qt port
+is scheduled as Phase 4b polish work.
+
+### Added
+
+- `gui_qt/` package — full Qt UI foundation grafted from MAIN. Six
+  switchable themes (`dark_github`, `light_inverted`, `dracula_light`,
+  `hc_dark`, `slate`, `frost`) generated from a shared token table by
+  `tools/build_qss.py`. Setup wizard, status bar, log pane, tray
+  icon, splash screen, toolbar, drive scanner, MKV preview dialog —
+  all the same code as MAIN.
+- `gui_qt/dialogs/ai_provider.py` — Qt port of
+  `gui/ai_provider_dialog.py`. New "✦ AI Providers" toolbar chip
+  opens it. Same UX surface as the tkinter original: provider cards,
+  API key field with show/hide, model selector with pricing label,
+  Test/Save/Set Active/Disconnect buttons, status state machine,
+  setup-hint flow with browser hand-off.
+- `shared/wizard_types.py` and `shared/session_setup_types.py`
+  lifted into AI BRANCH so wizard dataclasses live in a Qt-agnostic
+  home.
+- `tools/build_qss.py` — copied from MAIN. Regenerates the QSS theme
+  files when tokens change.
+- `requirements-dev.txt` pinning `pyinstaller>=6`, `PySide6>=6.5`,
+  `pytest>=7`, `pytest-qt>=4`.
+- `tests/test_pyside6_ai_provider_dialog.py` — 9 widget-level tests
+  covering construction, header copy, API-key vs URL field by
+  category, status state machine, toolbar wiring, and the
+  open-entry-point return code.
+
+### Changed
+
+- `main.py` rewritten to launch the Qt UI via `gui_qt.app.run_qt_app`,
+  with the same splash + "Loading interface..." pattern as MAIN.
+- `JellyRip.spec` adds `gui_qt` + PySide6 hidden imports, bundles the
+  six QSS theme files, and adds the AI provider abstraction
+  (`shared.ai`, `shared.workflow_history`, etc.) to the explicit
+  hidden-imports list.
+- `requirements.txt` lists PySide6 alongside the existing `anthropic`
+  pin.
+- `shared/runtime.py` bumped to `__version__ = "1.0.19"` and gained
+  the Qt-related defaults inherited from MAIN: `opt_pyside6_theme`,
+  `opt_log_color_levels`, `opt_log_glyph_prefix`,
+  `opt_drive_state_glyph`, `opt_tray_icon_enabled`, `opt_show_splash`.
+  AI-specific keys (`opt_ai_*`, `APP_DISPLAY_NAME = "JellyRip AI"`,
+  `APP_AUMID = "JellyRip.AI.1"`, etc.) are preserved unchanged.
+- `tests/test_ai_provider_dialog.py` re-pointed at
+  `gui_qt.dialogs.ai_provider`. Pure helpers
+  (`_sort_models_by_power`, `_classify_connection_error`,
+  `_resolve_local_model_selection`) were lifted verbatim, so the
+  state-machine tests for `_handle_save_result` survived intact.
+
+### Inherited from MAIN's 1.0.19
+
+- MakeMKV `-r` (robot mode) on every invocation so live progress is
+  parseable.
+- `engine.run_job(on_log=, on_progress=)` keyword forwarding so the
+  GUI log + progress bar stay updated through the rip.
+- `WorkflowLauncher` runs `engine.validate_tools()` pre-flight on
+  every disc-touching workflow click — missing `makemkvcon` shows a
+  friendly "Required Tool Not Found" dialog instead of `[Errno 2]`.
+- `SessionStateMachine.cancel(reason)` + `was_cancelled` flag so a
+  user-cancelled session no longer reports "completed successfully"
+  in the done dialog.
+- `gui_qt.theme.load_theme` catches `OSError` and `UnicodeDecodeError`
+  and raises `FileNotFoundError` with the available-themes hint, so
+  a corrupt or locked `.qss` file can no longer crash startup.
+
+### Phase 4b — chat sidebar (added 2026-05-05)
+
+End-to-end Qt chat now ships.  Type into the sidebar input, click
+Send, the configured provider responds, the answer renders with
+markdown.  No tkinter dependency on the chat path.
+
+#### Backend (`gui_qt/chat_controller.py`)
+
+- `ChatController(QObject)` — Qt-native chat backend.  Owns history
+  + busy state.  Provider call runs on a daemon worker thread;
+  results land on the GUI thread via Qt signals (no `after()`
+  polling, no `threading.Event` polling).
+- Provider resolution honors `opt_ai_mode`
+  (`"cloud"`/`"local"`/`"off"`), `opt_ai_cloud_enabled`,
+  `opt_ai_local_enabled`.  Default `"cloud"` mode tries cloud
+  first, falls back to local rather than refusing the request.
+  `is_available()` failures count as not configured.
+- Friendly error formatting for the four common cases: timeouts
+  (cloud vs local), 401 auth, 429/quota, and a length-truncated
+  fallback for unknown errors so the chat bubble doesn't bloat
+  with a stack trace.
+- Failed turns don't pollute the history list — a network error
+  or rate limit doesn't poison the next prompt's context.
+- Best-effort `shared.workflow_history.append_workflow_event`
+  log on every successful response so existing diagnostics keep
+  visibility.
+- Welcome message on first sidebar open (idempotent — re-opens
+  skip it).
+- 17 controller tests in
+  `tests/test_pyside6_chat_controller.py` covering signal wiring,
+  empty-prompt guard, success path, error path (history-pollution
+  guard), New Chat, Copy Chat (with + without empty transcript),
+  Suggest Next Step canned prompt, all four provider-resolution
+  modes, and the four friendly-error categories.
+
+#### Shell (`gui_qt/ai_chat_sidebar.py`)
+
+- `gui_qt/ai_chat_sidebar.py` — new Qt sidebar widget. `QDockWidget`
+  the user can detach / re-dock, with a `QTextBrowser` transcript
+  (markdown rendering — code fences, bold, links all work natively
+  vs tkinter's literal-text rendering), `QPlainTextEdit` input,
+  and the four action buttons (Suggest Next Step / New Chat / Copy
+  Chat / Send). Same widget surface as the tkinter sidebar
+  embedded in `gui/main_window.py` (~320 references in 10,700
+  lines), with cleaner Qt-native theming via objectName selectors.
+- New "☰ Chat" toolbar chip toggles the sidebar dock. Lazy
+  construction — the `QTextBrowser` cost only lands when the user
+  opens the chat.
+- Public Qt signals (`message_submitted`, `suggest_requested`,
+  `new_chat_requested`, `copy_chat_requested`, `closed`) and slots
+  (`append_user_message`, `append_assistant_message`,
+  `set_status`, `set_busy`, `clear_transcript`,
+  `clear_input`) define the contract a future controller hook
+  attaches to.
+- Plain Enter submits, Shift+Enter inserts a newline.
+- 18 widget tests in
+  `tests/test_pyside6_ai_chat_sidebar.py` pin the shell contract.
+
+### Phase 4b backend wired (2026-05-05 evening)
+
+- `gui_qt/chat_controller.py` now drives the sidebar end-to-end.
+  Send button + Enter both fire the provider call; markdown renders
+  in the transcript; busy state pulses correctly.
+- `gui_qt/app.py` constructs the controller after the MainWindow,
+  shows the welcome message, and holds the reference on the window
+  so the sidebar survives across the app's lifetime.
+
+### On-device fallback wired (added 2026-05-05 evening)
+
+- ``prompt_looks_like_ui_help`` / ``looks_like_ai_payload_echo`` /
+  ``build_ui_help_fallback`` lifted into ``gui_qt/chat_controller.py``
+  alongside the ``_QUOTA_ERROR_PATTERNS`` constant.  Per-toolkit
+  copies for now; the tkinter copies retire when ``gui/`` does.
+- New ``MainWindow.get_chat_ui_snapshot()`` method snapshots the
+  live UI state (status, drive, ai_mode, abort_button_state,
+  progress_percent, live_log_tail) into a dict the fallback
+  helper consumes.
+- Worker now hits three fallback paths:
+    - Provider unavailable AND prompt is UI-help → on-device
+      summary instead of "no provider configured" error.
+    - Provider returns the request payload verbatim (some smaller
+      models do this) → on-device summary instead of gibberish.
+    - Provider errors on a UI-help prompt → on-device summary
+      instead of the bare error.
+- Successful fallbacks render with backend label ``"fallback"`` so
+  workflow-history events distinguish them from real provider
+  responses.
+- 8 new tests in ``tests/test_pyside6_chat_controller.py`` cover
+  the pure helpers + the three worker paths + the snapshot helper.
+
+### Tkinter retirement (added 2026-05-05 evening)
+
+The legacy tkinter UI is retired across AI BRANCH's live import
+surface — same shape as MAIN's Phase 3h retirement.  Qt is now the
+only path.
+
+#### Removed
+
+- `gui/main_window.py` (10,700 lines), `gui/setup_wizard.py`,
+  `gui/session_setup_dialog.py`, `gui/secure_tk.py`, `gui/theme.py`,
+  `gui/update_ui.py`, `gui/ai_provider_dialog.py`, `gui/__init__.py`.
+  The entire `gui/` directory is gone.
+- `pyinstaller_tk_runtime_hook.py` — the runtime hook that bootstrapped
+  tkinter at PyInstaller startup is no longer needed.
+- Tkinter-coupled tests deleted: `test_ai_chat_sidebar.py` (1,302
+  lines, all tkinter-bound; pure helpers covered by
+  `test_pyside6_chat_controller.py`), `test_ai_profile.py`,
+  `test_session_setup_dialog.py`, `test_setup_wizard.py`,
+  `test_theme.py`, `test_main_status_indicator.py`,
+  `test_drive_enumeration.py`, `test_label_color_and_libredrive.py`,
+  `test_main_window_formatters.py`.
+- `JellyRip.py` no longer exports `JellyRipperGUI` (the tkinter
+  shell class) — the compatibility shim now exposes only
+  toolkit-agnostic helpers.
+
+#### Changed
+
+- `JellyRip.spec` no longer bundles `tkinter`, `_tkinter`,
+  `tkinter.ttk`, `tkinter.messagebox`, `tkinter.filedialog`, or
+  `tkinter.simpledialog` as hidden imports.  The Tcl/Tk runtime
+  hook is removed from `runtime_hooks=[]`.
+- Tests that pulled `ContentSelection` / `ExtrasAssignment` /
+  `OutputPlan` / `JELLYFIN_EXTRAS_CATEGORIES` from the deleted
+  `gui.setup_wizard` now import from `shared.wizard_types`.  Tests
+  that pulled `MovieSessionSetup` / `TVSessionSetup` /
+  `DumpSessionSetup` from `gui.session_setup_dialog` now import
+  from `shared.session_setup_types`.  `controller/controller.py`
+  three deferred-imports inside `RipperController` similarly flipped.
+- `tests/test_button_contrast.py` and `tests/test_focus_indicators.py`
+  replaced with the empty-tombstone versions from MAIN's Phase 3h —
+  the underlying tkinter constants are gone, and per-theme WCAG
+  contrast is pinned by `tests/test_pyside6_themes.py` instead.
+
+#### Kept (defensive)
+
+- `_bootstrap_tk_paths` in `main.py` and
+  `_configure_tcl_tk_environment` in `JellyRip.spec` — same
+  belt-and-suspenders pattern MAIN keeps.  PyInstaller's bundled
+  Python still ships Tcl/Tk by default; pointing TCL_LIBRARY /
+  TK_LIBRARY at the right place keeps a stray third-party
+  `import tkinter` from killing startup.
+
+### Replay logging wired (added 2026-05-05 evening)
+
+- Chat controller now writes the same JSONL replay records that
+  tkinter ``_record_ai_chat_replay`` writes — every turn produces
+  a correlated ``request`` / ``response`` / ``error`` triple
+  keyed by a UUID ``replay_id``, in
+  ``%APPDATA%\\JellyRipAI\\ai_chat_replay.jsonl``.
+- Phase contract matches the tkinter side so existing replay
+  bundle viewers parse Qt-emitted records unchanged.
+- Fallback responses (no provider, payload echo, provider error
+  on UI-help prompt) are recorded with ``backend="fallback"`` and
+  a ``reason`` key in details so debug runs distinguish them from
+  real provider responses.
+- Replay-write failures are swallowed — the chat path never
+  breaks because debug logging did.
+- 7 new tests in ``tests/test_pyside6_chat_controller.py`` cover
+  the request/response/error/fallback record shapes plus the
+  best-effort failure path.
+
+### Still deferred (post-v1.0.19, intentional MVP scope)
+
+- **AIChatMemory integration** — long conversations would benefit
+  from the memory module's summarization + pinned-facts handling.
+  The Qt controller keeps a flat in-memory history list for now.
+- **Streaming responses** — the `BaseProvider.chat()` interface
+  is synchronous (`-> str`).  Adding streaming is a provider-
+  interface refactor that affects the diagnostics + summarize
+  paths too; tracked as a separate effort.
+
 ## [1.0.18] - 2026-04-19
 
 ### Changed

@@ -57,5 +57,15 @@ rip_log.txt
 origin_main_controller.tmp
 .codex_backup/
 
-# Nested Claude worktrees (per-session working copies live here)
-.claude/worktrees/
+# Claude IDE artifacts — local tool permission allowlists, session
+# transcripts, worktrees, plus the per-project working-memory file.
+# CLAUDE.md was committed before but its content is duplicated in
+# README.md / docs/repository-layout.md; keeping it local-only
+# avoids leaking Claude-directive content to the remote.
+.claude/
+!.claude/.gitkeep
+CLAUDE.md
+
+# Local-only experiments + test artifacts.
+experiments/
+tests/_test_qss_empty_placeholder_tmp/

@@ -10,7 +10,7 @@ should be treated as non-final.
 
 ## Project Status
 
-- Current unstable line: `ai-v1.0.18` (latest unstable AI pre-release)
+- Current unstable line: `ai-v1.0.19` (latest unstable AI pre-release)
 - Platform target: Windows
 - Runtime target: Python 3.13+
 - Distribution target: standalone `JellyRipAI.exe` and optional installer
@@ -48,9 +48,9 @@ Branch-specific documentation for the assist line:
 
 ### From GitHub release
 
-(recommended, currently `ai-v1.0.18` unstable AI pre-release)
+(recommended, currently `ai-v1.0.19` unstable AI pre-release)
 
-1. Go to the [current unstable AI release page](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.18).
+1. Go to the [current unstable AI release page](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.19).
 2. Download `JellyRipAIInstaller.exe` (installer) or `JellyRipAI.exe` (standalone).
 3. If SmartScreen/Defender flags the file, whitelist the download folder
   first (common PyInstaller false positive).
@@ -183,7 +183,7 @@ through GitHub Releases rather than committed to the repository.
 ### Full release pipeline
 
 ```bash
-release.bat 1.0.18
+release.bat 1.0.19
 ```
 
 This runs tests, checks version consistency, builds both executables,

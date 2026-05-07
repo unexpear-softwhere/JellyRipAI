@@ -1,27 +1,62 @@
-## JellyRip AI v1.0.18 Release Notes (UNSTABLE)
+## JellyRip AI v1.0.19 Release Notes (UNSTABLE)
+
+Phase 4 — the AI BRANCH PySide6 port. Tkinter retired; PySide6 is
+now the only UI path. AI BRANCH inherits MAIN's Qt foundation and
+ports the AI provider dialog + chat sidebar onto it.
 
 Release channel: unstable pre-release.
 
 ### Download
-- Direct download: https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.18/JellyRipAI.exe
-- Installer: https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.18/JellyRipAIInstaller.exe
-- Release page: https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.18
+- Direct download: https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.19/JellyRipAI.exe
+- Installer: https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.19/JellyRipAIInstaller.exe
+- Release page: https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.19
 - All releases: https://github.com/unexpear/JellyRip/releases
 
-### What's New in 1.0.18
+### What's New in 1.0.19
 
-Startup and update hardening
-- Startup no longer loads an adjacent app-directory .env file before the UI opens.
-- Update cleanup and completion notifications now launch PowerShell from the trusted Windows system location.
-- The signed-update block path now shows the intended GUI error instead of throwing a callback arity exception.
+Qt UI foundation (Phase 4a)
+- gui_qt/ package grafted from MAIN — same six switchable themes (dark_github, light_inverted, dracula_light, hc_dark, slate, frost), the same setup wizard, status bar, log pane, tray icon, splash screen, toolbar, and right-click MKV preview.
+- shared/wizard_types.py and shared/session_setup_types.py lifted into AI BRANCH so wizard dataclasses live in a Qt-agnostic home.
+- main.py rewritten to launch the Qt UI; tkinter UI files in gui/ remain on disk during this release as the chat sidebar fallback.
+- JellyRip.spec gains gui_qt + PySide6 + AI-provider-abstraction hidden imports and bundles the QSS theme files.
 
-Manual movie edition handling
-- Manual movie-disc runs now carry the selected edition into controller state, temp metadata, and destination folder naming.
-- Alternate cuts no longer collapse into the base movie folder during the manual flow.
+AI Provider dialog (Phase 4c)
+- gui/ai_provider_dialog.py (tkinter, 1012 lines) ported to gui_qt/dialogs/ai_provider.py (PySide6).
+- New "✦ AI Providers" toolbar chip opens the Qt dialog directly. Same UX surface as the tkinter original — provider cards, API key field with show/hide, model selector with pricing label, Test/Save/Set Active/Disconnect buttons, status state machine, setup-hint flow with browser hand-off.
+- Same public API: open_ai_provider_dialog(parent, on_change=None) and AIProviderDialog. Existing tests continue to pass against the new Qt module.
 
-Transcode reliability
-- Verification fallback retries no longer announce a rejected transcode as completed before the retry starts.
+Engine-level fixes inherited from MAIN's 1.0.19
+- MakeMKV runs with -r (robot mode) on every invocation so live progress is parseable.
+- engine.run_job forwards on_log / on_progress callbacks through to the rip subprocess.
+- Workflow buttons run validate_tools() pre-flight; missing makemkvcon shows a friendly error dialog.
+- A user-cancelled session no longer reports "completed successfully" in the done dialog.
+- Corrupt or locked QSS theme files are caught and downgraded to FileNotFoundError with the available-themes hint.
 
 Release hygiene
-- Release metadata now aligns on the 1.0.18 line across the app, installer, docs, tester worksheet, and release notes.
-- AI builds now stage artifacts and bundled FFmpeg notices under dist/ai while keeping the ai-v* release lane separate from main.
+- Release metadata aligns on the 1.0.19 line across runtime, installer, docs, tester worksheet, and release notes.
+- AI builds continue to stage artifacts and bundled FFmpeg notices under dist/ai while keeping the ai-v* release lane separate from main.
+
+Tkinter retired — PySide6 is the only UI
+- The entire gui/ directory is gone (main_window.py, setup_wizard.py, session_setup_dialog.py, secure_tk.py, theme.py, update_ui.py, ai_provider_dialog.py, __init__.py). The Qt port carries every feature the tkinter UI had — the chat sidebar, AI provider dialog, setup wizard, status bar, log pane, MKV preview, drive scanner.
+- pyinstaller_tk_runtime_hook.py removed; JellyRip.spec no longer bundles tkinter / _tkinter / tkinter.ttk etc. as hidden imports.
+- Tkinter-bound test files removed: test_ai_chat_sidebar.py, test_ai_profile.py, test_session_setup_dialog.py, test_setup_wizard.py, test_theme.py, test_main_status_indicator.py, test_drive_enumeration.py. Pure helpers covered by the new tests/test_pyside6_chat_controller.py (32 tests).
+- Defensive Tcl/Tk env-var bootstrap in main.py and JellyRip.spec is kept so a stray third-party `import tkinter` from the bundled Python doesn't kill startup.
+
+AI chat sidebar — Qt port complete (Phase 4b)
+- New "☰ Chat" toolbar chip opens a dockable Qt sidebar (you can detach / re-dock / float it). Same widget surface as the tkinter sidebar — Suggest Next Step / New Chat / Copy Chat / Send buttons, a status indicator, and a markdown-rendering transcript. Plain Enter submits, Shift+Enter inserts a newline.
+- Headline upgrade: the Qt sidebar's transcript renders markdown natively via QTextBrowser. Code fences get a monospace block, **bold** actually bolds, and links are clickable — vs the tkinter sidebar showing literal markdown characters.
+- End-to-end working backend. Type a prompt, click Send, the configured provider answers. All chat backend logic lives in gui_qt/chat_controller.py — Qt-native threading via signals, no after() polling. Provider resolution honors the existing opt_ai_mode / opt_ai_cloud_enabled / opt_ai_local_enabled cfg keys; cloud mode auto-falls-back to local when the active cloud provider isn't reachable.
+- Friendlier error copy for the four common cases — timeouts (cloud vs local), 401 auth failures, 429 / quota, and a truncated fallback for unknown errors so chat bubbles don't bloat with stack traces.
+- Failed turns don't poison the conversation history — a network blip won't carry forward into the next prompt's context.
+
+On-device fallback works without a provider
+- Ask "what's happening?" / "check progress" / "next step" and the chat panel responds with a summary of the live UI state (status, drive, progress %, abort availability) — even if no AI provider is configured or the configured one isn't reachable.
+- Same fallback fires when a small local model echoes the request payload back instead of answering, so you don't see a wall of raw JSON in the chat bubble.
+
+Chat replay log
+- Every chat turn writes a correlated request/response/error triple to %APPDATA%\JellyRipAI\ai_chat_replay.jsonl so support can reproduce a bad answer offline. Same record shape as the tkinter version — existing replay viewers parse Qt-emitted records unchanged.
+- Fallback responses (no provider, model echoed the payload, provider crashed on a UI-help prompt) are tagged with backend="fallback" so debug runs distinguish them from real provider responses.
+
+### What's NOT in this release (post-v1.0.19)
+- AIChatMemory integration — long conversations stay as a flat in-memory history list; the memory module's summarization + pinned-facts handling is post-v1.
+- Streaming responses — BaseProvider.chat() returns the full reply at once. Streaming is a provider-interface refactor that affects diagnostics + summarize paths too, tracked separately.

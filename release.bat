@@ -3,14 +3,14 @@ REM ============================================================
 REM  JellyRip AI release pipeline — enforces correct order:
 REM    git-check -> tests -> build -> verify -> push -> publish
 REM
-REM  Usage:  release.bat 1.0.18
+REM  Usage:  release.bat 1.0.19
 REM ============================================================
 setlocal enabledelayedexpansion
 
 set VERSION=%~1
 if "%VERSION%"=="" (
     echo Usage: release.bat ^<version^>
-    echo Example: release.bat 1.0.18
+    echo Example: release.bat 1.0.19
     exit /b 1
 )
 set "RELEASE_BRANCH=ai"
