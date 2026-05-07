@@ -147,3 +147,43 @@ def mark_session_failed(
     if rip_path not in wiped_session_paths:
         engine.wipe_session_outputs(rip_path, log_fn)
         wiped_session_paths.add(rip_path)
+
+
+def mark_session_aborted(
+    engine: FailureMetadataEngineLike,
+    rip_path: str,
+    *,
+    wiped_session_paths: MutableSet[str],
+    log_fn: LogFn,
+    metadata: Mapping[str, Any] | None = None,
+) -> None:
+    """Mirror of ``mark_session_failed`` but for user-initiated abort.
+
+    Contract (per ``docs/workflow-stabilization-criteria.md`` *"Abort
+    propagation"*):
+
+    - Writes ``status="aborted"`` / ``phase="aborted"`` so metadata
+      accurately reflects the user's choice.
+    - Wipes partial output files (``.mkv`` / ``.partial``) so no
+      half-finished disc data sits in the temp folder.
+    - Idempotent via ``wiped_session_paths`` — calling twice is a
+      no-op on the wipe side.
+    - Keeps the metadata file itself so a tombstone exists for
+      diagnostics.  ``find_resumable_sessions`` filters
+      ``phase="aborted"`` so the session does NOT show up in the
+      resume picker.
+
+    The result: aborted sessions are NOT recoverable.  The user
+    explicitly chose to stop, so resume-from-where-they-left-off is
+    intentionally unavailable — they start fresh on the next run.
+    """
+    log_fn("Session aborted by user - wiping partial outputs.")
+    engine.update_temp_metadata(
+        rip_path,
+        status="aborted",
+        phase="aborted",
+        **dict(metadata or {}),
+    )
+    if rip_path not in wiped_session_paths:
+        engine.wipe_session_outputs(rip_path, log_fn)
+        wiped_session_paths.add(rip_path)

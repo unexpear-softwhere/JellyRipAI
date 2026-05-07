@@ -30,6 +30,7 @@ from controller.rip_validation import (
 )
 from controller.session_recovery import (
     map_title_ids_to_analyzed_indices,
+    mark_session_aborted,
     mark_session_failed,
     restore_selected_titles,
 )
@@ -72,6 +73,7 @@ class LegacyControllerMixin:
     session_paths: PathOverrides | None
     _preview_lock: threading.Lock
     _wiped_session_paths: set[str]
+    _current_rip_path: str | None
     session_report: list[str]
     sm: SessionStateMachine
 
@@ -796,6 +798,52 @@ class LegacyControllerMixin:
             log_fn=self.log,
             metadata=metadata,
         )
+
+    def _mark_session_aborted(self, rip_path: str, **metadata: Any) -> None:
+        """Wire ``mark_session_aborted`` from session_recovery into
+        the controller's wiped-session set + log.  Called on each
+        workflow's abort-return path so aborted sessions don't leak
+        into the resume picker."""
+        mark_session_aborted(
+            self.engine,
+            rip_path,
+            wiped_session_paths=self._wiped_session_paths,
+            log_fn=self.log,
+            metadata=metadata,
+        )
+
+    def _finalize_abort_cleanup_if_needed(self) -> None:
+        """Workflow abort-cleanup hook.
+
+        Called from each rip-producing workflow's outer ``finally``
+        block.  If the abort flag is set AND a rip session was
+        opened (``_current_rip_path`` populated by
+        ``write_temp_metadata``) AND the session hasn't already
+        reached a terminal state (complete / failed / aborted),
+        marks it aborted and wipes partial outputs.
+
+        Idempotent — the wiped-paths set guards against double-wipe
+        if multiple finallies fire (e.g., nested workflow calls).
+        Resets ``_current_rip_path`` after handling so the next run
+        starts clean.
+        """
+        rip_path = self._current_rip_path
+        if not rip_path:
+            return
+        try:
+            if not self.engine.abort_event.is_set():
+                return
+            if rip_path in self._wiped_session_paths:
+                return
+            meta = self.engine.read_temp_metadata(rip_path)
+            if meta is None:
+                return
+            phase = meta.get("phase")
+            if phase in {"complete", "organized", "failed", "aborted"}:
+                return
+            self._mark_session_aborted(rip_path)
+        finally:
+            self._current_rip_path = None
 
     def _safe_glob(
         self,

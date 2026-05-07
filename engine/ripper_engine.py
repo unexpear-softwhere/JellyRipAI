@@ -568,7 +568,14 @@ class RipperEngine:
                 except Exception as e:
                     logging.warning(f"Failed to read metadata for {full}: {e}")
                     continue
-                if meta and meta.get("phase") not in {"complete", "organized"}:
+                # Skip terminal phases: complete/organized are done,
+                # aborted sessions are intentionally not resumable
+                # (user explicitly chose Stop Session — see
+                # docs/workflow-stabilization-criteria.md "Abort
+                # propagation").
+                if meta and meta.get("phase") not in {
+                    "complete", "organized", "aborted",
+                }:
                     mkv_count = 0
                     try:
                         for dp, dn, fns in os.walk(full):

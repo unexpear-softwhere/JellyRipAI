@@ -134,6 +134,14 @@ class RipperController(LegacyControllerMixin):
         self.session_report: List[str] = []
         self._preview_lock = threading.Lock()
         self._wiped_session_paths: set[str] = set()
+        # Tracks the temp folder of the currently-active rip session.
+        # Set after engine.write_temp_metadata() opens a session;
+        # consumed by the abort-cleanup hook in each workflow's
+        # outer try/finally to mark aborted + wipe partials when the
+        # user clicks Stop Session mid-rip.  Reset to None on
+        # session completion / failure so the abort hook only fires
+        # when there's actually something to clean up.
+        self._current_rip_path: Optional[str] = None
         self.session_paths: Optional[Dict[str, str]] = None
         self.workflow_session_id: str = ""
         self.session_helpers = SessionHelpers(ui, self)
@@ -1601,6 +1609,7 @@ class RipperController(LegacyControllerMixin):
         """Guided rip: scan -> classify -> identity -> map -> extras -> preview -> rip."""
         self.workflow_session_id = str(uuid.uuid4())
         self.diagnostics.update_context(session_mode="smart_rip", pipeline_step="init")
+        self._current_rip_path = None
         try:
             self._run_smart_rip_inner()
         except Exception as e:
@@ -1608,6 +1617,11 @@ class RipperController(LegacyControllerMixin):
             self.log("Unhandled error in smart rip: %s" % e)
             raise
         finally:
+            # Honor user-cancel: if abort fired mid-rip, mark the
+            # session aborted and wipe partial outputs so it doesn't
+            # leak into the resume picker.  See
+            # docs/workflow-stabilization-criteria.md "Abort propagation".
+            self._finalize_abort_cleanup_if_needed()
             self.diagnostics.update_context(pipeline_step="complete")
             try:
                 summary = self.diagnostics.generate_session_summary()
@@ -2354,6 +2368,8 @@ class RipperController(LegacyControllerMixin):
             completed_titles=[],
             phase="ripping",
         )
+        # Track for run_smart_rip's abort-cleanup hook.
+        self._current_rip_path = rip_path
 
         if split_movie_extras and content is not None:
             main_phase = self._run_smart_rip_phase(
@@ -2860,6 +2876,17 @@ class RipperController(LegacyControllerMixin):
 
     def run_dump_all(self):
         """Rip all titles to temp storage for later organization."""
+        self._current_rip_path = None
+        # Reset SM at workflow entry — same rationale as run_organize.
+        self._reset_state_machine()
+        try:
+            self._run_dump_all_inner()
+        finally:
+            # Honor user-cancel for dump-all (single + multi-disc).
+            # See docs/workflow-stabilization-criteria.md "Abort propagation".
+            self._finalize_abort_cleanup_if_needed()
+
+    def _run_dump_all_inner(self):
         cfg       = self.engine.cfg
         path_overrides = self._prompt_run_path_overrides([
             ("temp_folder", "Temp Folder"),
@@ -2959,6 +2986,8 @@ class RipperController(LegacyControllerMixin):
         rip_path = os.path.join(temp_root, make_rip_folder_name())
         os.makedirs(rip_path, exist_ok=True)
         self.engine.write_temp_metadata(rip_path, title, 1, media_type="dump")
+        # Track for run_dump_all's abort-cleanup hook.
+        self._current_rip_path = rip_path
 
         self.gui.set_status("Ripping all titles...")
         _pre_rip_mkvs = frozenset(
@@ -2983,6 +3012,7 @@ class RipperController(LegacyControllerMixin):
         if not success:
             self.log("Rip did not complete.")
             self.report(f"Dump All: rip failed for {title}")
+            self._state_fail("dump_rip_failed")
             self.flush_log()
             return
 
@@ -2998,6 +3028,7 @@ class RipperController(LegacyControllerMixin):
         if not stabilized:
             self.log("File stabilization check failed after rip.")
             self.report("Manual dump failed stabilization check")
+            self._state_fail("dump_stabilization_failed")
             self.gui.show_error(
                 "Rip Failed",
                 (
@@ -3010,11 +3041,15 @@ class RipperController(LegacyControllerMixin):
             return
         if not self._verify_container_integrity(mkv_files):
             self.report("Manual dump failed ffprobe integrity check")
+            self._state_fail("dump_integrity_failed")
             self.gui.show_error(
                 "Rip Failed",
                 "Container integrity check failed (ffprobe)."
             )
             return
+        # All single-disc dump checkpoints passed → mark SM complete
+        # before write_session_summary so its message picks COMPLETED.
+        self.sm.complete()
         self.write_session_summary()
         self.flush_log()
         self.gui.set_progress(0)
@@ -3258,7 +3293,7 @@ class RipperController(LegacyControllerMixin):
         session_info: Mapping[str, Any],
         disc_titles: Sequence[DiscTitle],
     ):
-        from gui.setup_wizard import ContentSelection
+        from shared.wizard_types import ContentSelection
 
         valid_ids = {
             int(title.get("id", -1))
@@ -3307,7 +3342,7 @@ class RipperController(LegacyControllerMixin):
         session_info: Mapping[str, Any],
         extra_title_ids: Sequence[int],
     ):
-        from gui.setup_wizard import ExtrasAssignment
+        from shared.wizard_types import ExtrasAssignment
 
         raw_assignments = session_info.get("extras_assignments")
         if not isinstance(raw_assignments, Mapping):
@@ -3356,7 +3391,7 @@ class RipperController(LegacyControllerMixin):
         extras_map: Mapping[str, Sequence[str]],
         suggested_base_folder: str,
     ):
-        from gui.setup_wizard import OutputPlan
+        from shared.wizard_types import OutputPlan
 
         if isinstance(raw_result, OutputPlan):
             normalized_base = os.path.normpath(
@@ -3736,6 +3771,10 @@ class RipperController(LegacyControllerMixin):
                 disc_number,
                 media_type="dump",
             )
+            # Per-disc tracking inside the multi-disc loop so abort
+            # mid-dump only marks THIS disc aborted (already-completed
+            # discs keep their phase="complete").
+            self._current_rip_path = rip_path
             self.log(
                 f"--- Disc {disc_number}/{total}: '{disc_title}' ---"
             )
@@ -3815,6 +3854,7 @@ class RipperController(LegacyControllerMixin):
                 ):
                     disc_number += 1
                     continue
+                self._state_fail("dump_rip_failed")
                 break
 
             self.engine.update_temp_metadata(rip_path, status="ripped")
@@ -3832,6 +3872,7 @@ class RipperController(LegacyControllerMixin):
                 self.report(
                     f"Dump disc {disc_number} failed stabilization check"
                 )
+                self._state_fail("dump_stabilization_failed")
                 self.gui.show_error(
                     "Rip Failed",
                     (
@@ -3846,6 +3887,7 @@ class RipperController(LegacyControllerMixin):
                 self.report(
                     f"Dump disc {disc_number} failed ffprobe integrity check"
                 )
+                self._state_fail("dump_integrity_failed")
                 self.gui.show_error(
                     "Rip Failed",
                     "Container integrity check failed (ffprobe).\n\n"
@@ -3855,6 +3897,9 @@ class RipperController(LegacyControllerMixin):
             self.gui.set_progress(0)
             disc_number += 1
 
+        # End of multi-disc loop — mark SM complete (no-op if a
+        # disc-level _state_fail already fired).
+        self.sm.complete()
         self.write_session_summary()
         self.flush_log()
         self.gui.set_progress(0)
@@ -3873,6 +3918,13 @@ class RipperController(LegacyControllerMixin):
 
     def run_organize(self) -> None:
         cfg = self.engine.cfg
+
+        # Reset SM at workflow entry so a leaked FAILED state from a
+        # prior run can't poison the session-summary message at the
+        # end of THIS run.  Mirrors _run_disc_inner's reset-and-
+        # terminal-state pattern.  See workflow-stabilization-criteria.md
+        # cross-cutting "state machine reaches a terminal state".
+        self._reset_state_machine()
 
         if callable(getattr(self.gui, "ask_directory", None)):
             self.log("Opening folder picker — Organize source folder")
@@ -4029,6 +4081,7 @@ class RipperController(LegacyControllerMixin):
         )
 
         if move_ok:
+            self.sm.complete()
             self._cleanup_success_session_metadata(folder_path)
             norm_folder = os.path.normpath(folder_path)
             if (cfg.get("opt_auto_delete_temp", True) and
@@ -4043,11 +4096,13 @@ class RipperController(LegacyControllerMixin):
                     self.log(
                         f"Warning: could not delete temp: {e}"
                     )
-        elif self.engine.abort_event.is_set():
-            self.log(
-                "Move stopped before completion — "
-                "some files may not have moved."
-            )
+        else:
+            self._state_fail("organize_move_failed")
+            if self.engine.abort_event.is_set():
+                self.log(
+                    "Move stopped before completion — "
+                    "some files may not have moved."
+                )
 
         self.write_session_summary()
         self.flush_log()
@@ -4233,6 +4288,7 @@ class RipperController(LegacyControllerMixin):
     def _run_disc(self, is_tv: bool) -> None:
         mode = "tv_disc" if is_tv else "movie_disc"
         self.diagnostics.update_context(session_mode=mode, pipeline_step="init")
+        self._current_rip_path = None
         try:
             self._run_disc_inner(is_tv)
         except Exception as e:
@@ -4240,6 +4296,9 @@ class RipperController(LegacyControllerMixin):
             self.log("Unhandled error in %s: %s" % (mode, e))
             raise
         finally:
+            # Honor user-cancel for manual TV/Movie disc workflows.
+            # See docs/workflow-stabilization-criteria.md "Abort propagation".
+            self._finalize_abort_cleanup_if_needed()
             self.diagnostics.update_context(pipeline_step="complete")
             try:
                 summary = self.diagnostics.generate_session_summary()
@@ -4912,6 +4971,8 @@ class RipperController(LegacyControllerMixin):
                 dest_folder=dest_folder,
                 phase="setup"
             )
+            # Track for _run_disc's abort-cleanup hook.
+            self._current_rip_path = rip_path
             if is_tv and use_tv_setup_dialog and tv_setup_defaults:
                 self.engine.update_temp_metadata(
                     rip_path,
