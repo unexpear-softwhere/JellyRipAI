@@ -10,10 +10,10 @@ Unstable pre-release.
 
 ## Download
 
-- Direct download: [JellyRipAI.exe](https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.19/JellyRipAI.exe)
-- Installer: [JellyRipAIInstaller.exe](https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.19/JellyRipAIInstaller.exe)
-- Release page: [ai-v1.0.19 release](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.19)
-- All releases: [GitHub Releases](https://github.com/unexpear/JellyRip/releases)
+- Direct download: [JellyRipAI.exe](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.19/JellyRipAI.exe)
+- Installer: [JellyRipAIInstaller.exe](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.19/JellyRipAIInstaller.exe)
+- Release page: [ai-v1.0.19 release](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.19)
+- All releases: [GitHub Releases](https://github.com/unexpear-softwhere/JellyRipAI/releases)
 
 ## What's New in 1.0.19
 

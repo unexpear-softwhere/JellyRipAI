@@ -217,5 +217,5 @@ echo    - THIRD_PARTY_NOTICES.md
 echo    - FFmpeg-LICENSE.txt
 echo    - FFmpeg-README.txt
 echo.
-echo  Verify: https://github.com/unexpear/JellyRip/releases/tag/%RELEASE_TAG%
+echo  Verify: https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/%RELEASE_TAG%
 echo.

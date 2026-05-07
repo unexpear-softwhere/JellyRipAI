@@ -7,10 +7,10 @@ ports the AI provider dialog + chat sidebar onto it.
 Release channel: unstable pre-release.
 
 ### Download
-- Direct download: https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.19/JellyRipAI.exe
-- Installer: https://github.com/unexpear/JellyRip/releases/download/ai-v1.0.19/JellyRipAIInstaller.exe
-- Release page: https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.19
-- All releases: https://github.com/unexpear/JellyRip/releases
+- Direct download: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.19/JellyRipAI.exe
+- Installer: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.19/JellyRipAIInstaller.exe
+- Release page: https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.19
+- All releases: https://github.com/unexpear-softwhere/JellyRipAI/releases
 
 ### What's New in 1.0.19
 

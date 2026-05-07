@@ -11,8 +11,8 @@ should be treated as non-final.
 ## Project Status
 
 - Current unstable line: `ai-v1.0.19` (latest unstable AI pre-release)
-- AI release page: [ai-v1.0.19](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.19)
-- MAIN release page: [v1.0.19](https://github.com/unexpear/JellyRip/releases/tag/v1.0.19) (non-AI baseline, same repo)
+- AI release page: [ai-v1.0.19](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.19)
+- MAIN release page: [v1.0.19](https://github.com/unexpear/JellyRip/releases/tag/v1.0.19) (non-AI baseline, separate repo)
 - Platform target: Windows
 - Runtime target: Python 3.13+
 - Distribution target: standalone `JellyRipAI.exe` and optional installer
@@ -52,7 +52,7 @@ Branch-specific documentation for the assist line:
 
 (recommended, currently `ai-v1.0.19` unstable AI pre-release)
 
-1. Go to the [current unstable AI release page](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.19).
+1. Go to the [current unstable AI release page](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.19).
 2. Download `JellyRipAIInstaller.exe` (installer) or `JellyRipAI.exe` (standalone).
 3. If SmartScreen/Defender flags the file, whitelist the download folder
   first (common PyInstaller false positive).
