@@ -11,6 +11,8 @@ should be treated as non-final.
 ## Project Status
 
 - Current unstable line: `ai-v1.0.19` (latest unstable AI pre-release)
+- AI release page: [ai-v1.0.19](https://github.com/unexpear/JellyRip/releases/tag/ai-v1.0.19)
+- MAIN release page: [v1.0.19](https://github.com/unexpear/JellyRip/releases/tag/v1.0.19) (non-AI baseline, same repo)
 - Platform target: Windows
 - Runtime target: Python 3.13+
 - Distribution target: standalone `JellyRipAI.exe` and optional installer
