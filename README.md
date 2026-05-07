@@ -191,13 +191,13 @@ release.bat 1.0.19
 This runs tests, checks version consistency, builds both executables,
 pushes code, and publishes a GitHub release with assets attached in the
 correct order. It also refuses to run from a dirty working tree or a
-branch other than `ai`. AI releases are tagged as `ai-vX.Y.Z` so they
-can coexist with the main branch's release assets. Never create a
-release without assets.
+branch other than `main`. AI releases are tagged as `ai-vX.Y.Z` so they
+can never collide with MAIN's `vX.Y.Z` tags. Never create a release
+without assets.
 
 ## Support and Reporting
 
-- Issues: [GitHub Issues](https://github.com/unexpear/JellyRip/issues)
+- Issues: [GitHub Issues](https://github.com/unexpear-softwhere/JellyRipAI/issues)
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
 - Release post text: [release_notes.txt](release_notes.txt)
 - Readable release notes: [release_notes.md](release_notes.md)

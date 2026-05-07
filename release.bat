@@ -13,7 +13,12 @@ if "%VERSION%"=="" (
     echo Example: release.bat 1.0.19
     exit /b 1
 )
-set "RELEASE_BRANCH=ai"
+REM AI fork lives at unexpear-softwhere/JellyRipAI on the `main` branch.
+REM (The legacy `ai` branch lives on the now-archived
+REM `unexpear/JellyRipAI-old` repo.)  Tags keep the `ai-v*` prefix so
+REM they can never collide with MAIN's `v*` tags if the user ever
+REM reuses a remote across forks.
+set "RELEASE_BRANCH=main"
 set "RELEASE_TAG=ai-v%VERSION%"
 
 set "PYTHON_EXE=.venv\Scripts\python.exe"
