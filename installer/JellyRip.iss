@@ -4,7 +4,7 @@
 #define MyAppName "JellyRip AI"
 #define MyAppVersion "1.0.19"
 #define MyAppPublisher "unexpear"
-#define MyAppURL "https://github.com/unexpear/JellyRip"
+#define MyAppURL "https://github.com/unexpear-softwhere/JellyRipAI"
 #define MyAppExeName "JellyRipAI.exe"
 #define MyAppBuildOutputDir "..\dist\ai"
 

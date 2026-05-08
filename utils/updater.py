@@ -47,7 +47,7 @@ def is_newer_version(current_version, latest_version):
 
 
 def fetch_latest_release(
-    repo="unexpear/JellyRip",
+    repo="unexpear-softwhere/JellyRipAI",
     timeout=8,
     *,
     include_prereleases=False,
