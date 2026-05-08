@@ -26,7 +26,7 @@ def rip_preview_title(self, rip_path, title_id, preview_seconds, on_log):
     self._purge_rip_target_files(rip_path, on_log)
     cmd = (
         [makemkvcon] + global_args +
-        ["mkv", disc_target, str(title_id), rip_path] +
+        ["-r", "mkv", disc_target, str(title_id), rip_path] +
         RIP_ATTEMPT_FLAGS[0] + rip_args
     )
     return self._run_preview_process(cmd, preview_seconds, on_log)
@@ -91,7 +91,7 @@ def rip_all_titles(self, rip_path, on_progress, on_log):
         )
         cmd = (
             [makemkvcon] + global_args +
-            ["mkv", disc_target, "all", rip_path] +
+            ["-r", "mkv", disc_target, "all", rip_path] +
             flags + rip_args
         )
         success = self._run_rip_process(
@@ -188,7 +188,7 @@ def rip_selected_titles(self, rip_path, title_ids, on_progress, on_log):
                 )
             cmd = (
                 [makemkvcon] + global_args +
-                ["mkv", disc_target, str(tid), rip_path] +
+                ["-r", "mkv", disc_target, str(tid), rip_path] +
                 flags + rip_args
             )
 
