@@ -28,7 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-__version__ = "1.0.20"
+__version__ = "1.0.21"
 APP_VARIANT = "ai"
 APP_DISPLAY_NAME = "JellyRip AI"
 APP_EXE_BASENAME = "JellyRipAI"

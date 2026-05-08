@@ -1,58 +1,42 @@
-## JellyRip AI v1.0.20 Release Notes (UNSTABLE)
+## JellyRip AI v1.0.21 Release Notes (UNSTABLE)
 
-JellyRip AI v1.0.20 — Claude provider model-ID fix, GitHub Pages
-landing page, and the README rewrite for the two-repo fork model.
-Existing users with a saved Claude configuration may see API errors
-on first connection-test; re-save credentials and the dialog falls
-back to the new default model automatically.
+JellyRip AI v1.0.21 — audit-driven cleanup.  Default Gemini model
+bumped to match what we did for Claude in v1.0.20, plus repository
+hygiene and README honesty around workflow test status.
 
 ## Download
 
-- Direct download: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.20/JellyRipAI.exe
-- Installer: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.20/JellyRipAIInstaller.exe
-- Release page: https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.20
+- Direct download: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.21/JellyRipAI.exe
+- Installer: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.21/JellyRipAIInstaller.exe
+- Release page: https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.21
 - Project site: https://unexpear-softwhere.github.io/JellyRipAI/
 
-### What's New in 1.0.20
+### What's New in 1.0.21
 
-Fixed
-- Claude provider model identifiers realigned against the live
-  Anthropic lineup.  The defaults shipped in ai-v1.0.19 were stale
-  or never-released:
-  - claude-opus-4-6          -> claude-opus-4-7
-  - claude-sonnet-4-20250514 -> claude-sonnet-4-6
-  - claude-haiku-4-5-20251001 unchanged (was already correct)
-  Default model for new installs flips from Sonnet 4 (May 2025) to
-  Sonnet 4.6.  Pricing table in the AI Providers dialog refreshed.
+Provider stack
+- Default Gemini model bumped from gemini-2.0-flash to
+  gemini-2.5-flash.  Matches the price/perf tier shift we did for
+  Claude in v1.0.20.  Older models stay available in the dropdown.
+- credential_store.py docstring example updated to match.
 
-Added
-- GitHub Pages site published at https://unexpear-softwhere.github.io/JellyRipAI/
-  Cayman theme, source = main branch / docs folder.  All eight files
-  under docs/ ship to the site.
-- Landing page with download CTA, AI-feature blurb, project-info
-  links, and a cross-link back to the non-AI baseline fork.
+Documentation
+- README "Main Workflows" added "(some testing)" / "(not tested)"
+  qualifiers to match MAIN's honesty about test status.
 
-Changed
-- README.md "Active Branches" -> "Active Forks".  Previous text
-  described a legacy single-repo two-branch layout (main + ai on one
-  origin) which hadn't been accurate since the AI fork moved to its
-  own repository.  Clone instructions in "From source" rewritten to
-  point at the AI fork repo directly with no branch-switching.
-
-Removed
-- ui_visual_assets_copy/ untracked from the repo — ~9000 lines of
-  retired tkinter UI snapshot, including the 6700-line main_window.py
-  mirror.  Kept locally and gitignored.
+Bundle / repo
+- Removed gui_qt/qss/warm.qss (empty 0-byte placeholder).
+- pyproject.toml keywords dropped tkinter, added pyside6/qt/claude/ai.
+- .gitignore additions: dashboard.html (defensive), *.tmp.
 
 ### What's NOT in this release
 
-No new AI features or workflow changes since ai-v1.0.19.  The chat
-sidebar, AI provider dialog, diagnostics routing, and on-device
-fallback behave identically.
+No engine or workflow changes.  Chat sidebar, AI provider dialog,
+diagnostics routing, on-device fallback all behave identically to
+ai-v1.0.20.  Existing users with a saved Gemini configuration are
+unaffected — their saved preference takes precedence over the new
+default.
 
 ### Companion fork: JellyRip MAIN
 
-The non-AI baseline ships the same disc-ripping core without AI.
-
-- MAIN release page: https://github.com/unexpear/JellyRip/releases/tag/v1.0.20
+- MAIN release page: https://github.com/unexpear/JellyRip/releases/tag/v1.0.21
 - MAIN project site: https://unexpear.github.io/JellyRip/

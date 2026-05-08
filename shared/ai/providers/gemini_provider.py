@@ -13,7 +13,11 @@ from shared.ai.providers.base import BaseProvider, ConnectionResult, ProviderInf
 class GeminiProvider(BaseProvider):
     """Google Gemini API provider."""
 
-    _DEFAULT_MODEL = "gemini-2.0-flash"
+    # Refreshed 2026-05-08 to match the live Google catalog.  Default
+    # is 2.5-flash — the current price/perf sweet spot.  2.0-flash and
+    # 2.0-flash-lite stay in the list for users who want the older
+    # generation explicitly.
+    _DEFAULT_MODEL = "gemini-2.5-flash"
     _MODELS = [
         "gemini-2.5-flash",
         "gemini-2.0-flash",

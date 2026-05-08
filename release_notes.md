@@ -1,71 +1,58 @@
-# JellyRip AI v1.0.20 Release Notes
+# JellyRip AI v1.0.21 Release Notes
 
-JellyRip AI v1.0.20 — Claude provider model-ID fix, GitHub Pages
-landing page, and the README rewrite for the two-repo fork model.
-Existing users with a saved Claude configuration may see API errors
-on first connection-test; re-save credentials and the dialog falls
-back to the new default model automatically.
+JellyRip AI v1.0.21 — audit-driven cleanup.  Default Gemini model
+bumped to match what we did for Claude in v1.0.20, plus repository
+hygiene and README honesty around workflow test status.
 
 ## Download
 
-- Direct download: [JellyRipAI.exe](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.20/JellyRipAI.exe)
-- Installer: [JellyRipAIInstaller.exe](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.20/JellyRipAIInstaller.exe)
-- Release page: [ai-v1.0.20 release](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.20)
+- Direct download: [JellyRipAI.exe](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.21/JellyRipAI.exe)
+- Installer: [JellyRipAIInstaller.exe](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.21/JellyRipAIInstaller.exe)
+- Release page: [ai-v1.0.21 release](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.21)
 - Project site: [unexpear-softwhere.github.io/JellyRipAI](https://unexpear-softwhere.github.io/JellyRipAI/)
 
-## What's New in 1.0.20
+## What's New in 1.0.21
 
-### Fixed
+### Provider stack
 
-- Claude provider model identifiers realigned against the live
-  Anthropic lineup.  The defaults shipped in ai-v1.0.19 were stale
-  or never-released:
-  - `claude-opus-4-6`          → `claude-opus-4-7`
-  - `claude-sonnet-4-20250514` → `claude-sonnet-4-6`
-  - `claude-haiku-4-5-20251001` unchanged (was already correct)
+- **Default Gemini model bumped from `gemini-2.0-flash` to
+  `gemini-2.5-flash`.**  Matches the price/perf tier shift we did
+  for Claude in v1.0.20 (defaulting to current generation rather
+  than the previous one).  `gemini-2.0-flash` and
+  `gemini-2.0-flash-lite` stay in the dropdown for users who want
+  them explicitly.  No change to Claude / OpenAI / local provider
+  defaults.
+- `credential_store.py` docstring example updated to match.
 
-  Default model for new installs flips from Sonnet 4 (May 2025) to
-  Sonnet 4.6, the current price/perf sweet spot for diagnostics +
-  chat.  The pricing table in the AI Providers dialog was refreshed
-  to match.
+### Documentation
 
-### Added
+- README "Main Workflows" — added "(some testing)" / "(not tested)"
+  qualifiers to match MAIN's honesty about test status.  Same code
+  in both forks; status should match.
 
-- GitHub Pages site published at
-  [unexpear-softwhere.github.io/JellyRipAI](https://unexpear-softwhere.github.io/JellyRipAI/).
-  Cayman theme, source = `main` branch / `docs/` folder.  All eight
-  files under `docs/` ship to the site as-is.
-- Landing page with download CTA, AI-feature blurb, project-info
-  links, and a cross-link back to the non-AI baseline fork.
+### Bundle / repo
 
-### Changed
-
-- `README.md` "Active Branches" → "Active Forks".  Previous text
-  described a legacy single-repo two-branch layout (`main` + `ai` on
-  one origin) which hadn't been accurate since the AI fork moved to
-  its own repository.  Anyone following the old clone instructions
-  ran `git switch --track origin/ai` and silently landed on the
-  non-AI baseline.
-- "From source" rewritten to clone from the AI fork repo directly
-  with no branch-switching, plus a one-line pointer to the non-AI
-  baseline for users without AI needs.
-
-### Removed
-
-- `ui_visual_assets_copy/` untracked from the repo — ~9000 lines of
-  retired tkinter UI snapshot, including the 6700-line
-  `main_window.py` mirror.  Kept locally and gitignored.
+- **Removed `gui_qt/qss/warm.qss`** — empty 0-byte placeholder, same
+  cleanup MAIN did in v1.0.21.
+- **`pyproject.toml` keywords** — dropped `tkinter`, added
+  `pyside6`, `qt`, `claude`, `ai`.
+- **`.gitignore` additions:**
+  - `dashboard.html` (defensive — file doesn't exist on AI today,
+    but if Claude ever drops it here it must not get tracked
+    alongside the already-gitignored `CLAUDE.md`).
+  - `*.tmp` (catches stray scratch artifacts).
 
 ### What's NOT in this release
 
-No new AI features or workflow changes since ai-v1.0.19.  The chat
-sidebar, AI provider dialog, diagnostics routing, and on-device
-fallback behave identically.
+No engine or workflow changes.  Chat sidebar, AI provider dialog,
+diagnostics routing, on-device fallback all behave identically to
+ai-v1.0.20.  Existing users with a saved Gemini configuration are
+unaffected — their saved model preference takes precedence over the
+new default.
 
 ## Companion fork: JellyRip MAIN
 
-The non-AI baseline ships the same disc-ripping core without any AI
-assistance.
+The non-AI baseline ships the same disc-ripping core without AI.
 
-- MAIN release page: [v1.0.20 release](https://github.com/unexpear/JellyRip/releases/tag/v1.0.20)
+- MAIN release page: [v1.0.21 release](https://github.com/unexpear/JellyRip/releases/tag/v1.0.21)
 - MAIN project site: [unexpear.github.io/JellyRip](https://unexpear.github.io/JellyRip/)

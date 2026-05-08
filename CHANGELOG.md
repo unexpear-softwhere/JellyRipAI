@@ -2,6 +2,43 @@
 
 <!-- markdownlint-disable MD013 -->
 
+## [1.0.21] - 2026-05-08
+
+Audit-driven cleanup release.  Provider-stack consistency fix
+(Gemini default lined up with what we did for Claude in v1.0.20),
+plus repository hygiene.
+
+### Changed
+
+- Default Gemini model bumped from `gemini-2.0-flash` to
+  `gemini-2.5-flash` — matches the price/perf tier shift we did for
+  Claude in v1.0.20 (defaulting to the current generation rather
+  than the previous one).  `gemini-2.0-flash` and
+  `gemini-2.0-flash-lite` stay in the dropdown for users who want
+  them explicitly.  Pricing table in `gui_qt/dialogs/ai_provider.py`
+  already had `gemini-2.5-flash` so no change there.
+- `shared/ai/credential_store.py` docstring example updated to
+  match the new Gemini default.
+- README "Main Workflows" — added "(some testing)" / "(not tested)"
+  qualifiers to match MAIN's honesty about test status.  Same code
+  in both forks; status should match.
+- `pyproject.toml` keywords updated: dropped `tkinter` (retired
+  alongside MAIN's Phase 3h), added `pyside6`, `qt`, `claude`,
+  `ai`.
+
+### Removed
+
+- `gui_qt/qss/warm.qss` — empty 0-byte placeholder, same cleanup
+  MAIN did in v1.0.21.
+
+### Repo hygiene
+
+- `dashboard.html` added to `.gitignore` defensively — file doesn't
+  exist on AI side today, but if it ever lands it must not get
+  tracked alongside the gitignored `CLAUDE.md`.
+- `*.tmp` added to `.gitignore` so stray scratch artifacts like
+  `origin_main_controller.tmp` don't surface on `git add -A`.
+
 ## [1.0.20] - 2026-05-08
 
 Bug-fix and repo-hygiene release.  Ships the Claude provider model-ID

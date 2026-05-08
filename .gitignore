@@ -74,3 +74,12 @@ tests/_test_qss_empty_placeholder_tmp/
 # local for as long as it's useful but does not belong in the public
 # tree alongside the live gui_qt/ implementation.
 ui_visual_assets_copy/
+
+# Claude productivity dashboard (reads CLAUDE.md, renders memory
+# tabs).  Defensive — file doesn't exist on AI side today, but if
+# Claude ever drops it here it must not get tracked alongside
+# CLAUDE.md (which is already gitignored above).
+dashboard.html
+
+# Local scratch / .tmp artifacts that aren't part of project source.
+*.tmp

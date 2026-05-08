@@ -251,7 +251,7 @@ def load_credentials() -> dict[str, dict[str, Any]]:
         {
             "claude": {"api_key": "sk-...", "model": "claude-sonnet-4-6"},
             "openai": {"api_key": "sk-...", "model": "gpt-4o-mini"},
-            "gemini": {"api_key": "AI...", "model": "gemini-2.0-flash"},
+            "gemini": {"api_key": "AI...", "model": "gemini-2.5-flash"},
             "local":  {"model": "qwen2.5:14b-instruct", "base_url": "http://localhost:11434"},
         }
 

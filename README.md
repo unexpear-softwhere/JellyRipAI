@@ -10,9 +10,9 @@ should be treated as non-final.
 
 ## Project Status
 
-- Current unstable line: `ai-v1.0.20` (latest unstable AI pre-release)
-- AI release page: [ai-v1.0.20](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.20)
-- MAIN release page: [v1.0.20](https://github.com/unexpear/JellyRip/releases/tag/v1.0.20) (non-AI baseline, separate repo)
+- Current unstable line: `ai-v1.0.21` (latest unstable AI pre-release)
+- AI release page: [ai-v1.0.21](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.21)
+- MAIN release page: [v1.0.21](https://github.com/unexpear/JellyRip/releases/tag/v1.0.21) (non-AI baseline, separate repo)
 - Project site: [unexpear-softwhere.github.io/JellyRipAI](https://unexpear-softwhere.github.io/JellyRipAI/)
 - Platform target: Windows
 - Runtime target: Python 3.13+
@@ -53,9 +53,9 @@ Branch-specific documentation for the assist line:
 
 ### From GitHub release
 
-(recommended, currently `ai-v1.0.20` unstable AI pre-release)
+(recommended, currently `ai-v1.0.21` unstable AI pre-release)
 
-1. Go to the [current unstable AI release page](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.20).
+1. Go to the [current unstable AI release page](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.21).
 2. Download `JellyRipAIInstaller.exe` (installer) or `JellyRipAI.exe` (standalone).
 3. If SmartScreen/Defender flags the file, whitelist the download folder
   first (common PyInstaller false positive).
@@ -91,13 +91,15 @@ paths before the first rip.
 
 ## Main Workflows
 
-- **TV Disc**: interactive disc ripping with episode-oriented organization
-- **Movie Disc**: interactive movie ripping with metadata prompts
-- **Smart Rip**: auto-pick the best main feature
-- **Dump All**: raw dump mode for all titles
-- **Organize Existing MKVs**: move and sort already-ripped files
+- **TV Disc**: interactive disc ripping with episode-oriented organization (some testing)
+- **Movie Disc**: interactive movie ripping with metadata prompts (some testing)
+- **Smart Rip**: auto-pick the best main feature (some testing)
+- **Dump All**: raw dump mode for all titles (some testing)
+- **Organize Existing MKVs**: move and sort already-ripped files (not tested)
 - **Unattended Modes**: operator-assisted multi-disc flows with
-  blocking confirmations and safety checks
+  blocking confirmations and safety checks (light testing — exercises the
+  same disc-rip core as TV/Movie/Smart Rip)
+- **Prep for and use FFmpeg or HandBrake**: simple transcoding (not tested)
 
 ## Configuration
 
@@ -190,7 +192,7 @@ through GitHub Releases rather than committed to the repository.
 ### Full release pipeline
 
 ```bash
-release.bat 1.0.20
+release.bat 1.0.21
 ```
 
 This runs tests, checks version consistency, builds both executables,
