@@ -89,11 +89,28 @@ class ExtrasAssignment:
 
 @dataclass
 class OutputPlan:
-    """Result of Step 5 — the planned folder structure."""
+    """Result of Step 5 — the planned folder structure.
+
+    AI BRANCH adds three fields beyond MAIN's baseline so the
+    smart-rip flow can carry the user's edited destination through
+    the wizard:
+
+    * ``suggested_base_folder`` — what the wizard auto-suggested
+      before any user edit.  Used to detect whether the user
+      changed the destination.
+    * ``destination_edited`` — flips True when ``base_folder``
+      diverges from ``suggested_base_folder``.
+    * ``action`` — ``"confirm"``, ``"cancel"``, or ``""`` so the
+      controller can distinguish "user confirmed" from "dialog
+      cancelled" without overloading ``confirmed``.
+    """
     base_folder: str = ""
     main_file_label: str = ""
     extras: dict[str, list[str]] = field(default_factory=dict)
     confirmed: bool = False
+    suggested_base_folder: str = ""
+    destination_edited: bool = False
+    action: str = ""
 
 
 # ---------------------------------------------------------------------------
