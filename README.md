@@ -79,7 +79,6 @@ paths before the first rip.
 ## Requirements
 
 - Windows
-- Python 3.13 with `tkinter`
 - MakeMKV
 - FFmpeg (`ffmpeg` and `ffprobe`) for source runs; release builds bundle
   the GPLv3 Gyan full build
@@ -121,7 +120,8 @@ App-directory `.env` files are no longer loaded at startup.
 
 - [main.py](main.py) - primary entrypoint
 - [JellyRip.py](JellyRip.py) - compatibility entrypoint and project map
-- [gui](gui) - tkinter UI layer
+- [gui_qt](gui_qt) - PySide6 (Qt) UI layer (themes, dialogs, preview, AI chat sidebar)
+- [gui_qt/qss](gui_qt/qss) - generated theme stylesheets (six themes)
 - [controller](controller) - workflow orchestration
 - [engine](engine) - MakeMKV, ffprobe, and file operations
 - [utils](utils) - helper modules
