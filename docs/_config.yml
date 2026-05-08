@@ -1,0 +1,21 @@
+# GitHub Pages — Jekyll config for the published JellyRip AI site.
+# Source: main branch, /docs folder.
+
+title: JellyRip AI
+description: >-
+  AI-assisted fork of JellyRip.  Adds a chat sidebar and integrations
+  with Anthropic Claude, OpenAI, Google Gemini, and Ollama on top of
+  the disc-ripping core.
+theme: jekyll-theme-cayman
+show_downloads: false
+
+# AI BRANCH's docs/ is already curated for public consumption — no
+# internal handoff or smoke-report material lives in here, so the
+# exclude list is empty.  Add entries if that ever changes.
+exclude: []
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
