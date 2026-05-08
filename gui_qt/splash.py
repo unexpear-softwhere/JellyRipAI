@@ -65,7 +65,7 @@ def _build_pixmap(version: str | None = None):
         |                              |
         |          PySide6             |   <- muted, small
         |                              |
-        |  v1.0.19 — Loading...        |   <- placeholder; real
+        |  v1.0.20 — Loading...        |   <- placeholder; real
         |                              |       text comes via
         +------------------------------+       showMessage().
     """

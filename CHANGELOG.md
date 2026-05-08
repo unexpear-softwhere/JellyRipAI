@@ -2,6 +2,56 @@
 
 <!-- markdownlint-disable MD013 -->
 
+## [1.0.20] - 2026-05-08
+
+Bug-fix and repo-hygiene release.  Ships the Claude provider model-ID
+fix that ai-v1.0.19 missed, plus a public documentation site and
+README rewrite for the two-repo fork model.
+
+### Fixed
+
+- Claude provider model identifiers realigned against the live
+  Anthropic lineup.  The defaults shipped in ai-v1.0.19 were stale or
+  never released:
+  - `claude-opus-4-6`         → `claude-opus-4-7`
+  - `claude-sonnet-4-20250514`→ `claude-sonnet-4-6`
+  - `claude-haiku-4-5-20251001` unchanged (was already correct)
+
+  Default model for new installs flips from Sonnet 4 (May 2025) to
+  Sonnet 4.6.  Existing users with a saved Claude config pointing at
+  an old ID will see API errors on first connection-test; re-save the
+  credentials and the dialog falls back to the new default.
+
+### Added
+
+- GitHub Pages site published at
+  [unexpear-softwhere.github.io/JellyRipAI](https://unexpear-softwhere.github.io/JellyRipAI/).
+  Cayman theme, source = `main` branch / `docs/` folder.  All eight
+  files under `docs/` (already curated for public consumption) ship
+  to the site as-is.
+- `docs/index.md` landing page with download CTA, AI-feature blurb,
+  link set to top-level project info, and cross-link back to the
+  non-AI baseline fork.
+
+### Changed
+
+- `README.md` "Active Branches" → "Active Forks".  Previous text
+  described a legacy single-repo two-branch layout (`main` + `ai` on
+  one origin) which hasn't been accurate since the AI fork moved to
+  its own repository (`unexpear-softwhere/JellyRipAI`) and the legacy
+  repo (`unexpear/JellyRipAI-old`) was archived.  Anyone following
+  the old clone instructions ran `git switch --track origin/ai` and
+  silently landed on the non-AI baseline.
+- `README.md` "From source" — clones from the AI fork repo directly,
+  drops the obsolete branch-switching step, points users without AI
+  needs at the non-AI baseline.
+
+### Removed
+
+- `ui_visual_assets_copy/` — visual-asset reference snapshot of the
+  retired tkinter UI (9 files, ~9000 lines including the 6700-line
+  `main_window.py` mirror).  Untracked; kept locally.
+
 ## [1.0.19] - 2026-05-04
 
 Phase 4 — the AI BRANCH PySide6 port. AI BRANCH inherits MAIN's Qt UI
