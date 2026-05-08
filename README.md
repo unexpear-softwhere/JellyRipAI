@@ -19,18 +19,20 @@ should be treated as non-final.
 - Quality target: practical and safe for testing,
   not yet stable enough to treat as finished software
 
-## Active Branches
+## Active Forks
 
-JellyRip is currently maintained as two separate lines:
+JellyRip is maintained as two separate repositories:
 
-- `main` - the non-AI baseline. This line keeps the core ripping,
-  validation, organization, logging, and update workflows without
-  assistant or AI-driven features.
-- `ai` - the assist-feature line. This line includes the baseline
-  workflows plus assistant, provider, diagnostic, and other
-  AI-assisted features.
+- **[unexpear/JellyRip](https://github.com/unexpear/JellyRip)** — the
+  non-AI baseline. Core ripping, validation, organization, logging,
+  and update workflows without assistant or AI-driven features.
+  Releases tagged `vX.Y.Z`.
+- **[unexpear-softwhere/JellyRipAI](https://github.com/unexpear-softwhere/JellyRipAI)**
+  (this repo) — the assist-feature fork. Baseline workflows plus
+  chat sidebar, AI provider integrations, diagnostic backends. Releases
+  tagged `ai-vX.Y.Z`.
 
-Rule of thumb: deterministic core behavior belongs in the non-AI line
+Rule of thumb: deterministic core behavior belongs in the non-AI fork
 first. Assistive features can suggest or prefill, but they must stay
 visible, optional, reversible, and weaker than explicit user input.
 
@@ -61,17 +63,19 @@ Branch-specific documentation for the assist line:
 ### From source (git clone)
 
 ```bash
-git clone https://github.com/unexpear/JellyRip.git
-cd JellyRip
-git fetch origin
-# main baseline
-# git switch --track origin/main
-# assist/AI line
-git switch --track origin/ai
-# installs the Anthropic SDK for Claude support on the AI branch
+# AI fork (this repo) — chat sidebar + AI provider integrations
+git clone https://github.com/unexpear-softwhere/JellyRipAI.git
+cd JellyRipAI
+# pulls PySide6 plus the Anthropic SDK for Claude support
 pip install -r requirements.txt
 python main.py
 ```
+
+If you don't want the AI features, clone the non-AI baseline instead
+(`https://github.com/unexpear/JellyRip.git`).  The two are
+intentionally separate repositories, not branches of one — releases
+on each side keep their own tag prefix (`v*` for MAIN, `ai-v*` here)
+so they can never collide.
 
 First launch tip: open **Settings** and confirm MakeMKV and ffprobe
 paths before the first rip.
