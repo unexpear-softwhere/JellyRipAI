@@ -76,7 +76,7 @@ def test_release_script_checks_git_state_and_release_notes():
     assert 'type nul > "%ARTIFACT_DIR%\\.gitkeep"' in release_script
     assert 'LICENSE THIRD_PARTY_NOTICES.md "%ARTIFACT_DIR%\\FFmpeg-LICENSE.txt" "%ARTIFACT_DIR%\\FFmpeg-README.txt"' in release_script
     assert '"%ARTIFACT_DIR%\\ffmpeg.exe" "%ARTIFACT_DIR%\\ffprobe.exe" "%ARTIFACT_DIR%\\ffplay.exe"' in release_script
-    assert 'set "RELEASE_BRANCH=ai"' in release_script
+    assert 'set "RELEASE_BRANCH=main"' in release_script
     assert 'set "RELEASE_TAG=ai-v%VERSION%"' in release_script
     assert "%ARTIFACT_DIR%\\JellyRipAI.exe" in release_script
     assert "%ARTIFACT_DIR%\\JellyRipAIInstaller.exe" in release_script

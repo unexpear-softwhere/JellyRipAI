@@ -47,10 +47,12 @@ def test_save_logs_default_is_enabled() -> None:
 
 
 def test_settings_exposes_save_logs_toggle() -> None:
-    source = Path("gui/main_window.py").read_text(encoding="utf-8")
+    # Phase 3h retired gui/main_window.py (the tkinter shell);
+    # the toggle now lives on the PySide6 Everyday settings tab.
+    source = Path("gui_qt/settings/tab_everyday.py").read_text(encoding="utf-8")
 
-    assert 'toggle_row(logs_tab, "opt_save_logs"' in source
-    assert "Save logs to disk" in source
+    assert '"opt_save_logs"' in source
+    assert "Save rip log file" in source
 
 
 def test_flush_log_writes_when_log_saving_enabled() -> None:

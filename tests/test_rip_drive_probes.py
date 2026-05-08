@@ -72,7 +72,10 @@ def test_rip_selected_titles_reprobes_before_each_title_retry(monkeypatch, tmp_p
         run_calls.append(list(cmd))
         success = next(outcomes)
         if success:
-            tid = int(cmd[3])
+            # cmd shape is [makemkvcon, -r, mkv, disc_target, str(tid), rip_path]
+            # since the 2026-05-04 backport added -r (robot mode) — title id
+            # sits at cmd[4] now, not cmd[3].
+            tid = int(cmd[4])
             Path(tmp_path, f"title_t{tid:02d}.mkv").write_text("ok", encoding="utf-8")
         return success
 
