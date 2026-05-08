@@ -11,11 +11,16 @@ from shared.ai.providers.base import BaseProvider, ConnectionResult, ProviderInf
 class ClaudeProvider(BaseProvider):
     """Anthropic Claude API provider."""
 
-    _DEFAULT_MODEL = "claude-sonnet-4-20250514"
+    # Refreshed 2026-05-08 against the live Anthropic lineup.  Default is
+    # Sonnet 4.6 — best price/perf balance for diagnostics + chat.  Bump
+    # to Opus 4.7 if you need the strongest reasoning; drop to Haiku 4.5
+    # for the cheapest replies.  Old IDs (`claude-sonnet-4-20250514`,
+    # `claude-opus-4-6`) were stale or never released.
+    _DEFAULT_MODEL = "claude-sonnet-4-6"
     _MODELS = [
-        "claude-sonnet-4-20250514",
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
         "claude-haiku-4-5-20251001",
-        "claude-opus-4-6",
     ]
 
     def __init__(self) -> None:

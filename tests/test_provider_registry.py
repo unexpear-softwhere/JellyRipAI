@@ -87,7 +87,7 @@ def test_connect_single_provider_promotes_cloud_without_dropping_local(monkeypat
     credential_store.connect_single_provider(
         "claude",
         api_key="new-key",
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
     )
 
     assert saved["data"]["local"]["model"] == "qwen2.5-coder:14b"

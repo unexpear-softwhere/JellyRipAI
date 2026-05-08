@@ -25,13 +25,13 @@ from gui_qt.dialogs.ai_provider import (
 def test_sort_models_by_power_orders_claude_descending():
     models = [
         "claude-haiku-4-5-20251001",
-        "claude-sonnet-4-20250514",
-        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-opus-4-7",
     ]
 
     assert _sort_models_by_power(models) == [
-        "claude-opus-4-6",
-        "claude-sonnet-4-20250514",
+        "claude-opus-4-7",
+        "claude-sonnet-4-6",
         "claude-haiku-4-5-20251001",
     ]
 
@@ -211,7 +211,7 @@ def test_handle_save_result_failed_validation_keeps_existing_credentials():
 
     dialog._handle_save_result(
         "claude",
-        {"api_key": "bad-key", "model": "claude-sonnet-4-20250514"},
+        {"api_key": "bad-key", "model": "claude-sonnet-4-6"},
         make_active=True,
         result=SimpleNamespace(
             success=False,

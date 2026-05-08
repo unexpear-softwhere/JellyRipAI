@@ -51,14 +51,14 @@ from shared.runtime import APP_DISPLAY_NAME
 # ─── Pricing table (display-only, per 1M tokens) ──────────────────────
 # Lifted verbatim from gui/ai_provider_dialog.py.  Treat as cached
 # display data; never imported by engine/runtime code.
-_PRICING_LAST_UPDATED = "2026-04"
+_PRICING_LAST_UPDATED = "2026-05"
 # fmt: off
 _MODEL_PRICING: dict[str, tuple[float, float]] = {
     # model_id:                         (input $/1M,  output $/1M)
-    # Claude
-    "claude-sonnet-4-20250514":         (3.00,   15.00),
-    "claude-haiku-4-5-20251001":        (0.80,    4.00),
-    "claude-opus-4-6":                  (15.00,  75.00),
+    # Claude — IDs realigned 2026-05-08 against the live lineup.
+    "claude-opus-4-7":                  (15.00,  75.00),
+    "claude-sonnet-4-6":                ( 3.00,  15.00),
+    "claude-haiku-4-5-20251001":        ( 0.80,   4.00),
     # OpenAI
     "gpt-4o":                           (2.50,   10.00),
     "gpt-4o-mini":                      (0.15,    0.60),

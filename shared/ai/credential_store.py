@@ -249,7 +249,7 @@ def load_credentials() -> dict[str, dict[str, Any]]:
 
     Returns a dict keyed by provider id:
         {
-            "claude": {"api_key": "sk-...", "model": "claude-sonnet-4-20250514"},
+            "claude": {"api_key": "sk-...", "model": "claude-sonnet-4-6"},
             "openai": {"api_key": "sk-...", "model": "gpt-4o-mini"},
             "gemini": {"api_key": "AI...", "model": "gemini-2.0-flash"},
             "local":  {"model": "qwen2.5:14b-instruct", "base_url": "http://localhost:11434"},

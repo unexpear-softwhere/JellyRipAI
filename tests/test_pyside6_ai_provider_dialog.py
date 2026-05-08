@@ -47,8 +47,8 @@ def _stub_providers() -> list[_StubProviderInfo]:
             display_name="Claude",
             category="cloud",
             requires_api_key=True,
-            available_models=["claude-sonnet-4-20250514", "claude-haiku-4-5-20251001"],
-            default_model="claude-sonnet-4-20250514",
+            available_models=["claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+            default_model="claude-sonnet-4-6",
             help_url="https://console.anthropic.com/settings/keys",
         ),
         _StubProviderInfo(
