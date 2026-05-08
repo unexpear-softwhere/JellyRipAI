@@ -47,7 +47,12 @@ def test_readme_points_to_spec_build_and_release_notes_txt():
     assert "pyinstaller JellyRip.spec" in readme
     assert "release_notes.txt" in readme
     assert f"release.bat {version}" in readme
-    assert "git switch --track origin/ai" in readme
+    # Two-repo fork model (post-2026-05-08).  The AI fork lives on its
+    # own repo (unexpear-softwhere/JellyRipAI), so README's clone
+    # instructions point at that URL — not at MAIN with a branch
+    # switch.  The legacy `git switch --track origin/ai` line is gone
+    # along with the legacy unexpear/JellyRipAI-old repo.
+    assert "unexpear-softwhere/JellyRipAI" in readme
     assert "JellyRipAI.exe" in readme
     assert "JellyRipAIInstaller.exe" in readme
     assert "dist/ai/JellyRipAI.exe" in readme
