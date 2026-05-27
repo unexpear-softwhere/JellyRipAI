@@ -55,14 +55,21 @@ class GeminiProvider(BaseProvider):
             "contents": [{"parts": [{"text": user}]}],
             "generationConfig": {"maxOutputTokens": max_tokens},
         }).encode("utf-8")
-        url = (
-            f"{self._BASE_URL}/{self._model}:generateContent"
-            f"?key={self._api_key}"
-        )
+        # API key is sent via the ``x-goog-api-key`` header instead of
+        # the ``?key=`` query string parameter.  Both are documented
+        # Gemini auth methods, but query-string auth leaks via any
+        # HTTPError's ``str(e)``, which then propagates into the
+        # session AI log, the GUI log pane, and ai_chat_replay.jsonl.
+        # Header auth keeps the key out of error strings and request
+        # URLs visible to proxies / access logs.
+        url = f"{self._BASE_URL}/{self._model}:generateContent"
         req = urllib.request.Request(
             url,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self._api_key,
+            },
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -98,14 +105,15 @@ class GeminiProvider(BaseProvider):
             "contents": contents,
             "generationConfig": {"maxOutputTokens": max_tokens},
         }).encode("utf-8")
-        url = (
-            f"{self._BASE_URL}/{self._model}:generateContent"
-            f"?key={self._api_key}"
-        )
+        # See _generate() above for rationale — key in header, not URL.
+        url = f"{self._BASE_URL}/{self._model}:generateContent"
         req = urllib.request.Request(
             url,
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self._api_key,
+            },
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
