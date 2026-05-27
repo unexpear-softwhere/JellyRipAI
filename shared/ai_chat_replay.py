@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime
 from itertools import count
 from typing import Any, Mapping, Sequence
@@ -12,12 +13,90 @@ _MAX_DEPTH = 6
 _MAX_ITEMS = 40
 _MAX_STRING_LENGTH = 16000
 
+# Replay log size cap.  When the live file exceeds this size, the
+# current file gets renamed to ``ai_chat_replay.jsonl.1`` (clobbering
+# any prior rotation) and appends start fresh on a new empty file.
+# Keeps a bounded amount of replay history on disk so a heavy user
+# doesn't accumulate hundreds of MB of chat content over time.
+_MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
+_ROTATED_SUFFIX = ".1"
+
+# API-key redaction patterns.  Applied to every string in the record
+# before serialization so that if an exception message, response body,
+# or user-typed prompt ever contains a key, it lands in the replay
+# log as a REDACTED token instead of plaintext.  Patterns are
+# conservatively specific (require the canonical prefix + a plausible
+# body length) to avoid false-positive redactions on legitimate text.
+_SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # Anthropic keys: sk-ant-api{ver}-{long body}
+    (re.compile(r"sk-ant-api\d+-[A-Za-z0-9_\-]{40,}"),
+     "[REDACTED:anthropic-key]"),
+    # OpenAI project keys: sk-proj-{long body}
+    (re.compile(r"sk-proj-[A-Za-z0-9_\-]{40,}"),
+     "[REDACTED:openai-project-key]"),
+    # OpenAI legacy keys: sk-{48+ alnum chars}
+    (re.compile(r"sk-[A-Za-z0-9]{48,}"),
+     "[REDACTED:openai-key]"),
+    # Google / Gemini API keys: AIza + 35 chars
+    (re.compile(r"AIza[A-Za-z0-9_\-]{35,}"),
+     "[REDACTED:google-key]"),
+    # Bearer tokens in arbitrary text (Authorization-style headers)
+    (re.compile(r"Bearer\s+[A-Za-z0-9_.\-+/=]{20,}"),
+     "Bearer [REDACTED]"),
+    # x-goog-api-key header value (Gemini header auth — see
+    # shared/ai/providers/gemini_provider.py)
+    (re.compile(
+        r"(x-goog-api-key['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9_\-]{20,}",
+        re.IGNORECASE,
+     ),
+     r"\1[REDACTED]"),
+)
+
+
+def _scrub_secrets(text: str) -> str:
+    """Apply API-key redaction patterns to a string value."""
+    if not text:
+        return text
+    result = text
+    for pattern, replacement in _SECRET_PATTERNS:
+        result = pattern.sub(replacement, result)
+    return result
+
 
 def ai_chat_replay_path(config_dir: str | None = None) -> str:
     return os.path.join(
         config_dir or get_config_dir(),
         AI_CHAT_REPLAY_FILENAME,
     )
+
+
+def _rotate_if_oversize(path: str) -> None:
+    """Rotate the replay file if it exceeds the configured size cap.
+
+    Best-effort: any OSError during the size check or rename is
+    swallowed.  The worst case if rotation fails is that the live
+    file grows past the cap, which is the prior behavior.
+    """
+    try:
+        if not os.path.exists(path):
+            return
+        if os.path.getsize(path) <= _MAX_FILE_BYTES:
+            return
+    except OSError:
+        return
+
+    rotated = path + _ROTATED_SUFFIX
+    try:
+        if os.path.exists(rotated):
+            os.remove(rotated)
+    except OSError:
+        pass
+    try:
+        os.rename(path, rotated)
+    except OSError:
+        # If the rename fails (e.g., file locked by another reader)
+        # we leave the live file alone and the next call will retry.
+        pass
 
 
 def _truncate_text(value: str) -> str:
@@ -31,9 +110,9 @@ def _json_safe(value: Any, *, depth: int = 0) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
-        return _truncate_text(value)
+        return _truncate_text(_scrub_secrets(value))
     if depth >= _MAX_DEPTH:
-        return _truncate_text(repr(value))
+        return _truncate_text(_scrub_secrets(repr(value)))
     if isinstance(value, Mapping):
         items = list(value.items())[:_MAX_ITEMS]
         return {
@@ -59,16 +138,21 @@ def append_ai_chat_replay(
     details: Mapping[str, Any] | None = None,
     config_dir: str | None = None,
 ) -> dict[str, Any] | None:
+    # Every textual field gets run through _scrub_secrets so that if
+    # an API key ever leaks into an exception message, model response,
+    # or user-typed prompt it lands in the replay log as a REDACTED
+    # token rather than plaintext.  ``details`` is scrubbed via the
+    # recursive walk in _json_safe.
     record: dict[str, Any] = {
         "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
         "phase": str(phase or "").strip(),
         "replay_id": str(replay_id or "").strip(),
-        "title": str(title or "").strip(),
+        "title": _scrub_secrets(str(title or "").strip()),
         "backend": str(backend or "").strip(),
-        "request_text": str(request_text or ""),
-        "display_text": str(display_text or ""),
-        "response_text": str(response_text or ""),
-        "error_text": str(error_text or ""),
+        "request_text": _scrub_secrets(str(request_text or "")),
+        "display_text": _scrub_secrets(str(display_text or "")),
+        "response_text": _scrub_secrets(str(response_text or "")),
+        "error_text": _scrub_secrets(str(error_text or "")),
         "details": _json_safe(dict(details or {})),
     }
 
@@ -78,6 +162,11 @@ def append_ai_chat_replay(
     path = ai_chat_replay_path(config_dir)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        # Rotate the live file if it has grown past the size cap.
+        # Best-effort: failures here just mean the live file keeps
+        # growing for a bit longer, which is no worse than prior
+        # behavior.
+        _rotate_if_oversize(path)
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
             handle.write("\n")
