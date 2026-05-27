@@ -356,10 +356,15 @@ class RipperEngine:
         return selected_drive, drives
 
     def _wait_for_drive_ready(self, on_log, *, context: str) -> bool:
+        # In-code fallbacks here match the DEFAULTS dict
+        # (``opt_drive_probe_retries=5``, ``opt_drive_probe_backoff_seconds=2.0``).
+        # The cfg.get fallback is a defensive backstop for the rare
+        # case where config.json predates these keys; the actual
+        # values live in ``shared/runtime.py``.
         probe_attempts = max(1, int(self.cfg.get("opt_drive_probe_retries", 5) or 5))
         backoff_base = max(
             0.25,
-            float(self.cfg.get("opt_drive_probe_backoff_seconds", 1.0) or 1.0),
+            float(self.cfg.get("opt_drive_probe_backoff_seconds", 2.0) or 2.0),
         )
         selected_index = self._selected_drive_index()
 

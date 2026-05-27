@@ -234,6 +234,13 @@ DEFAULTS: dict[str, ConfigScalar] = {
     "opt_drive_state_glyph": True,   # prefix ◉/⊚/◌ before disc name in drive picker
     "opt_tray_icon_enabled": True,   # system-tray companion for long rips
     "opt_show_splash": True,         # startup splash screen (next-launch only)
+    # Drive-probe retry tuning.  Harmonized 2026-05-08 with MAIN:
+    # 5 retries × 2s base backoff (capped at 8s) → max wait
+    # 2+4+8+8+8 = 30s before giving up on an unresponsive drive.
+    # Was hidden behind in-code defaults (5 / 1.0) on the AI side
+    # only, so the Settings UI couldn't expose them.
+    "opt_drive_probe_retries": 5,
+    "opt_drive_probe_backoff_seconds": 2.0,
     # AI diagnostics
     "opt_ai_diagnostics_enabled": True,
     "opt_ai_diagnostics_mode": "suggest",
