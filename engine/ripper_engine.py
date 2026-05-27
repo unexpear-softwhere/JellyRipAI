@@ -447,7 +447,7 @@ class RipperEngine:
         return rip_ops.rip_selected_titles(self, rip_path, title_ids, on_progress, on_log)
     def __init__(self, cfg):
         """
-        LAYER 1 â€” Engine
+        LAYER 1 — Engine
 
         Pure logic layer. No UI calls, no tkinter, no user interaction.
 
@@ -514,7 +514,7 @@ class RipperEngine:
             if self.abort_event.is_set():
                 return
             self.abort_event.set()
-            proc = self.current_process  # read inside lock â€” avoids race with rip thread
+            proc = self.current_process  # read inside lock — avoids race with rip thread
 
         if proc is not None:
             try:
@@ -1080,7 +1080,7 @@ class RipperEngine:
             del t["streams"]
             result.append(t)
 
-        # Sort by score descending â€” best candidate first.
+        # Sort by score descending — best candidate first.
         # Keep scores out of title dicts to avoid mutating shared objects.
         scored = [(t, score_title(t, result)) for t in result]
         scored.sort(key=lambda pair: pair[1], reverse=True)
@@ -1128,7 +1128,7 @@ class RipperEngine:
                 diff = scored[0][1] - scored[1][1]
                 if diff < 0.05:
                     on_log(
-                        "WARNING: Top titles are very close â€” "
+                        "WARNING: Top titles are very close — "
                         "possible ambiguity."
                     )
 
@@ -1375,7 +1375,7 @@ class RipperEngine:
             self._last_scan_timestamp = time.time()
             self._last_scan_target = disc_target
             return total_bytes
-        # Disc is present (TINFO lines seen) but sizes are all zero â€” return 0
+        # Disc is present (TINFO lines seen) but sizes are all zero — return 0
         # so callers that distinguish None ("no disc") from 0 ("disc, no size")
         # still get a truthy-enough signal.  Returning None here would cause
         # _disc_present() to permanently report False for such discs.
@@ -1391,7 +1391,7 @@ class RipperEngine:
             if not os.path.exists(path):
                 on_log(f"Warning: disk-space path does not exist: {path}")
                 return "ok", 0, required_bytes
-            # Run in a daemon thread â€” shutil.disk_usage() can hang indefinitely
+            # Run in a daemon thread — shutil.disk_usage() can hang indefinitely
             # on an offline or slow network share.
             _free = [None]
             _err  = [None]
@@ -1413,7 +1413,7 @@ class RipperEngine:
 
             free = _free[0]
             on_log(
-                f"Disk space â€” "
+                f"Disk space — "
                 f"Required: {required_bytes / (1024**3):.1f} GB  "
                 f"Free: {free / (1024**3):.1f} GB"
             )
@@ -1654,7 +1654,7 @@ class RipperEngine:
                     if (not stall_warned and
                             time.time() - last_output > stall_timeout):
                         on_log(
-                            f"No output for {stall_timeout}s â€” "
+                            f"No output for {stall_timeout}s — "
                             "process may be reading difficult sectors; waiting."
                         )
                         stall_warned = True
@@ -1749,7 +1749,7 @@ class RipperEngine:
                         if msg:
                             _emit_makemkv_message(msg)
                             # Log all messages. Don't use them for failure
-                            # detection â€” trust the return code only.
+                            # detection — trust the return code only.
         except queue_module.Empty:
             pass
 
@@ -1757,7 +1757,7 @@ class RipperEngine:
             on_log(emitted)
 
         # Warn if MakeMKV exited successfully but we got stall warnings
-        # during the rip â€” this can indicate disc read/write problems that
+        # during the rip — this can indicate disc read/write problems that
         # might prevent file creation even though the process succeeded.
         if rc == 0 and stall_warned:
             on_log(
@@ -2136,7 +2136,7 @@ class RipperEngine:
 
         if not os.path.exists(io_source):
             on_log(f"Missing file: {source}")
-            self.last_move_error = "Move failed â€” source file is missing."
+            self.last_move_error = "Move failed — source file is missing."
             return False
 
         # Verify source has stopped growing before accepting move, respecting config timeout.
@@ -2153,7 +2153,7 @@ class RipperEngine:
                         f"Stabilization failed."
                     )
                     self.last_move_error = (
-                        "Move failed â€” source file incomplete. "
+                        "Move failed — source file incomplete. "
                         "Stabilization did not complete successfully."
                     )
                     return False
@@ -2195,7 +2195,7 @@ class RipperEngine:
                 if not os.path.exists(io_final_path):
                     on_log("ERROR: destination missing after move.")
                     self.last_move_error = (
-                        "Move failed â€” destination file missing after move."
+                        "Move failed — destination file missing after move."
                     )
                     return False
                 size_ok, dst_size = wait_for_size_match(
@@ -2208,13 +2208,13 @@ class RipperEngine:
                         f"after {verify_retries} verification check(s)."
                     )
                     self.last_move_error = (
-                        "Move failed â€” network write mismatch. "
+                        "Move failed — network write mismatch. "
                         "Destination size did not match source."
                     )
                     return False
                 if not self._quick_ffprobe_ok(io_final_path, on_log):
                     self.last_move_error = (
-                        "Move failed â€” destination file failed integrity "
+                        "Move failed — destination file failed integrity "
                         "probe (ffprobe)."
                     )
                     return False
@@ -2234,8 +2234,8 @@ class RipperEngine:
                         os.remove(io_temp_dest)
                     except Exception:
                         pass
-                on_log("Move aborted â€” partial file removed.")
-                self.last_move_error = "Move failed â€” operation aborted."
+                on_log("Move aborted — partial file removed.")
+                self.last_move_error = "Move failed — operation aborted."
                 return False
             try:
                 shutil.copystat(io_source, io_temp_dest)
@@ -2249,7 +2249,7 @@ class RipperEngine:
                 )
                 final_path = new_final
                 io_final_path = self._io_path(final_path)
-            src_size = os.path.getsize(io_source)  # read before replace â€” source may vanish after
+            src_size = os.path.getsize(io_source)  # read before replace — source may vanish after
             try:
                 os.replace(io_temp_dest, io_final_path)
             except OSError as e:
@@ -2264,7 +2264,7 @@ class RipperEngine:
                     on_log(
                         f"ERROR: fallback move failed for {os.path.basename(source)}: {move_err}"
                     )
-                    self.last_move_error = f"Move failed â€” fallback move error: {move_err}"
+                    self.last_move_error = f"Move failed — fallback move error: {move_err}"
                     return False
             if os.path.exists(io_final_path):
                 size_ok, dst_size = wait_for_size_match(
@@ -2278,13 +2278,13 @@ class RipperEngine:
                         "Source file retained."
                     )
                     self.last_move_error = (
-                        "Move failed â€” network write mismatch. "
+                        "Move failed — network write mismatch. "
                         "Destination size did not match source."
                     )
                     return False
                 if not self._quick_ffprobe_ok(io_final_path, on_log):
                     self.last_move_error = (
-                        "Move failed â€” destination file failed integrity "
+                        "Move failed — destination file failed integrity "
                         "probe (ffprobe)."
                     )
                     return False
@@ -2298,7 +2298,7 @@ class RipperEngine:
             else:
                 on_log("ERROR: destination missing after move.")
                 self.last_move_error = (
-                    "Move failed â€” destination file missing after move."
+                    "Move failed — destination file missing after move."
                 )
                 return False
             return True
@@ -2494,7 +2494,7 @@ class RipperEngine:
         except Exception as e:
             on_log(f"ERROR during move: {e}")
             on_log(
-                "Check temp folder â€” "
+                "Check temp folder — "
                 "some files may not have moved."
             )
             return False, extra_counter, moved_paths
@@ -2503,7 +2503,7 @@ class RipperEngine:
                           session_log, on_log):
         """Append session logs to disk with rollover for oversized log files."""
         if not log_file:
-            on_log("No log file configured â€” session log not saved.")
+            on_log("No log file configured — session log not saved.")
             return
         try:
             # Ensure log file has .txt extension
