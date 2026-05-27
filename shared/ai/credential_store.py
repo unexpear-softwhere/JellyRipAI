@@ -138,14 +138,58 @@ def _dpapi_decrypt(b64_ciphertext: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 _SENSITIVE_KEYS = frozenset({"api_key"})
+
+# Tracks whether we've already warned about the plaintext fallback in
+# this process — avoids spamming the log with a warning every time
+# the user saves a credential, but ensures the warning fires at least
+# once per session so it's visible.
+_warned_plaintext_fallback = False
+
+
+def _warn_plaintext_fallback(reason: str) -> None:
+    """Log a one-shot loud warning if DPAPI encryption isn't happening.
+
+    Prior behavior silently stored the API key in plaintext on:
+      * non-Windows hosts (no DPAPI),
+      * Windows hosts where ``CryptProtectData`` returned a failure
+        status (rare — usually a profile/permission corruption).
+
+    The user had no indication their key was unencrypted on disk
+    until they happened to read the file.  This emits a WARNING-level
+    log line once per process so it shows up in session logs, and
+    leaves a breadcrumb for downstream code (e.g. a future dialog)
+    to surface this in the UI.
+    """
+    global _warned_plaintext_fallback
+    if _warned_plaintext_fallback:
+        return
+    _warned_plaintext_fallback = True
+    _logger.warning(
+        "AI credential stored in plaintext (DPAPI unavailable: %s).  "
+        "File: %s.  On Windows this typically means the profile's "
+        "DPAPI store is unhealthy; on other platforms there is no "
+        "OS-level secret store wired up.",
+        reason,
+        _cred_path(),
+    )
+
+
 def _encrypt_value(value: str) -> str:
     """Encrypt a sensitive value if DPAPI is available."""
     if not value or value.startswith(_ENC_PREFIX):
         return value  # Already encrypted or empty
+    if not _dpapi_available():
+        _warn_plaintext_fallback(
+            "not running on Windows or crypt32 unavailable"
+        )
+        return value  # Plaintext fallback (warned)
     encrypted = _dpapi_encrypt(value)
     if encrypted is not None:
         return _ENC_PREFIX + encrypted
-    return value  # Fallback: store plaintext
+    _warn_plaintext_fallback(
+        "CryptProtectData returned an error on this Windows host"
+    )
+    return value  # Fallback: store plaintext (warned)
 
 
 def _decrypt_value(value: str) -> str:
@@ -203,13 +247,32 @@ def _load_raw() -> dict[str, dict[str, Any]]:
 
 
 def _save_raw(data: dict[str, dict[str, Any]]) -> None:
-    """Write raw credential data to disk."""
+    """Write raw credential data to disk.
+
+    On Windows the file inherits the %APPDATA% ACL (user-scoped — the
+    only practical actor is the user themselves) so no extra perms
+    work is needed.  On POSIX, the default umask gives the file 0o644
+    which would expose the (possibly plaintext, see _warn_plaintext_
+    fallback) keys to other local users.  We chmod 0o600 explicitly
+    after the atomic replace.
+    """
     path = _cred_path()
     try:
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         os.replace(tmp, path)
+        if os.name == "posix":
+            try:
+                os.chmod(path, 0o600)
+            except OSError as chmod_exc:
+                # Filesystem may not support chmod (e.g., FAT-mounted
+                # network share); not a hard error, but worth a
+                # debug-level note.
+                _logger.debug(
+                    "Could not chmod AI credentials to 0o600: %s",
+                    chmod_exc,
+                )
     except Exception as exc:
         _logger.error("Could not save AI credentials: %s", exc)
         raise
