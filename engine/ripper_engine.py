@@ -553,10 +553,6 @@ class RipperEngine:
             except Exception:
                 pass
 
-    def scan_disc(self, on_log, on_progress):
-        from engine import scan_ops
-        return scan_ops.scan_disc(self, on_log, on_progress)
-
     def find_resumable_sessions(self, temp_root, timeout=8.0):
         """Find temp sessions with saved workflow metadata that can be resumed.
 
