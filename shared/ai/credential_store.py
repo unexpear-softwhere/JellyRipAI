@@ -378,9 +378,19 @@ def connect_single_provider(provider_id: str, **kwargs: Any) -> None:
     """
     creds = load_credentials()
 
+    # Merge into the existing entry rather than replacing it.  Prior
+    # behavior assigned ``creds[provider_id] = connected``, which
+    # silently discarded previously saved fields — e.g., calling this
+    # helper after a save with ``model="opus"`` (but no api_key) would
+    # wipe the previously saved api_key.  The docstring claims "without
+    # discarding the others" — that's true for OTHER providers, but
+    # within the same provider's dict, fields not in kwargs would be
+    # lost.  Now we preserve them.
     connected = {k: v for k, v in kwargs.items() if v}
     if connected:
-        creds[provider_id] = connected
+        existing = dict(creds.get(provider_id) or {})
+        existing.update(connected)
+        creds[provider_id] = existing
         if provider_id != "local":
             creds["_active_provider"] = {"id": provider_id}
     else:
