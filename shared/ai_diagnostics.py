@@ -146,7 +146,15 @@ _QUOTA_ERROR_PATTERNS = (
     "rate limit",
     "too many requests",
     "429",
-    "token",
+    # Tightened 2026-05-08 (audit #20).  Bare "token" matched any
+    # error containing the word — including "invalid token from
+    # bad_key" (an auth failure, not a quota issue), which would
+    # trigger the 5-minute provider cooldown spuriously.  Replaced
+    # with specific phrases that only appear in actual token-quota
+    # errors.
+    "token_limit",
+    "token quota",
+    "out of tokens",
     "insufficient_quota",
     "billing",
     "exceeded",
