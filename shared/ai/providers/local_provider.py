@@ -115,8 +115,27 @@ class LocalProvider(BaseProvider):
         return self._model.strip().lower() in models
 
     def is_available(self) -> bool:
+        """Fast TCP probe: does the Ollama port answer within 200ms?
+
+        Prior implementation called ``_get_available_models`` via HTTP
+        with a 5-second timeout.  ``is_available`` is hit on every
+        diagnostic error event (audit #19), so 5 seconds of UI freeze
+        per check would stack up during a bad rip session.
+
+        A bare TCP connect is fast (typically <5ms when Ollama is up,
+        ~200ms when it isn't), enough to answer the only question
+        callers actually ask: "is Ollama listening at all?"  Code
+        that needs the model list pays the HTTP cost separately via
+        ``_get_available_models``.
+        """
         try:
-            return bool(self._get_available_models())
+            import socket
+            from urllib.parse import urlparse
+            parsed = urlparse(self._base_url)
+            host = parsed.hostname or "localhost"
+            port = parsed.port or 11434
+            with socket.create_connection((host, port), timeout=0.2):
+                return True
         except Exception:
             return False
 
