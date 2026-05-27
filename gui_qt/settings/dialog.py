@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from gui_qt.settings.tab_ai import AITab
 from gui_qt.settings.tab_appearance import AppearanceTab
 from gui_qt.settings.tab_everyday import EverydayTab
 from gui_qt.settings.tab_paths import PathsTab
@@ -77,6 +78,13 @@ class SettingsDialog(QDialog):
 
         self._reliability_tab = ReliabilityTab(cfg=cfg, save_cfg=save_cfg)
         self._tabs.addTab(self._reliability_tab, "Reliability")
+
+        # AI tab — sits between Reliability and Appearance so the
+        # behavior-toggle tabs cluster on the left and the polish
+        # tab (Appearance) stays on the right.  See
+        # gui_qt/settings/tab_ai.py for the exposed knobs.
+        self._ai_tab = AITab(cfg=cfg, save_cfg=save_cfg)
+        self._tabs.addTab(self._ai_tab, "AI")
 
         self._appearance_tab = AppearanceTab(
             cfg=cfg,
@@ -129,6 +137,10 @@ class SettingsDialog(QDialog):
     @property
     def reliability_tab(self) -> ReliabilityTab:
         return self._reliability_tab
+
+    @property
+    def ai_tab(self) -> AITab:
+        return self._ai_tab
 
     # Backward-compat alias for code/tests that still reference
     # the pre-2026-05-04 name.

@@ -265,7 +265,12 @@ def test_reliability_clamps_invalid_cfg_values(qtbot):
 # ─── Settings dialog integration ───────────────────────────────────
 
 
-def test_settings_dialog_hosts_four_tabs_in_documented_order(qtbot):
+def test_settings_dialog_hosts_five_tabs_in_documented_order(qtbot):
+    """As of 2026-05-08 (audit #18) the AI tab joined the dialog,
+    bumping the host count from 4 → 5.  Order: Everyday → Paths →
+    Reliability → AI → Appearance.  The behavior-toggle tabs cluster
+    on the left; Appearance stays last because its preview-on-click
+    semantics make it feel like a polish tab."""
     from gui_qt.settings.dialog import SettingsDialog
     from gui_qt.themes import theme_ids
 
@@ -278,11 +283,12 @@ def test_settings_dialog_hosts_four_tabs_in_documented_order(qtbot):
     qtbot.addWidget(dlg)
 
     tabs = dlg._tabs
-    assert tabs.count() == 4
+    assert tabs.count() == 5
     assert tabs.tabText(0) == "Everyday"
     assert tabs.tabText(1) == "Paths"
     assert tabs.tabText(2) == "Reliability"
-    assert tabs.tabText(3) == "Appearance"
+    assert tabs.tabText(3) == "AI"
+    assert tabs.tabText(4) == "Appearance"
 
 
 def test_settings_dialog_ok_applies_all_four_tabs(qtbot):
