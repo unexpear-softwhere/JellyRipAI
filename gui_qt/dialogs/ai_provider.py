@@ -850,8 +850,14 @@ class AIProviderDialog(QDialog):
             except Exception:
                 pass
 
-        # 2. Fall back: write into parent.cfg if it's a dict.
-        cfg = getattr(parent, "cfg", None)
+        # 2. Fall back: write into parent._cfg if it's a dict.
+        # MainWindow exposes the live cfg as the private-by-convention
+        # ``_cfg`` attribute (gui_qt/main_window.py:151).  The dialog
+        # was previously looking for ``parent.cfg``, which silently
+        # returned None and skipped the persist step — clicking "Set
+        # as Active" updated the runtime diagnostics manager but never
+        # actually saved opt_ai_mode.
+        cfg = getattr(parent, "_cfg", None)
         if isinstance(cfg, dict):
             cfg["opt_ai_mode"] = mode
             try:
