@@ -323,6 +323,22 @@ class RipperEngine:
             info.setdefault("flags", 0)
         self.last_drive_info = info
 
+    def _sleep_with_abort(self, seconds: float) -> bool:
+        """Sleep up to ``seconds``, but bail early on abort.
+
+        Ported from MAIN's ripper_engine to fix the previous drive-probe
+        backoff using bare ``time.sleep(delay)``, which could block the
+        Stop Session button for up to 40 seconds (5 retries × 8s cap)
+        during a drive-probe retry storm.  Returns True if the full
+        sleep completed without abort, False if abort fired.
+        """
+        deadline = time.time() + max(0.0, float(seconds))
+        while time.time() < deadline:
+            if self.abort_event.is_set():
+                return False
+            time.sleep(min(0.25, max(0.0, deadline - time.time())))
+        return not self.abort_event.is_set()
+
     def _probe_selected_drive(self) -> tuple[MakeMKVDrive | None, list[MakeMKVDrive]]:
         drives = get_available_drives(self._get_makemkvcon(), allow_fallback=False)
         selected_index = self._selected_drive_index()
@@ -391,7 +407,14 @@ class RipperEngine:
             on_log(
                 f"Waiting {delay_seconds:.1f}s and refreshing drives before retrying..."
             )
-            time.sleep(delay_seconds)
+            # Abort-aware sleep: if the user clicks Stop during the
+            # backoff, bail out of the retry loop immediately instead
+            # of forcing them to wait out the full backoff window.
+            if not self._sleep_with_abort(delay_seconds):
+                on_log(
+                    f"Drive probe wait cancelled by abort ({context})."
+                )
+                return False
 
         diag_record(
             "warning",
