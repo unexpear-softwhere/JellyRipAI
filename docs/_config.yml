@@ -9,6 +9,13 @@ description: >-
 theme: jekyll-theme-cayman
 show_downloads: false
 
+# GitHub Pages project sites live under /<repo>/, not at the user/org
+# apex.  Jekyll's {% link %} tag and relative_url filter both honor
+# this, so internal nav links resolve correctly instead of 404'ing
+# at the apex domain.
+url: https://unexpear-softwhere.github.io
+baseurl: /JellyRipAI
+
 # AI BRANCH's docs/ is already curated for public consumption — no
 # internal handoff or smoke-report material lives in here, so the
 # exclude list is empty.  Add entries if that ever changes.
