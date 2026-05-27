@@ -31,9 +31,15 @@ def test_rip_all_titles_waits_for_drive_probe_before_launch(monkeypatch, tmp_pat
         "engine.ripper_engine.get_available_drives",
         lambda *_args, **_kwargs: probe_calls.append("probe") or [],
     )
+    # Capture the backoff delays via _sleep_with_abort instead of the
+    # bare time.sleep that the prior implementation used.  The new
+    # abort-aware helper polls in 0.25s slices internally, but its
+    # ``seconds`` argument is still the requested backoff value the
+    # test wants to assert against.
     monkeypatch.setattr(
-        "engine.ripper_engine.time.sleep",
-        lambda seconds: sleep_calls.append(seconds),
+        engine,
+        "_sleep_with_abort",
+        lambda seconds: sleep_calls.append(seconds) or True,
     )
     monkeypatch.setattr(
         engine,
