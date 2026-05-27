@@ -26,7 +26,6 @@ from shared.disc_memory import (
 )
 
 from config import resolve_ffprobe, resolve_makemkvcon
-from controller.naming import build_movie_main_filename
 from utils.helpers import (
     MakeMKVDrive,
     clean_name,
@@ -1342,6 +1341,15 @@ class RipperEngine:
                 elif line.startswith("TINFO:"):
                     seen_any_tinfo = True
                     parts = line[6:].split(",", 3)
+                    # Reset tid every iteration so a TINFO line with
+                    # too few parts can never accidentally inherit the
+                    # previous iteration's tid.  Today the size block
+                    # is gated by the same ``len(parts) >= 4`` check
+                    # that updates tid, so no incorrect ``title_sizes``
+                    # write can occur — but a future edit to either
+                    # gate could break that invariant.  Defensive
+                    # reset costs nothing.
+                    tid = None
                     if len(parts) >= 4:
                         try:
                             tid = int(parts[0])
@@ -2406,11 +2414,23 @@ class RipperEngine:
                         f"S{season:02d}E{ep_num:02d} - {ep_name}.mkv"
                     )
                 else:
-                    name = build_movie_main_filename(
-                        clean_name(title),
-                        year,
-                        str(edition or "").strip(),
+                    # Inlined movie-filename construction (was
+                    # `build_movie_main_filename` from
+                    # controller.naming, which made engine depend on
+                    # the controller layer — see audit item #16).
+                    # Mirrors controller/naming.py:build_movie_base_name
+                    # exactly: "Title (Year)" with " - Edition" suffix
+                    # when an edition is supplied.
+                    edition_raw = str(edition or "").strip()
+                    cleaned_edition = (
+                        clean_name(edition_raw).strip()
+                        if edition_raw
+                        else ""
                     )
+                    suffix = (
+                        f" - {cleaned_edition}" if cleaned_edition else ""
+                    )
+                    name = f"{clean_name(title)} ({year}){suffix}.mkv"
 
                 final_path = os.path.join(dest_folder, name)
                 if not replace_main_existing:
