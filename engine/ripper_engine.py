@@ -508,7 +508,14 @@ class RipperEngine:
         self._resolved_ffprobe = ""
         self._resolved_ffprobe_src = ""
         self._ffprobe_source = ""
-        self._ffprobe_cache = {}  # LRU cache with 1000-entry limit
+        # Insertion-order FIFO cache, capped at 1000 entries.  On
+        # eviction we pop ``next(iter(self._ffprobe_cache))``, which
+        # is the oldest insertion (Python's dict preserves insertion
+        # order since 3.7).  Not LRU — a hit does NOT bump the entry
+        # to the end.  Adequate because every cached value is keyed
+        # by (abspath, mtime_ns, size), so we'd only get cache churn
+        # on a working set larger than 1000 unique files per session.
+        self._ffprobe_cache = {}
         self._ffprobe_cache_lock = threading.Lock()
         self._ffprobe_cache_max_size = 1000
         self._last_scan_total_bytes = None
@@ -693,7 +700,14 @@ class RipperEngine:
                 meta[key] = value
             self._atomic_write_json(meta_path, meta)
         except Exception as e:
-            print(f"Warning: failed to update session metadata {meta_path}: {e}")
+            # Route through stdlib logging like the rest of this module
+            # (line 120 et al.) rather than ``print``.  Plain ``print``
+            # bypasses the controller's log capture and interleaves
+            # with the progress display on stdout.
+            import logging
+            logging.warning(
+                "failed to update session metadata %s: %s", meta_path, e,
+            )
 
     def read_temp_metadata(self, rip_path):
         """Read metadata for a temp session folder, returning None on failure."""
@@ -2038,7 +2052,18 @@ class RipperEngine:
             return -1.0, 0
 
         stat = stat_result[0]
-        cache_key = (os.path.abspath(path), stat.st_mtime_ns, stat.st_size)
+        # ``os.path.normcase`` collapses ``C:\Foo\Bar`` and
+        # ``c:\foo\bar`` to a single canonical form on Windows so the
+        # cache doesn't get two separate entries for the same file
+        # reached via differently-cased paths.  No-op on POSIX.  Other
+        # path-comparison sites in this file already normcase
+        # (e.g., the rip-output reconciliation in run_rip_session);
+        # the ffprobe-cache key was the one outlier.
+        cache_key = (
+            os.path.normcase(os.path.abspath(path)),
+            stat.st_mtime_ns,
+            stat.st_size,
+        )
         with self._ffprobe_cache_lock:
             cached = self._ffprobe_cache.get(cache_key)
             if cached is not None:
@@ -2069,7 +2094,12 @@ class RipperEngine:
                             proc.communicate(timeout=2)
                         except Exception:
                             pass
-                        return -1, mb
+                        # Use -1.0 (float) not -1 (int) so the
+                        # return type is consistent with the other
+                        # two early-exit sites above and the
+                        # "duration unknown" sentinel callers
+                        # check against.
+                        return -1.0, mb
                     time.sleep(timeout_per_check)
                     elapsed += timeout_per_check
                 if proc.poll() is None:
@@ -2171,22 +2201,46 @@ class RipperEngine:
             self.last_move_error = "Move failed — source file is missing."
             return False
 
-        # Verify source has stopped growing before accepting move, respecting config timeout.
+        # Verify source has stopped growing before accepting move.
+        # Prior implementation took a single before/after sample over
+        # 1 second and failed immediately if the size changed.  That
+        # made ``opt_stabilize_timeout_seconds`` misleading — its
+        # name (and default of 60) suggested "wait up to 60s for the
+        # file to settle", but the code only ever observed for ~1s.
+        # Now ``stabilize_timeout`` is an actual deadline: poll the
+        # file size every second (or every 1/10 of the timeout, up
+        # to 1 second) until either two consecutive samples agree
+        # (stable!) or the deadline elapses (failure).
         if self.cfg.get("opt_file_stabilization", True):
-            stabilize_timeout = int(self.cfg.get("opt_stabilize_timeout_seconds", 60))
+            stabilize_timeout = float(self.cfg.get("opt_stabilize_timeout_seconds", 60))
+            check_interval = max(0.1, min(1.0, stabilize_timeout / 10))
             try:
+                deadline = time.time() + max(check_interval, stabilize_timeout)
                 size_before = os.path.getsize(io_source)
-                time.sleep(min(1.0, stabilize_timeout / 10))  # Check interval, up to 1 sec
-                size_after = os.path.getsize(io_source)
-                if size_before != size_after:
+                stable = False
+                while time.time() < deadline:
+                    if self.abort_event.is_set():
+                        on_log("Stabilization check aborted.")
+                        self.last_move_error = (
+                            "Move cancelled during stabilization check."
+                        )
+                        return False
+                    time.sleep(check_interval)
+                    size_after = os.path.getsize(io_source)
+                    if size_before == size_after:
+                        stable = True
+                        break
+                    size_before = size_after
+                if not stable:
                     on_log(
-                        f"ERROR: Source file still growing before move "
-                        f"({size_before} -> {size_after} bytes). "
-                        f"Stabilization failed."
+                        f"ERROR: Source file did not stabilize within "
+                        f"{stabilize_timeout:.0f}s "
+                        f"(last size {size_before} bytes, still growing)."
                     )
                     self.last_move_error = (
                         "Move failed — source file incomplete. "
-                        "Stabilization did not complete successfully."
+                        "Stabilization did not complete within the configured "
+                        "timeout."
                     )
                     return False
             except Exception as e:
