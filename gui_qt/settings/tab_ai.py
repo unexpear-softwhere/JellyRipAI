@@ -270,8 +270,16 @@ class AITab(QWidget):
         if self._save_cfg is not None:
             try:
                 self._save_cfg(self._cfg)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Persist failure shouldn't crash the dialog (the in-
+                # memory cfg already reflects the user's choices), but
+                # the user deserves to know it didn't save.  Log to
+                # session log; failure-mode usually disk-full or
+                # locked config.json.
+                import logging
+                logging.warning(
+                    "Settings (AI tab): failed to persist cfg: %s", exc,
+                )
 
     def cancel(self) -> None:
         """Restore every widget to the construction-time snapshot.

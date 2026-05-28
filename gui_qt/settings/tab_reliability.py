@@ -225,8 +225,12 @@ class ReliabilityTab(QWidget):
         if self._save_cfg is not None:
             try:
                 self._save_cfg(self._cfg)
-            except Exception:
-                pass
+            except Exception as exc:
+                import logging
+                logging.warning(
+                    "Settings (Reliability tab): failed to persist cfg: %s",
+                    exc,
+                )
 
     def cancel(self) -> None:
         for key, cb in self._checkboxes.items():

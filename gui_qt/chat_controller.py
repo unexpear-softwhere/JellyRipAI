@@ -370,11 +370,20 @@ class ChatController(QObject):
             # each time.
             pass
         # Best-effort persistence so the choice survives a restart.
+        # Failures here aren't fatal (the in-memory cfg already
+        # reflects the user's choice), but they were previously
+        # invisible — a disk-full or locked-config.json save error
+        # would mean the mode reset on next launch with no
+        # explanation.  Log so a "my mode keeps reverting" report
+        # has a trail.
         try:
             from config import save_config
             save_config(self._cfg)
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging
+            logging.warning(
+                "Chat controller: failed to persist AI mode change: %s", exc,
+            )
         # Surface the change in the status line so the user sees it
         # took effect.
         labels = {"off": "Off", "cloud": "Cloud", "local": "Local"}

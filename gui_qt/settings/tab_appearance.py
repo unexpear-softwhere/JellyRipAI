@@ -294,9 +294,17 @@ class AppearanceTab(QWidget):
             new = state == Qt.CheckState.Checked.value
             try:
                 fn(new)
-            except Exception:
-                # Live-preview failures shouldn't block the toggle.
-                pass
+            except Exception as exc:
+                # Live-preview failures shouldn't block the toggle —
+                # the checkbox state still flips so the user's intent
+                # is captured.  But the failure was previously
+                # invisible; now it goes to the session log so a
+                # "toggle didn't do anything" report has a trail.
+                import logging
+                logging.warning(
+                    "Appearance tab live-apply failed for %s: %s",
+                    object_name, exc,
+                )
 
         cb.stateChanged.connect(handler)
         return cb
@@ -340,7 +348,12 @@ class AppearanceTab(QWidget):
             return
         try:
             self._load_theme(chosen)
-        except Exception:
+        except Exception as exc:
+            import logging
+            logging.warning(
+                "Appearance tab: live theme preview failed for %r: %s",
+                chosen, exc,
+            )
             return
 
     def _refresh_notes_for_current(self) -> None:
@@ -423,11 +436,16 @@ class AppearanceTab(QWidget):
             return
         try:
             self._save_cfg(self._cfg)
-        except Exception:
+        except Exception as exc:
             # Persist failure is recoverable — runtime state already
             # reflects the user's choices.  Next launch will load
-            # the prior on-disk values.  Caller can decide to log.
-            pass
+            # the prior on-disk values.  Logging the exception so
+            # the user can find it in the session log when "my
+            # theme keeps reverting" turns out to be disk-full.
+            import logging
+            logging.warning(
+                "Settings (Appearance tab): failed to persist cfg: %s", exc,
+            )
 
     def cancel(self) -> None:
         """Reverse every runtime preview to the snapshotted state.
@@ -453,8 +471,12 @@ class AppearanceTab(QWidget):
         ):
             try:
                 self._load_theme(original_theme)
-            except Exception:
-                pass
+            except Exception as exc:
+                import logging
+                logging.warning(
+                    "Appearance tab: cancel-restore theme load failed for %r: %s",
+                    original_theme, exc,
+                )
 
         # Checkboxes — re-fire each live hook with the snapshotted
         # value so the runtime widget follows the revert.  cfg is
@@ -472,8 +494,12 @@ class AppearanceTab(QWidget):
                 continue
             try:
                 handler(snap_val)
-            except Exception:
-                pass
+            except Exception as exc:
+                import logging
+                logging.warning(
+                    "Appearance tab: cancel-restore live hook failed for %r: %s",
+                    key, exc,
+                )
 
 
 # ---------------------------------------------------------------------------

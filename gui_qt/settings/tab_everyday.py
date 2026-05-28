@@ -310,8 +310,12 @@ class EverydayTab(QWidget):
         if self._save_cfg is not None:
             try:
                 self._save_cfg(self._cfg)
-            except Exception:
-                pass
+            except Exception as exc:
+                import logging
+                logging.warning(
+                    "Settings (Everyday tab): failed to persist cfg: %s",
+                    exc,
+                )
 
     def cancel(self) -> None:
         """Reset every widget to the snapshot taken at construction.

@@ -175,11 +175,16 @@ class PathsTab(QWidget):
         if self._save_cfg is not None:
             try:
                 self._save_cfg(self._cfg)
-            except Exception:
+            except Exception as exc:
                 # Don't crash the dialog if save fails — the cfg
                 # mutation already applied; user can retry from
-                # Settings or fix the file path manually.
-                pass
+                # Settings or fix the file path manually.  Log so
+                # they can find the cause (typically disk-full or a
+                # locked config.json).
+                import logging
+                logging.warning(
+                    "Settings (Paths tab): failed to persist cfg: %s", exc,
+                )
 
     def cancel(self) -> None:
         """Cancel pressed.  No runtime state changed (the field

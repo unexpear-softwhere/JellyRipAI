@@ -81,8 +81,27 @@ class UtilityHandler(QObject):
         try:
             handler()
         except Exception as e:  # noqa: BLE001 — handlers can fail; log + continue
+            # Surface the failure in three places so the user can't
+            # miss it: the live log pane (was the only spot), the
+            # status bar (one-line user-facing notice), and the
+            # session log via stdlib logging (with stack trace for
+            # later diagnosis).  Was a silent log-only swallow that
+            # the user could easily miss in a busy log pane.
+            import logging
             self._window.append_log(
                 f"Utility chip {object_name!r} failed: {e}"
+            )
+            try:
+                self._window.set_status(
+                    f"⚠ {object_name!r} failed — see log pane."
+                )
+            except Exception:
+                # MainWindow might not expose set_status in all
+                # configurations; the log_pane write above is the
+                # baseline guarantee.
+                pass
+            logging.exception(
+                "Utility chip %r raised: %s", object_name, e,
             )
 
     # ------------------------------------------------------------------
