@@ -164,7 +164,19 @@ def get_connection_summary() -> dict[str, dict[str, Any]]:
             has_credentials = bool(creds.get("api_key"))
             model = creds.get("model", info.default_model)
         else:
-            has_credentials = provider.is_available()
+            # For local providers, ``has_credentials`` here means
+            # "this provider is actually usable for an AI call",
+            # which requires (a) the service is reachable AND
+            # (b) at least one model is installed.  ``is_available()``
+            # is the cheap TCP-only reachability probe used in hot
+            # paths (audit #19); for the summary display we can
+            # afford the HTTP cost to check actual model
+            # availability via ``_get_available_models``.
+            try:
+                local = provider  # type: ignore[assignment]
+                has_credentials = bool(local._get_available_models())
+            except Exception:
+                has_credentials = False
             model = creds.get("model", "") or (info.available_models[0] if info.available_models else "")
 
         summary[pid] = {
