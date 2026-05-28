@@ -1,7 +1,6 @@
 
 """Controller layer implementation."""
 # pyright: reportUnusedImport=false, reportUnusedVariable=false
-import json
 import os
 import re
 import shutil
