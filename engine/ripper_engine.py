@@ -16,6 +16,34 @@ from typing import Any, Generator, List, Mapping, Sequence
 
 _POPEN_FLAGS = {"creationflags": 0x08000000} if _sys.platform == "win32" else {}
 
+# ---------------------------------------------------------------------------
+# Module-level constants (audit #30: named where magic numbers used to live).
+# Centralized here so the value, semantics, and rationale are documented
+# in one place rather than scattered as bare literals throughout the file.
+# ---------------------------------------------------------------------------
+
+# Diagnostic raw-line capture cap.  Bounds memory if makemkvcon spews
+# lots of output during a rip or size scan.  5000 lines is roughly the
+# upper bound observed for very chatty discs in smoke testing.
+_DIAG_RAW_LINES_MAX = 5000
+
+# Title-scoring ambiguity threshold.  When the top two scored titles
+# are within this score delta, the auto-pick is flagged as a close
+# call in the log.  Empirical value from smoke testing — tighter
+# than this produces too many false-positive warnings on extras-heavy
+# discs.
+_AMBIGUOUS_TOP_SCORE_DELTA = 0.05
+
+# Disc-size-scan cache TTL, in seconds.  A repeat scan of the same
+# drive target within this window can reuse the previously computed
+# total without re-launching makemkvcon.
+_SCAN_CACHE_TTL_SECONDS = 300
+
+# Session-log rollover threshold, in bytes.  When the live log file
+# crosses this size, the engine rolls it over (start/end dates
+# preserved) rather than appending forever.
+_SESSION_LOG_ROLLOVER_BYTES = 5 * 1024**3
+
 from shared.runtime import RIP_ATTEMPT_FLAGS
 from shared.ai_diagnostics import (
     ProcessCapture, diag_exception, diag_process, diag_record, get_diagnostics,
@@ -933,7 +961,7 @@ class RipperEngine:
                 line = line.strip()
                 if not line:
                     continue
-                if len(_diag_raw_lines) < 5000:
+                if len(_diag_raw_lines) < _DIAG_RAW_LINES_MAX:
                     _diag_raw_lines.append(line)
                 if line.startswith("CINFO:"):
                     parts = line[6:].split(",", 2)
@@ -1163,7 +1191,7 @@ class RipperEngine:
 
             if len(scored) > 1:
                 diff = scored[0][1] - scored[1][1]
-                if diff < 0.05:
+                if diff < _AMBIGUOUS_TOP_SCORE_DELTA:
                     on_log(
                         "WARNING: Top titles are very close — "
                         "possible ambiguity."
@@ -1236,7 +1264,7 @@ class RipperEngine:
             if (
                 self._last_scan_target == disc_target
                 and self._last_scan_total_bytes
-                and scan_age < 300
+                and scan_age < _SCAN_CACHE_TTL_SECONDS
             ):
                 on_log("Using cached disc size from recent scan.")
                 return int(self._last_scan_total_bytes)
@@ -1712,7 +1740,7 @@ class RipperEngine:
             if not line:
                 continue
 
-            if len(_diag_raw_lines) < 5000:
+            if len(_diag_raw_lines) < _DIAG_RAW_LINES_MAX:
                 _diag_raw_lines.append(line)
 
             if line.startswith("PRGV:"):
@@ -2610,7 +2638,7 @@ class RipperEngine:
             log_dir = os.path.dirname(log_file)
             if log_dir:
                 os.makedirs(self._io_path(log_dir), exist_ok=True)
-            max_size = 5 * 1024**3
+            max_size = _SESSION_LOG_ROLLOVER_BYTES
             io_log_file = self._io_path(log_file)
             if (os.path.exists(io_log_file) and
                     os.path.getsize(io_log_file) >= max_size):
