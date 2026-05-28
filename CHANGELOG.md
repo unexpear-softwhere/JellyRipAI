@@ -2,6 +2,141 @@
 
 <!-- markdownlint-disable MD013 -->
 
+## [1.0.22] - 2026-05-28
+
+Audit-driven cleanup release.  Mirrors MAIN's v1.0.22 cleanup
+across the engine and settings UI, plus AI-fork-specific security
+hardening and a new AI Settings tab.
+
+### Security
+
+- **Gemini API key moved from URL to ``x-goog-api-key`` header.**
+  ``GeminiProvider._generate`` and ``._chat`` used to embed the key
+  in the URL as ``?key={api_key}``.  On HTTPError, the URL with the
+  key leaked into ``str(e)`` → ConnectionResult.error → the GUI log
+  pane + session.ai.log + ai_chat_replay.jsonl.  Header auth keeps
+  the key out of error strings, proxies, and access logs.
+
+- **``credential_store`` warns loudly on plaintext fallback +
+  chmods 0o600 on POSIX.**  Was a silent plaintext-on-disk
+  fallback if DPAPI failed or on non-Windows.  Now emits a one-
+  shot WARNING-level log line per process.  POSIX file mode now
+  set to 0o600 instead of the umask default of 0o644
+  (world-readable).
+
+- **``ai_chat_replay.jsonl`` scrubs API keys + rotates at 5 MB.**
+  Was unredacted and unbounded.  Now applies six regex patterns
+  to every string value (Anthropic ``sk-ant-api...``, OpenAI
+  ``sk-proj-``/``sk-``, Google ``AIza``, Bearer tokens,
+  ``x-goog-api-key`` header values) and replaces with
+  ``[REDACTED:provider]`` tokens.  File rotates to ``.jsonl.1`` at
+  5 MB.
+
+- **Quota-error pattern tightened.**  ``_QUOTA_ERROR_PATTERNS`` no
+  longer includes bare ``"token"`` — that was matching auth
+  failures like ``"invalid token from bad_key"`` and triggering
+  the 5-minute cooldown spuriously.  Replaced with specific
+  phrases (``"token_limit"``, ``"token quota"``, ``"out of tokens"``).
+
+### Fixed
+
+- **"Set as Active" actually persists ``opt_ai_mode`` now.**
+  ``AIProviderDialog._apply_parent_mode`` looked up
+  ``parent.cfg`` but MainWindow stores it as ``parent._cfg``
+  (private-by-convention).  The cfg-write was skipped silently;
+  only the runtime diagnostics manager was updated.  One-char fix.
+
+- **``tools/update_check.py`` stub ported.**  Clicking
+  "Check for Updates" on the Utility menu used to raise
+  ``ModuleNotFoundError`` (swallowed to log-pane).  MAIN has had
+  the stub since Phase 3h; AI BRANCH was missing it.  Ported with
+  the AI fork's releases URL.
+
+- **Local provider availability now 200ms TCP probe, not 5s HTTP.**
+  ``LocalProvider.is_available`` called ``_get_available_models``
+  via HTTP with a 5-second timeout, freezing the UI on every
+  diagnostic error event when Ollama wasn't running.  Now a bare
+  TCP connect — typically <5ms when up, ~200ms when not.
+
+- **Drive-probe backoff is abort-aware.**  ``_wait_for_drive_ready``
+  used bare ``time.sleep(delay)``; clicking Stop during a probe
+  could be ignored for up to 40 seconds.  Ported MAIN's
+  ``_sleep_with_abort`` helper that polls abort_event every
+  0.25s, so Stop responds within ~250ms.
+
+- **``connect_single_provider`` now merges instead of replacing.**
+  Calling it with ``model="opus"`` after a save with ``api_key="..."``
+  used to wipe the api_key.  Now preserves previously saved fields.
+
+- **Same engine-layer fixes as MAIN.**  All of: ``stabilize_timeout``
+  now a real deadline (was single 1s sleep); ffprobe cache key
+  normcased; bare ``print()`` routed through logging; ffprobe
+  duration return type unified to float; ``_move_extras_to_categories``
+  bool semantics with caller wiring; 24 mojibake sites in
+  ``engine/ripper_engine.py`` cleaned (was actually fixed in
+  v1.0.20 — this release cleans the remaining 14 sites in tests/
+  test_behavior_guards.py).
+
+- **Engine→controller layer violation removed.**  ``engine/
+  ripper_engine.py`` was importing ``build_movie_main_filename``
+  from ``controller.naming`` — inverting the engine/controller
+  dependency order.  Inlined the 2-line filename construction at
+  the one use site.
+
+- **TINFO parser tid leak defensively reset.**  ``get_disc_size``
+  could carry tid across loop iterations if a TINFO line had too
+  few parts.  Today benign because of an adjacent gate, but a
+  future edit could expose the latent bug.  Now ``tid = None``
+  at the top of every iteration.
+
+### Added
+
+- **AI Settings tab.**  About 14 previously-hidden ``opt_ai_*``
+  config knobs (diagnostics toggles, cloud/local timeouts, max
+  calls per session, failure thresholds, local model name) are
+  now editable from a new "AI" tab in the Settings dialog.  Sits
+  between Reliability and Appearance.  Internal state keys
+  (active provider, sidebar width, profile state) remain managed
+  by the AI Providers dialog and chat sidebar.
+
+- **Drive-probe defaults added to DEFAULTS dict.**
+  ``opt_drive_probe_retries=5`` and
+  ``opt_drive_probe_backoff_seconds=2.0`` — previously
+  in-code-only fallbacks invisible to the Settings UI.
+  Harmonized with MAIN.
+
+- **5 named constants in ``engine/ripper_engine.py``** replacing
+  4 magic numbers (same as MAIN: raw-line cap, ambiguity threshold,
+  scan-cache TTL, log-rollover threshold).
+
+- **``opt_disc_presence_probe_seconds`` added to DEFAULTS.**
+  Same fix as MAIN — was read with a hardcoded fallback but
+  missing from the master schema.
+
+### Changed
+
+- **Default Gemini model bumped to ``gemini-2.5-flash``** (was
+  ``gemini-2.0-flash``).  Matches the price/perf tier shift we
+  did for Claude in v1.0.20.
+
+- **Same engine/UI ergonomics as MAIN's v1.0.22.**  Settings tab
+  persist failures now log; utility chip dispatch failures
+  surface in 3 places; Appearance tab live-apply/cancel-restore
+  swallows now log; chat_controller's mode-change save_config
+  failure now logs (was silent).
+
+- **Pages baseurl set** so docs nav resolves correctly.
+
+### Removed
+
+- **Dead ``scan_disc`` delegate** (same as MAIN).
+- **Dead resume-scaffolding NOT removed on AI** (MAIN's version
+  was already dead; AI's is still wired up via ``check_resume`` —
+  feature kept).
+- **Unused ``import json``** in ``controller/controller.py``.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+
 ## [1.0.21] - 2026-05-08
 
 Audit-driven cleanup release.  Provider-stack consistency fix

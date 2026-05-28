@@ -1,42 +1,76 @@
-## JellyRip AI v1.0.21 Release Notes (UNSTABLE)
+## JellyRip AI v1.0.22 Release Notes (UNSTABLE)
 
-JellyRip AI v1.0.21 — audit-driven cleanup.  Default Gemini model
-bumped to match what we did for Claude in v1.0.20, plus repository
-hygiene and README honesty around workflow test status.
+JellyRip AI v1.0.22 — deep audit cleanup.  Mirrors MAIN's v1.0.22
+across the engine + settings UI, plus AI-fork-specific security
+hardening, a new AI Settings tab, and a long list of small fixes.
 
 ## Download
 
-- Direct download: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.21/JellyRipAI.exe
-- Installer: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.21/JellyRipAIInstaller.exe
-- Release page: https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.21
+- Direct download: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.22/JellyRipAI.exe
+- Installer: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.22/JellyRipAIInstaller.exe
+- Release page: https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.22
 - Project site: https://unexpear-softwhere.github.io/JellyRipAI/
 
-### What's New in 1.0.21
+### Highlights
+
+Security
+- Gemini API key moved from URL to x-goog-api-key header
+  (key no longer leaks via HTTPError strings).
+- credential_store warns loudly on plaintext fallback + sets
+  0o600 perms on POSIX (was 0o644 world-readable).
+- ai_chat_replay.jsonl now scrubs API keys via regex + rotates
+  at 5 MB so it can't grow without bound.
+- Quota detector tightened — bare "token" no longer triggers
+  5-minute provider cooldowns on unrelated auth errors.
+
+AI-side bug fixes
+- "Set as Active" actually persists opt_ai_mode now (was
+  reading parent.cfg vs MainWindow's private _cfg).
+- Clicking "Check for Updates" no longer crashes (ported
+  tools/update_check.py stub from MAIN).
+- Local provider check is now a 200ms TCP probe instead of a
+  5-second HTTP timeout that froze the UI on every error.
+- Drive-probe waits are abort-aware (Stop responds within
+  250ms instead of waiting out the full backoff).
+- connect_single_provider now merges instead of replacing —
+  saving one field no longer wipes the others.
+
+New
+- AI Settings tab — 14 previously-hidden opt_ai_* knobs now
+  editable from Settings.
+- Pages docs site nav now works (baseurl fix).
+
+Engine improvements (mirror MAIN's v1.0.22)
+- stabilize_timeout now a real deadline (was single 1s sleep).
+- ffprobe cache key normcased on Windows.
+- 5 magic numbers named as constants.
+- print() routed through logging.
+- ffprobe duration return type unified to float.
+- _move_extras_to_categories returns bool; callers flag partial
+  sessions appropriately.
+- Dead scan_disc delegate removed.
+- Engine→controller layer violation removed.
+- TINFO parser tid leak defensively reset.
 
 Provider stack
-- Default Gemini model bumped from gemini-2.0-flash to
-  gemini-2.5-flash.  Matches the price/perf tier shift we did for
-  Claude in v1.0.20.  Older models stay available in the dropdown.
-- credential_store.py docstring example updated to match.
+- Default Gemini model bumped to gemini-2.5-flash.
+- Drive-probe defaults harmonized with MAIN (5 retries / 2s
+  backoff, now in DEFAULTS so Settings can surface them).
 
-Documentation
-- README "Main Workflows" added "(some testing)" / "(not tested)"
-  qualifiers to match MAIN's honesty about test status.
-
-Bundle / repo
-- Removed gui_qt/qss/warm.qss (empty 0-byte placeholder).
-- pyproject.toml keywords dropped tkinter, added pyside6/qt/claude/ai.
-- .gitignore additions: dashboard.html (defensive), *.tmp.
+Tests
+- All MAIN test improvements mirrored where applicable.
+- 14 mojibake sites in tests/test_behavior_guards.py cleaned.
 
 ### What's NOT in this release
 
-No engine or workflow changes.  Chat sidebar, AI provider dialog,
-diagnostics routing, on-device fallback all behave identically to
-ai-v1.0.20.  Existing users with a saved Gemini configuration are
-unaffected — their saved preference takes precedence over the new
-default.
+No new AI features or workflow changes.  Chat sidebar, AI provider
+dialog, diagnostics routing, on-device fallback all behave
+identically to ai-v1.0.21.  Existing users with a saved Gemini
+configuration may want to re-test connection after upgrading.
 
 ### Companion fork: JellyRip MAIN
 
-- MAIN release page: https://github.com/unexpear/JellyRip/releases/tag/v1.0.21
+The non-AI baseline ships the same disc-ripping core without AI.
+
+- MAIN release page: https://github.com/unexpear/JellyRip/releases/tag/v1.0.22
 - MAIN project site: https://unexpear.github.io/JellyRip/

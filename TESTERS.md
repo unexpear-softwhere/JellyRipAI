@@ -3,7 +3,7 @@
 Use this during live ripping. Mark pass or fail for each line, then
 attach this sheet (or copy/paste results) into a GitHub issue.
 
-Current unstable test target: `ai-v1.0.21`
+Current unstable test target: `ai-v1.0.22`
 
 Issue tracker: [GitHub Issues](https://github.com/unexpear/JellyRip/issues)
 
