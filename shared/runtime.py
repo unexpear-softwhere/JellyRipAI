@@ -176,6 +176,12 @@ DEFAULTS: dict[str, ConfigScalar] = {
     "opt_user_prompt_timeout_seconds": 300,
     "opt_disc_swap_timeout_enabled": False,
     "opt_disc_swap_timeout_seconds": 300,
+    # How long ``_disc_present`` waits for a drive to either report
+    # a disc or time out, in seconds.  Read by
+    # ``controller/controller.py:_disc_present`` with a hardcoded
+    # 45-second fallback; surfacing here so the value is discoverable
+    # and tweakable from config.json (and eventually from Settings).
+    "opt_disc_presence_probe_seconds": 45,
     "opt_file_stabilization": True,
     "opt_stabilize_timeout_seconds": 60,
     "opt_stabilize_required_polls": 4,
