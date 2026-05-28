@@ -842,7 +842,7 @@ class TestComputeFileMinSize:
         assert self._min(0) == self._1_GB
 
     def test_garbage_small_expected_falls_back_to_floor(self):
-        # 5 MB "expected" is a bad parse â€" must not be trusted.
+        # 5 MB "expected" is a bad parse — must not be trusted.
         assert self._min(5 * 1024 * 1024) == self._1_GB
 
     def test_exactly_100mb_boundary_uses_floor(self):
@@ -7952,7 +7952,7 @@ def test_verify_container_integrity_uses_preanalyzed_data(monkeypatch, tmp_path)
 
     monkeypatch.setattr(engine, "analyze_files", fake_analyze)
 
-    # Pass pre-analyzed data â€" analyze_files must NOT be called.
+    # Pass pre-analyzed data — analyze_files must NOT be called.
     preanalyzed = [(str(f), 5400.0, 4200)]
     result = controller._verify_container_integrity([str(f)], analyzed=preanalyzed)
 
@@ -8017,7 +8017,7 @@ def test_verify_container_integrity_fails_on_count_mismatch(tmp_path):
 
 
 def test_size_advisory_log_uses_arrow_format(tmp_path, monkeypatch):
-    """Post-stabilization advisory must use 'expected X GB â†' threshold Y GB' format."""
+    """Post-stabilization advisory must use 'expected X GB → threshold Y GB' format."""
     import time as time_module
 
     controller, engine = _controller_with_engine({
@@ -8041,7 +8041,7 @@ def test_size_advisory_log_uses_arrow_format(tmp_path, monkeypatch):
         lambda _f, _timeout, _polls: (True, False)
     )
 
-    # 500 MB expected â†' floor = 250 MB; actual is 1 MB so advisory fires.
+    # 500 MB expected → floor = 250 MB; actual is 1 MB so advisory fires.
     expected_size_by_title = {2: 500 * 1024 * 1024}
     controller._stabilize_ripped_files(
         [str(tiny)], expected_size_by_title=expected_size_by_title
@@ -8099,7 +8099,7 @@ def test_degraded_rip_added_to_session_report(tmp_path, monkeypatch):
 
 
 def test_session_summary_shows_warnings_on_degraded_rip(tmp_path, monkeypatch):
-    """write_session_summary: COMPLETED state + session_report â†' 'Completed with warnings'."""
+    """write_session_summary: COMPLETED state + session_report → 'Completed with warnings'."""
     controller, engine = _controller_with_engine()
 
     controller._reset_state_machine()
@@ -8127,7 +8127,7 @@ def test_session_summary_shows_warnings_on_degraded_rip(tmp_path, monkeypatch):
 
 
 def test_session_summary_clean_when_no_warnings():
-    """write_session_summary: COMPLETED state + empty session_report â†' clean success message."""
+    """write_session_summary: COMPLETED state + empty session_report → clean success message."""
     controller, _engine = _controller_with_engine()
 
     controller._reset_state_machine()
@@ -8277,12 +8277,12 @@ def test_run_smart_rip_no_titles_uses_async_terminal_error_when_available():
 # â"€â"€ Duration sanity check (tiered + aggregation + clamping) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
 def test_integrity_severe_duration_warns_only_no_size(tmp_path):
-    """< 50% duration alone â†' severe warning but still returns True."""
+    """< 50% duration alone → severe warning but still returns True."""
     controller, _engine = _controller_with_engine()
     f = tmp_path / "title_t00.mkv"
     f.write_text("fake")
 
-    # 600 s actual, 3600 s expected â†' 16.7% â€" severe tier (long title).
+    # 600 s actual, 3600 s expected → 16.7% — severe tier (long title).
     preanalyzed = [(str(f), 600.0, 100)]
     result = controller._verify_container_integrity(
         [str(f)],
@@ -8295,12 +8295,12 @@ def test_integrity_severe_duration_warns_only_no_size(tmp_path):
 
 
 def test_integrity_severe_duration_and_size_logs_error(tmp_path):
-    """< 50% duration AND < 50% size (above 200MB floor) â†' TRUNCATION ERROR."""
+    """< 50% duration AND < 50% size (above 200MB floor) → TRUNCATION ERROR."""
     controller, _engine = _controller_with_engine()
     f = tmp_path / "title_t00.mkv"
     f.write_text("fake")
 
-    # 600 s (16.7%), 400 MB actual vs 4000 MB expected (10%) â€" both severe.
+    # 600 s (16.7%), 400 MB actual vs 4000 MB expected (10%) — both severe.
     preanalyzed = [(str(f), 600.0, 400)]  # size_mb = 400 (above 200MB floor)
     result = controller._verify_container_integrity(
         [str(f)],
@@ -8314,19 +8314,19 @@ def test_integrity_severe_duration_and_size_logs_error(tmp_path):
 
 
 def test_integrity_small_expected_size_disables_escalation(tmp_path):
-    """expected_size < 200 MB floor â†' size signal ignored, no escalation."""
+    """expected_size < 200 MB floor → size signal ignored, no escalation."""
     controller, _engine = _controller_with_engine()
     f = tmp_path / "title_t00.mkv"
     f.write_text("fake")
 
-    # 600 s (16.7%) duration â€" would be severe. But expected_size only 50 MB
-    # â€" below 200 MB floor so size signal must be ignored.
+    # 600 s (16.7%) duration — would be severe. But expected_size only 50 MB
+    # — below 200 MB floor so size signal must be ignored.
     preanalyzed = [(str(f), 600.0, 10)]  # actual 10 MB
     result = controller._verify_container_integrity(
         [str(f)],
         analyzed=preanalyzed,
         expected_durations={str(f): 3600.0},
-        expected_sizes={str(f): 50 * 1024 * 1024},  # 50 MB â€" below floor
+        expected_sizes={str(f): 50 * 1024 * 1024},  # 50 MB — below floor
     )
 
     assert result is True
@@ -8335,13 +8335,13 @@ def test_integrity_small_expected_size_disables_escalation(tmp_path):
 
 
 def test_integrity_strict_mode_fails_on_likely_truncation(tmp_path):
-    """Strict mode: likely truncation (50-75% duration) â†' returns False."""
+    """Strict mode: likely truncation (50-75% duration) → returns False."""
     controller, engine = _controller_with_engine()
     engine.cfg["opt_strict_mode"] = True
     f = tmp_path / "title_t00.mkv"
     f.write_text("fake")
 
-    # 2000 s actual, 3600 s expected â†' 55.6% â€" likely truncation tier.
+    # 2000 s actual, 3600 s expected → 55.6% — likely truncation tier.
     preanalyzed = [(str(f), 2000.0, 100)]
     result = controller._verify_container_integrity(
         [str(f)],
@@ -8354,12 +8354,12 @@ def test_integrity_strict_mode_fails_on_likely_truncation(tmp_path):
 
 
 def test_integrity_minor_mismatch_warns_but_passes(tmp_path):
-    """75â€"90% duration â†' minor warning, still returns True."""
+    """75—90% duration → minor warning, still returns True."""
     controller, _engine = _controller_with_engine()
     f = tmp_path / "title_t00.mkv"
     f.write_text("fake")
 
-    # 2880 s actual, 3600 s expected â†' 80% â€" minor tier.
+    # 2880 s actual, 3600 s expected → 80% — minor tier.
     preanalyzed = [(str(f), 2880.0, 100)]
     result = controller._verify_container_integrity(
         [str(f)],
@@ -8372,12 +8372,12 @@ def test_integrity_minor_mismatch_warns_but_passes(tmp_path):
 
 
 def test_integrity_normal_variance_no_warning(tmp_path):
-    """>= 90% duration â†' no warning at all."""
+    """>= 90% duration → no warning at all."""
     controller, _engine = _controller_with_engine()
     f = tmp_path / "title_t00.mkv"
     f.write_text("fake")
 
-    # 3300 s actual, 3600 s expected â†' 91.7% â€" normal variance.
+    # 3300 s actual, 3600 s expected → 91.7% — normal variance.
     preanalyzed = [(str(f), 3300.0, 100)]
     result = controller._verify_container_integrity(
         [str(f)],
@@ -8390,7 +8390,7 @@ def test_integrity_normal_variance_no_warning(tmp_path):
 
 
 def test_integrity_multi_file_title_aggregates_before_comparing(tmp_path):
-    """Two files from one title: aggregate duration before comparing â€" no false warning."""
+    """Two files from one title: aggregate duration before comparing — no false warning."""
     controller, _engine = _controller_with_engine()
     f1 = tmp_path / "part1.mkv"
     f2 = tmp_path / "part2.mkv"
@@ -8398,8 +8398,8 @@ def test_integrity_multi_file_title_aggregates_before_comparing(tmp_path):
     f2.write_text("p2")
 
     # Each file is 1800 s (30 min). Expected total 3600 s.
-    # Per-file: 1800/3600 = 50% â†' would trigger "likely" warning.
-    # Aggregated: 3600/3600 = 100% â†' no warning.
+    # Per-file: 1800/3600 = 50% → would trigger "likely" warning.
+    # Aggregated: 3600/3600 = 100% → no warning.
     preanalyzed = [(str(f1), 1800.0, 200), (str(f2), 1800.0, 200)]
     result = controller._verify_container_integrity(
         [str(f1), str(f2)],
@@ -8413,14 +8413,14 @@ def test_integrity_multi_file_title_aggregates_before_comparing(tmp_path):
 
 
 def test_integrity_multi_file_dedup_only_one_warning(tmp_path):
-    """Two files from one title both below threshold â†' only ONE warning emitted."""
+    """Two files from one title both below threshold → only ONE warning emitted."""
     controller, _engine = _controller_with_engine()
     f1 = tmp_path / "part1.mkv"
     f2 = tmp_path / "part2.mkv"
     f1.write_text("p1")
     f2.write_text("p2")
 
-    # Total 600 s, expected 3600 s â†' 16.7% â€" severe, one warning for the group.
+    # Total 600 s, expected 3600 s → 16.7% — severe, one warning for the group.
     preanalyzed = [(str(f1), 300.0, 100), (str(f2), 300.0, 100)]
     result = controller._verify_container_integrity(
         [str(f1), str(f2)],
@@ -8437,31 +8437,31 @@ def test_integrity_multi_file_dedup_only_one_warning(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Library-scanning helpers â€" append / gap-fill / existing show support
+# Library-scanning helpers — append / gap-fill / existing show support
 # ---------------------------------------------------------------------------
 
 # --- get_next_episode gap-fill logic ---
 
 def test_get_next_episode_empty_set_returns_1():
-    """No existing episodes â†' first episode is 1."""
+    """No existing episodes → first episode is 1."""
     c, _ = _controller_with_engine()
     assert c.get_next_episode(set()) == 1
 
 
 def test_get_next_episode_appends_after_max():
-    """Contiguous set â†' suggest next after the last."""
+    """Contiguous set → suggest next after the last."""
     c, _ = _controller_with_engine()
     assert c.get_next_episode({1, 2, 3}) == 4
 
 
 def test_get_next_episode_fills_gap():
-    """Missing episode 3 â†' suggest 3, not 6."""
+    """Missing episode 3 → suggest 3, not 6."""
     c, _ = _controller_with_engine()
     assert c.get_next_episode({1, 2, 4, 5}) == 3
 
 
 def test_get_next_episode_fills_earliest_gap():
-    """Multiple gaps â†' always return the lowest missing."""
+    """Multiple gaps → always return the lowest missing."""
     c, _ = _controller_with_engine()
     # 2 and 4 are both missing; 2 is earlier
     assert c.get_next_episode({1, 3, 5}) == 2
@@ -8470,14 +8470,14 @@ def test_get_next_episode_fills_earliest_gap():
 # --- _scan_episode_files (replaces _scan_highest_episode internally) ---
 
 def test_scan_highest_episode_returns_zero_for_empty_folder(tmp_path):
-    """No episode files â†' returns 0 (first disc starts at episode 1)."""
+    """No episode files → returns 0 (first disc starts at episode 1)."""
     controller, _ = _controller_with_engine()
     result = controller._scan_highest_episode(str(tmp_path), 1)
     assert result == 0
 
 
 def test_scan_highest_episode_detects_existing_episodes(tmp_path):
-    """Three S01Exx files present â†' returns highest episode number."""
+    """Three S01Exx files present → returns highest episode number."""
     controller, _ = _controller_with_engine()
     (tmp_path / "Show - S01E01 - Pilot.mkv").write_text("")
     (tmp_path / "Show - S01E02 - Second.mkv").write_text("")
