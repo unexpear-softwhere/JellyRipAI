@@ -146,8 +146,22 @@ def run_qt_app(cfg: dict, *, splash: Any = None) -> int:
     # (idempotent — re-opens skip it).
     sidebar = window.ensure_chat_sidebar()
     from gui_qt.chat_controller import ChatController
+
+    def _session_facts() -> dict:
+        """Live disc/session facts for the chat context.  Defensive:
+        the chat must never break if the controller can't produce
+        facts (method missing, mid-transition, etc.)."""
+        fn = getattr(controller, "build_ai_session_facts", None)
+        if not callable(fn):
+            return {}
+        try:
+            return fn() or {}
+        except Exception:
+            return {}
+
     chat_controller = ChatController(
         sidebar=sidebar, cfg=cfg, parent=window,
+        facts_provider=_session_facts,
     )
     chat_controller.show_welcome()
     # Hidden by default; user opens it via the "☰  Chat" toolbar chip.

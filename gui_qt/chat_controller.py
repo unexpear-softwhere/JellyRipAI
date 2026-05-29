@@ -37,7 +37,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -247,11 +247,20 @@ class ChatController(QObject):
         sidebar: "ChatSidebar",
         cfg: Mapping[str, Any],
         parent: QObject | None = None,
+        facts_provider: "Callable[[], Mapping[str, Any]] | None" = None,
     ) -> None:
         super().__init__(parent)
         self._sidebar = sidebar
         self._cfg = cfg
         self._busy = False
+        # Optional callable returning live disc/session facts (the
+        # controller's build_ai_session_facts).  When set, each chat
+        # request gets a fresh system message describing the disc the
+        # user is currently looking at, so "what's the main title?" /
+        # "help me identify this" answer with real data instead of
+        # guessing.  Called fresh per request so it always reflects
+        # the latest scan.
+        self._facts_provider = facts_provider
         # Multi-turn message history.  Each element is a dict
         # {"role": "user" | "assistant", "content": str}.
         self._history: list[dict[str, str]] = []
@@ -417,6 +426,50 @@ class ChatController(QObject):
         cb.setText(text)
         self._sidebar.set_status("Copied to clipboard.", state="ready")
 
+    # ── Disc/session context injection ─────────────────────────────
+
+    def _with_disc_facts(
+        self, messages: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """Prepend a system message with live disc/session facts.
+
+        Calls ``self._facts_provider`` fresh so the context always
+        reflects the most recent scan.  Returns ``messages`` unchanged
+        when no provider is wired, it returns nothing, or it raises —
+        the chat must never break because facts couldn't be gathered.
+        All four providers accept a leading ``system`` message
+        (Claude/Gemini fold it into their system field, OpenAI and
+        Ollama pass it through natively).
+        """
+        if self._facts_provider is None:
+            return messages
+        try:
+            facts = self._facts_provider() or {}
+        except Exception:
+            return messages
+        if not facts:
+            return messages
+        try:
+            facts_json = json.dumps(facts, ensure_ascii=False, default=str)
+        except Exception:
+            return messages
+        # Cap the size so a huge facts blob can't blow the context
+        # budget; the disc facts are small in practice.
+        if len(facts_json) > 4000:
+            facts_json = facts_json[:4000] + "…(truncated)"
+        system = {
+            "role": "system",
+            "content": (
+                "Live context about the disc and session the user is "
+                "currently looking at in JellyRip.  Use it to answer "
+                "questions about the disc, its titles, identification, and "
+                "the best next step.  If a field is empty or missing, say "
+                "so plainly rather than guessing.\n\n"
+                f"SESSION_FACTS = {facts_json}"
+            ),
+        }
+        return [system, *messages]
+
     # ── Worker thread ──────────────────────────────────────────────
 
     def _worker_call(
@@ -480,7 +533,7 @@ class ChatController(QObject):
 
             try:
                 reply = provider.chat(
-                    messages,
+                    self._with_disc_facts(messages),
                     max_tokens=_DEFAULT_MAX_TOKENS,
                     timeout=timeout,
                 )
