@@ -60,6 +60,11 @@ class AITab(QWidget):
         self._combos: dict[str, QComboBox] = {}
         self._spinboxes: dict[str, QSpinBox] = {}
         self._lineedits: dict[str, QLineEdit] = {}
+        # Editable combo for the local model, populated by scanning
+        # Ollama for installed models.  Stored as (cfg_key, combo) or
+        # None.  Handled separately from _combos because its value is
+        # read via currentText() (free-typed or picked), not userData.
+        self._model_combo: tuple[str, QComboBox] | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(16, 14, 16, 14)
@@ -131,9 +136,9 @@ class AITab(QWidget):
             _LOCAL_PROVIDER_OPTIONS,
             default="ollama",
         )
-        self._add_lineedit(
+        self._add_local_model_combo(
             backend_form, "opt_ai_local_model",
-            "Local model name",
+            "Local model",
             default="qwen2.5:14b-instruct",
         )
         outer.addWidget(backend_host)
@@ -244,6 +249,66 @@ class AITab(QWidget):
         form.addRow(label, spin)
         self._spinboxes[key] = spin
 
+    @staticmethod
+    def _scan_local_models() -> list[str]:
+        """Best-effort list of installed Ollama models.
+
+        Guarded by the fast TCP reachability probe (LocalProvider.
+        is_available, ~200ms) so a stopped Ollama can't block the
+        Settings dialog for the provider's full HTTP timeout.  Returns
+        [] on any failure — the caller falls back to a free-text combo.
+        """
+        try:
+            from shared.ai.providers.local_provider import LocalProvider
+            lp = LocalProvider()
+            if not lp.is_available():
+                return []
+            return [str(m).strip() for m in lp._get_available_models() if str(m).strip()]
+        except Exception:
+            return []
+
+    def _add_local_model_combo(
+        self, form: QFormLayout, key: str, label: str, *, default: str,
+    ) -> None:
+        """Editable combo for the local model.
+
+        Scans Ollama for installed models and offers them as a
+        dropdown so the user picks a model that actually exists,
+        instead of free-typing a name that may not be pulled (which
+        is how a config can drift to a non-existent model).  Kept
+        editable so the user can still type a model to pull, or set
+        one while Ollama is down.
+        """
+        current = str(self._cfg.get(key, default) or default)
+        self._snapshot[key] = current
+        combo = QComboBox()
+        combo.setObjectName(f"settingsCombo_{key}")
+        combo.setEditable(True)
+
+        installed = self._scan_local_models()
+        items: list[str] = []
+        if current:
+            items.append(current)
+        for m in installed:
+            if m not in items:
+                items.append(m)
+        combo.addItems(items)
+        combo.setCurrentText(current)
+
+        if installed:
+            combo.setToolTip(
+                "Installed Ollama models detected — pick one, or type "
+                "a model name to pull later."
+            )
+        else:
+            combo.setToolTip(
+                "Ollama isn't reachable right now, so no installed "
+                "models could be listed.  Start Ollama and reopen "
+                "Settings to see them — or type a model name."
+            )
+        form.addRow(label, combo)
+        self._model_combo = (key, combo)
+
     def _add_lineedit(
         self, form: QFormLayout, key: str, label: str, *, default: str,
     ) -> None:
@@ -267,6 +332,9 @@ class AITab(QWidget):
             self._cfg[key] = int(spin.value())
         for key, edit in self._lineedits.items():
             self._cfg[key] = edit.text().strip()
+        if self._model_combo is not None:
+            mkey, mcombo = self._model_combo
+            self._cfg[mkey] = mcombo.currentText().strip()
         if self._save_cfg is not None:
             try:
                 self._save_cfg(self._cfg)
@@ -300,3 +368,6 @@ class AITab(QWidget):
             spin.setValue(int(self._snapshot.get(key, spin.value())))
         for key, edit in self._lineedits.items():
             edit.setText(str(self._snapshot.get(key, edit.text())))
+        if self._model_combo is not None:
+            mkey, mcombo = self._model_combo
+            mcombo.setCurrentText(str(self._snapshot.get(mkey, mcombo.currentText())))
