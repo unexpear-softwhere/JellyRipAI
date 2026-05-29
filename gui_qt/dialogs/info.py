@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox
 
 if TYPE_CHECKING:
@@ -32,6 +33,8 @@ def show_info(
     box.setWindowTitle(title or "Info")
     box.setText(message)
     box.setStandardButtons(QMessageBox.StandardButton.Ok)
+    # Window-modal so the standalone AI chat window stays usable.
+    box.setWindowModality(Qt.WindowModality.WindowModal)
     box.exec()
 
 
@@ -51,4 +54,6 @@ def show_error(
     box.setWindowTitle(title or "Error")
     box.setText(message)
     box.setStandardButtons(QMessageBox.StandardButton.Ok)
+    # Window-modal so the standalone AI chat window stays usable.
+    box.setWindowModality(Qt.WindowModality.WindowModal)
     box.exec()

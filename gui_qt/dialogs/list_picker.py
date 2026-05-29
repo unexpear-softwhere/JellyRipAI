@@ -70,7 +70,10 @@ class _ListPickerDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("listPickerDialog")
         self.setWindowTitle(title or "Select")
-        self.setModal(True)
+        # Window-modal so the standalone AI chat window stays usable
+        # while this dialog is open (parented to main window, so the
+        # workflow still blocks until the user answers).
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.resize(640, 480)
 
         self._return_mode = return_mode

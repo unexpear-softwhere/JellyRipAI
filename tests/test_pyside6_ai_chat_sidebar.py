@@ -48,11 +48,16 @@ from gui_qt.utility_handlers import UtilityHandler
 
 
 def test_sidebar_constructs_without_raising(qtbot):
-    """Smoke test — the dock builds with no parent provider data."""
+    """Smoke test — the chat window builds with no parent provider data.
+
+    Object name changed from ``chatSidebarDock`` to
+    ``chatSidebarWindow`` when the sidebar became a standalone
+    top-level window (so it stays interactive while a window-modal
+    workflow dialog blocks the main window)."""
     sb = ChatSidebar()
     qtbot.addWidget(sb)
 
-    assert sb.objectName() == "chatSidebarDock"
+    assert sb.objectName() == "chatSidebarWindow"
     assert sb.windowTitle() == "Assistant"
     # Default action buttons exist with stable objectNames.
     assert sb.findChild(QPushButton, "chatSendButton") is not None

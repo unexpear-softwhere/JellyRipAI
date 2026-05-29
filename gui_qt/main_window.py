@@ -674,11 +674,16 @@ class MainWindow(QMainWindow):
         if self._chat_sidebar is not None:
             return self._chat_sidebar
         from gui_qt.ai_chat_sidebar import ChatSidebar
-        sidebar = ChatSidebar(parent=self)
-        self.addDockWidget(
-            Qt.DockWidgetArea.RightDockWidgetArea,
-            sidebar,
-        )
+        # parent=None → standalone top-level window so window-modal
+        # workflow dialogs (which block this main window) can't freeze
+        # the chat.  pin_to_right_of keeps it visually flush to our
+        # right edge, tracking our moves and resizes.
+        sidebar = ChatSidebar(parent=None)
+        try:
+            width = int(self._cfg.get("opt_ai_sidebar_width", 360) or 360)
+        except (TypeError, ValueError):
+            width = 360
+        sidebar.pin_to_right_of(self, width=width)
         self._chat_sidebar = sidebar
         return sidebar
 
@@ -690,15 +695,34 @@ class MainWindow(QMainWindow):
         new_state = not sidebar.isVisible()
         sidebar.setVisible(new_state)
         if new_state:
+            sidebar.raise_()
             sidebar.focus_input()
         return new_state
 
     @property
     def chat_sidebar(self) -> "ChatSidebar | None":
-        """The chat sidebar dock if constructed, else ``None``.  Tests
+        """The chat sidebar window if constructed, else ``None``.  Tests
         and the controller use this to introspect state without
         triggering construction."""
         return self._chat_sidebar
+
+    def closeEvent(self, event):  # noqa: N802 — Qt convention
+        """Close the standalone chat window when the main window
+        closes.
+
+        The chat sidebar is now a top-level window with no parent (so
+        it escapes window-modal dialogs).  The downside: it won't be
+        torn down with us automatically, and while it stays open
+        QApplication won't quit (it waits for the last top-level
+        window).  Closing it explicitly here makes "close the main
+        window" exit the app as users expect.
+        """
+        if self._chat_sidebar is not None:
+            try:
+                self._chat_sidebar.close()
+            except Exception:
+                pass
+        super().closeEvent(event)
 
     def get_chat_ui_snapshot(self) -> dict[str, object]:
         """Snapshot the live UI state into a dict the chat

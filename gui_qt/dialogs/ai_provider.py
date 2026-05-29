@@ -245,7 +245,9 @@ class AIProviderDialog(QDialog):
 
         self.setObjectName("aiProviderDialog")
         self.setWindowTitle("AI Provider Setup")
-        self.setModal(True)
+        # Window-modal so the standalone AI chat window stays usable
+        # while configuring providers.
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.resize(780, 700)
         self.setMinimumSize(720, 560)
 

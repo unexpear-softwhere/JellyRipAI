@@ -52,7 +52,10 @@ class _DuplicateResolutionDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("duplicateResolutionDialog")
         self.setWindowTitle("Duplicate Disc Check")
-        self.setModal(True)
+        # Window-modal so the standalone AI chat window stays usable
+        # while this dialog is open (parented to main window, so the
+        # workflow still blocks until the user answers).
+        self.setWindowModality(Qt.WindowModality.WindowModal)
 
         # Default = stop (so Esc / close → stop, matching tkinter)
         self.choice: DuplicateResolutionChoice = "stop"

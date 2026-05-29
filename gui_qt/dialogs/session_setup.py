@@ -176,7 +176,12 @@ class _MovieSetupDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("movieSetupDialog")
         self.setWindowTitle("Movie — Library Identity")
-        self.setModal(True)
+        # Window-modal (not application-modal) so the standalone AI
+        # chat companion window stays interactive while this dialog is
+        # open.  Parented to the main window by the caller, so this
+        # still blocks the main window — the workflow can't proceed
+        # until the user answers.  (audit: "AI always available")
+        self.setWindowModality(Qt.WindowModality.WindowModal)
 
         self.result_value: MovieSessionSetup | None = None
 
@@ -375,7 +380,12 @@ class _TVSetupDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("tvSetupDialog")
         self.setWindowTitle("TV — Library Identity")
-        self.setModal(True)
+        # Window-modal (not application-modal) so the standalone AI
+        # chat companion window stays interactive while this dialog is
+        # open.  Parented to the main window by the caller, so this
+        # still blocks the main window — the workflow can't proceed
+        # until the user answers.  (audit: "AI always available")
+        self.setWindowModality(Qt.WindowModality.WindowModal)
 
         self.result_value: TVSessionSetup | None = None
 

@@ -117,7 +117,10 @@ class _DiscTreeDialog(QDialog):
         self.setWindowTitle(
             "Disc Contents — Select Titles to Rip"
         )
-        self.setModal(True)
+        # Window-modal so the standalone AI chat window stays usable
+        # while this dialog is open (parented to main window, so the
+        # workflow still blocks until the user answers).
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.resize(900, 600)
 
         self._disc_titles = list(disc_titles)

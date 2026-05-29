@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 if TYPE_CHECKING:
@@ -28,15 +29,24 @@ def ask_yesno(
     title: str = "Confirm",
 ) -> bool:
     """Yes/No confirmation dialog.  Returns ``True`` on Yes,
-    ``False`` on No or Esc / window close."""
-    answer = QMessageBox.question(
-        parent,
-        title or "Confirm",
-        prompt,
-        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        QMessageBox.StandardButton.No,  # default = No (less destructive)
+    ``False`` on No or Esc / window close.
+
+    Built as an instance (not the static ``QMessageBox.question``)
+    so it can be window-modal — the static convenience methods are
+    application-modal, which would freeze the standalone AI chat
+    window.  Parented to the main window by the caller, so the
+    workflow still blocks until answered."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setWindowTitle(title or "Confirm")
+    box.setText(prompt)
+    box.setStandardButtons(
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
     )
-    return answer == QMessageBox.StandardButton.Yes
+    box.setDefaultButton(QMessageBox.StandardButton.No)  # less destructive
+    box.setWindowModality(Qt.WindowModality.WindowModal)
+    result = box.exec()
+    return result == QMessageBox.StandardButton.Yes
 
 
 def ask_input(
@@ -54,12 +64,15 @@ def ask_input(
     title (matches tk's behavior), ``prompt`` is the inline
     instruction text, ``default`` pre-fills the field.
     """
-    text, ok = QInputDialog.getText(
-        parent,
-        label or "Input",
-        prompt,
-        text=default or "",
-    )
-    if not ok:
+    # Built as an instance (not the static ``QInputDialog.getText``)
+    # so it can be window-modal — the static method is application-
+    # modal and would freeze the standalone AI chat window.
+    dlg = QInputDialog(parent)
+    dlg.setWindowTitle(label or "Input")
+    dlg.setLabelText(prompt)
+    dlg.setTextValue(default or "")
+    dlg.setWindowModality(Qt.WindowModality.WindowModal)
+    accepted = dlg.exec()
+    if not accepted:
         return None
-    return text
+    return dlg.textValue()

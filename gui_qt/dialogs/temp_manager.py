@@ -181,7 +181,9 @@ class _TempManagerDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("tempManagerDialog")
         self.setWindowTitle("Temp Session Manager")
-        self.setModal(True)
+        # Window-modal so the standalone AI chat window stays usable
+        # while this dialog is open.
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.resize(740, 540)
 
         self._engine = engine

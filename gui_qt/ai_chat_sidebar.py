@@ -47,11 +47,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QFont, QKeyEvent, QTextCursor
 from PySide6.QtWidgets import (
     QComboBox,
-    QDockWidget,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -101,8 +100,14 @@ class _ChatInput(QPlainTextEdit):
         super().keyPressEvent(event)
 
 
-class ChatSidebar(QDockWidget):
-    """Detachable Qt sidebar for the AI assistant chat.
+class ChatSidebar(QWidget):
+    """Standalone companion window for the AI assistant chat.
+
+    Was a ``QDockWidget`` through ai-v1.0.22; converted to a top-level
+    window so it stays interactive while a window-modal workflow
+    dialog blocks the main window (the "AI always available, even
+    mid-dialog" feature).  ``MainWindow.pin_to_right_of`` keeps it
+    visually flush to the main window's right edge.
 
     Construction is cheap and Qt-only — the widget knows nothing
     about providers, credentials, or the rip controller.  All those
@@ -125,17 +130,18 @@ class ChatSidebar(QDockWidget):
     closed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(_DEFAULT_TITLE, parent)
-        self.setObjectName("chatSidebarDock")
-        self.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea
-            | Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        self.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetMovable
-            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-            | QDockWidget.DockWidgetFeature.DockWidgetClosable
-        )
+        super().__init__(parent)
+        self.setObjectName("chatSidebarWindow")
+        self.setWindowTitle(_DEFAULT_TITLE)
+        # Standalone top-level companion window.  Constructed with
+        # parent=None (see MainWindow.ensure_chat_sidebar) so it lives
+        # in its own window hierarchy and stays interactive while a
+        # window-modal workflow dialog blocks the main window.  Kept a
+        # normal framed window so it stays movable/closable if the
+        # right-edge pinning ever misbehaves (multi-monitor, maximize).
+        self.setWindowFlags(Qt.WindowType.Window)
+        self._pinned_main: "QWidget | None" = None
+        self._pin_width = 360
 
         body = QWidget()
         body.setObjectName("chatSidebarBody")
@@ -240,7 +246,9 @@ class ChatSidebar(QDockWidget):
 
         body_layout.addLayout(action_row)
 
-        self.setWidget(body)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(body)
 
         # Track the live in-progress assistant message for streaming.
         # When set, ``append_assistant_message(text, is_streaming=True)``
@@ -427,6 +435,56 @@ class ChatSidebar(QDockWidget):
         sb = self._transcript.verticalScrollBar()
         if sb is not None:
             sb.setValue(sb.maximum())
+
+    # ── Right-edge pinning (companion-window behavior) ─────────────
+
+    def pin_to_right_of(
+        self, main_window: "QWidget", *, width: int | None = None,
+    ) -> None:
+        """Pin this window flush to ``main_window``'s right edge,
+        matching its height, and track it so the chat follows the
+        main window's moves/resizes.  Width persists across re-pins
+        (the user can drag it); height always matches the main window
+        (vertical resize is intentionally not a goal)."""
+        if width is not None and width > 0:
+            self._pin_width = int(width)
+        self._pinned_main = main_window
+        main_window.installEventFilter(self)
+        self._reposition()
+
+    def _reposition(self) -> None:
+        main = self._pinned_main
+        if main is None or not self.isVisible():
+            return
+        try:
+            geo = main.frameGeometry()
+            self.setGeometry(
+                geo.right() + 1, geo.top(), self._pin_width, geo.height(),
+            )
+        except Exception:
+            pass
+
+    def eventFilter(self, obj, event):  # noqa: N802 — Qt convention
+        if obj is self._pinned_main and event.type() in (
+            QEvent.Type.Move,
+            QEvent.Type.Resize,
+        ):
+            self._reposition()
+        return super().eventFilter(obj, event)
+
+    def showEvent(self, event):  # noqa: N802 — Qt convention
+        super().showEvent(event)
+        # Re-pin on show — the main window may have moved/resized
+        # while the chat was hidden.
+        self._reposition()
+
+    def resizeEvent(self, event):  # noqa: N802 — Qt convention
+        super().resizeEvent(event)
+        # Remember the user's chosen width so re-pins preserve it.
+        # (_reposition sets height=main height; only width is the
+        # user's to choose.)
+        if self.width() > 0:
+            self._pin_width = self.width()
 
     # ── Window-close hook ─────────────────────────────────────────
 
