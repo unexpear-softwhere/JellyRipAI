@@ -4,6 +4,13 @@ import urllib.request
 from shared.ai.providers.local_provider import LocalProvider
 
 
+def test_is_available_stubbed_false_by_default():
+    """Pins the autouse conftest fixture: the local provider reports
+    unavailable by default so the suite never touches a real Ollama
+    server (fast + deterministic regardless of dev state)."""
+    assert LocalProvider().is_available() is False
+
+
 def test_local_provider_resolves_exact_model(monkeypatch):
     provider = LocalProvider()
     provider.configure(model="llama3.1:8b")
