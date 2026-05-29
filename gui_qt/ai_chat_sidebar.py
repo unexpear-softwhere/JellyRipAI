@@ -136,12 +136,20 @@ class ChatSidebar(QWidget):
         # Standalone top-level companion window.  Constructed with
         # parent=None (see MainWindow.ensure_chat_sidebar) so it lives
         # in its own window hierarchy and stays interactive while a
-        # window-modal workflow dialog blocks the main window.  Kept a
-        # normal framed window so it stays movable/closable if the
-        # right-edge pinning ever misbehaves (multi-monitor, maximize).
-        self.setWindowFlags(Qt.WindowType.Window)
+        # window-modal workflow dialog blocks the main window.
+        # WindowStaysOnTopHint keeps it visible (never hidden behind
+        # the main window) — it's an overlay panel pinned inside the
+        # main window's right edge, so it works even when the main
+        # window is maximized.
+        self.setWindowFlags(
+            Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint
+        )
         self._pinned_main: "QWidget | None" = None
         self._pin_width = 360
+        # Tracks whether to re-show the panel after the main window is
+        # restored from a minimize (so the always-on-top panel doesn't
+        # float alone over the desktop while the app is minimized).
+        self._restore_on_main_show = False
 
         body = QWidget()
         body.setObjectName("chatSidebarBody")
@@ -458,18 +466,34 @@ class ChatSidebar(QWidget):
             return
         try:
             geo = main.frameGeometry()
-            self.setGeometry(
-                geo.right() + 1, geo.top(), self._pin_width, geo.height(),
-            )
+            # Overlay panel: pin flush INSIDE the main window's right
+            # edge so it stays on-screen even when the main window is
+            # maximized.  Always-on-top keeps it above the main
+            # content; it covers the right strip while open.
+            x = geo.right() - self._pin_width + 1
+            self.setGeometry(x, geo.top(), self._pin_width, geo.height())
         except Exception:
             pass
 
     def eventFilter(self, obj, event):  # noqa: N802 — Qt convention
-        if obj is self._pinned_main and event.type() in (
-            QEvent.Type.Move,
-            QEvent.Type.Resize,
-        ):
-            self._reposition()
+        if obj is self._pinned_main:
+            et = event.type()
+            if et in (QEvent.Type.Move, QEvent.Type.Resize):
+                self._reposition()
+            elif et == QEvent.Type.WindowStateChange:
+                # Follow the main window's minimize/restore so the
+                # always-on-top panel doesn't float alone over the
+                # desktop while the app is minimized.
+                main = self._pinned_main
+                if main is not None and main.isMinimized():
+                    if self.isVisible():
+                        self._restore_on_main_show = True
+                        self.hide()
+                elif self._restore_on_main_show:
+                    self._restore_on_main_show = False
+                    self.show()
+                    self.raise_()
+                    self._reposition()
         return super().eventFilter(obj, event)
 
     def showEvent(self, event):  # noqa: N802 — Qt convention
