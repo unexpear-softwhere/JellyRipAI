@@ -944,12 +944,33 @@ class RipperEngine:
                 **_POPEN_FLAGS
             )
             self.current_process = proc
-            for line in iter(proc.stdout.readline, ""):
+            # Abort-responsive reader.  A dedicated daemon thread feeds
+            # stdout lines into a queue; the main loop polls that queue
+            # with a short timeout and checks abort_event every cycle.
+            # This mirrors _run_rip_process and fixes the bug where the
+            # old blocking ``iter(proc.stdout.readline, "")`` trapped
+            # the abort check whenever makemkvcon went quiet during a
+            # scan (slow disc, drive still spinning up) — Stop Session
+            # appeared dead because the loop was frozen inside
+            # readline() and never reached the abort check.
+            line_queue = queue_module.Queue()
+            reader = threading.Thread(
+                target=self._stdout_reader,
+                args=(proc.stdout, line_queue),
+                daemon=True,
+            )
+            reader.start()
+            stall_detection = self.cfg.get("opt_stall_detection", True)
+            stall_timeout = int(self.cfg.get("opt_stall_timeout_seconds", 120))
+            last_output = time.time()
+            stall_warned = False
+            while True:
                 if self.abort_event.is_set():
                     try:
                         proc.terminate()
                     except Exception:
                         pass
+                    on_log("Scan aborted.")
                     try:
                         proc.wait(timeout=5)
                     except Exception:
@@ -958,6 +979,25 @@ class RipperEngine:
                         except Exception:
                             pass
                     return None
+                try:
+                    line = line_queue.get(timeout=0.5)
+                except queue_module.Empty:
+                    # Break only when the process has exited AND the
+                    # queue is drained, so we don't drop trailing
+                    # TINFO/SINFO lines that arrived after the process
+                    # closed its pipe.
+                    if proc.poll() is not None and line_queue.empty():
+                        break
+                    if (stall_detection and not stall_warned and
+                            time.time() - last_output > stall_timeout):
+                        on_log(
+                            f"No output from disc scan for {stall_timeout}s; "
+                            "still waiting..."
+                        )
+                        stall_warned = True
+                    continue
+                last_output = time.time()
+                stall_warned = False
                 line = line.strip()
                 if not line:
                     continue
