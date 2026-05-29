@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from gui_qt.dialogs._modeless import exec_modeless
+
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
 
@@ -115,5 +117,5 @@ def ask_space_override(
     to proceed despite the warning.  Returns ``False`` on Cancel /
     Esc / window close."""
     dialog = _SpaceOverrideDialog(required_gb, free_gb, parent)
-    dialog.exec()
+    exec_modeless(dialog)
     return dialog.proceed

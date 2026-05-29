@@ -1748,6 +1748,9 @@ def test_scan_disc_sets_and_clears_current_process(monkeypatch):
             self.stdout = _FakeStdout()
             self.returncode = 0
 
+        def poll(self):
+            return self.returncode
+
         def wait(self, timeout=None):
             _ = timeout
             return self.returncode
@@ -8678,6 +8681,51 @@ def test_episodes_from_filename_wrong_season_returns_empty(tmp_path):
     """S02E05 returns empty set when queried for season 1."""
     c, _ = _controller_with_engine()
     assert c._episodes_from_filename("Show - S02E05.mkv", 1) == set()
+
+
+def test_build_ai_session_facts_includes_per_title_audio_and_subtitles():
+    """The chat facts include a per-title breakdown (duration, size,
+    chapters, audio + subtitle tracks, main-feature/extra label) so the
+    assistant can compare individual titles - added 2026-05-29."""
+    from utils.classifier import ClassifiedTitle
+
+    controller, engine = _controller_with_engine()
+    engine.last_classification = [
+        ClassifiedTitle(
+            title={
+                "id": 1,
+                "duration_seconds": 5400,
+                "size_bytes": 4_914_630_656,
+                "chapters": 12,
+                "audio_tracks": [
+                    {"codec": "DTS-HD MA", "lang": "eng",
+                     "lang_name": "English", "channels": "5.1"},
+                    {"codec": "AC3", "lang": "fre",
+                     "lang_name": "French", "channels": "2.0"},
+                ],
+                "subtitle_tracks": [{"lang": "eng", "lang_name": "English"}],
+            },
+            score=1.0, label="main feature", confidence=0.9, recommended=True,
+        ),
+        ClassifiedTitle(
+            title={
+                "id": 2, "duration_seconds": 300, "size_bytes": 296_994_816,
+                "chapters": 1, "audio_tracks": [], "subtitle_tracks": [],
+            },
+            score=0.1, label="extra", confidence=0.4,
+        ),
+    ]
+
+    titles = controller.build_ai_session_facts()["titles"]
+
+    assert len(titles) == 2
+    assert titles[0]["label"] == "main feature"
+    assert titles[0]["recommended"] is True
+    assert titles[0]["duration_seconds"] == 5400
+    assert titles[0]["audio_tracks"] == ["DTS-HD MA English 5.1", "AC3 French 2.0"]
+    assert titles[0]["subtitle_tracks"] == ["English"]
+    assert titles[1]["label"] == "extra"
+    assert titles[1]["audio_tracks"] == []
 
 
 def test_build_ai_session_facts_returns_compact_workflow_snapshot():

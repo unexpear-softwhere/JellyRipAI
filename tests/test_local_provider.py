@@ -12,6 +12,10 @@ def test_local_provider_resolves_exact_model(monkeypatch):
         "_get_available_models",
         lambda: ["llama3.1:8b", "qwen2.5-coder:7b"],
     )
+    # is_available() is a live TCP probe to Ollama (audit #19); mock it
+    # so model resolution is tested deterministically whether or not
+    # Ollama happens to be running on the test machine.
+    monkeypatch.setattr(provider, "is_available", lambda: True)
 
     assert provider.is_available() is True
     assert provider._require_model_name() == "llama3.1:8b"
@@ -25,6 +29,10 @@ def test_local_provider_resolves_closest_installed_model(monkeypatch):
         "_get_available_models",
         lambda: ["llama3.1:8b", "qwen2.5-coder:7b", "qwen2.5-coder:14b"],
     )
+    # is_available() is a live TCP probe to Ollama (audit #19); mock it
+    # so model resolution is tested deterministically whether or not
+    # Ollama happens to be running on the test machine.
+    monkeypatch.setattr(provider, "is_available", lambda: True)
 
     assert provider.is_available() is True
     assert provider._require_model_name() == "qwen2.5-coder:14b"

@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from gui_qt.dialogs._modeless import exec_modeless
 from shared.session_setup_types import (
     MovieSessionSetup,
     TVSessionSetup,
@@ -176,12 +177,10 @@ class _MovieSetupDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("movieSetupDialog")
         self.setWindowTitle("Movie — Library Identity")
-        # Window-modal (not application-modal) so the standalone AI
-        # chat companion window stays interactive while this dialog is
-        # open.  Parented to the main window by the caller, so this
-        # still blocks the main window — the workflow can't proceed
-        # until the user answers.  (audit: "AI always available")
-        self.setWindowModality(Qt.WindowModality.WindowModal)
+        # Shown non-modally by exec_modeless() so the docked AI chat
+        # stays usable while this dialog is open; the workflow buttons
+        # are soft-locked meanwhile so the rip can't desync.  (audit:
+        # "AI always available")
 
         self.result_value: MovieSessionSetup | None = None
 
@@ -351,7 +350,7 @@ def ask_movie_setup(
         default_metadata_id=default_metadata_id,
         parent=parent,
     )
-    dialog.exec()
+    exec_modeless(dialog)
     return dialog.result_value
 
 
@@ -380,12 +379,10 @@ class _TVSetupDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("tvSetupDialog")
         self.setWindowTitle("TV — Library Identity")
-        # Window-modal (not application-modal) so the standalone AI
-        # chat companion window stays interactive while this dialog is
-        # open.  Parented to the main window by the caller, so this
-        # still blocks the main window — the workflow can't proceed
-        # until the user answers.  (audit: "AI always available")
-        self.setWindowModality(Qt.WindowModality.WindowModal)
+        # Shown non-modally by exec_modeless() so the docked AI chat
+        # stays usable while this dialog is open; the workflow buttons
+        # are soft-locked meanwhile so the rip can't desync.  (audit:
+        # "AI always available")
 
         self.result_value: TVSessionSetup | None = None
 
@@ -563,5 +560,5 @@ def ask_tv_setup(
         default_replace_existing=default_replace_existing,
         parent=parent,
     )
-    dialog.exec()
+    exec_modeless(dialog)
     return dialog.result_value

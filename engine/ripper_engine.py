@@ -44,6 +44,21 @@ _SCAN_CACHE_TTL_SECONDS = 300
 # preserved) rather than appending forever.
 _SESSION_LOG_ROLLOVER_BYTES = 5 * 1024**3
 
+
+def _norm_tool_path(raw: object) -> str:
+    """Normalize a configured tool path while preserving the empty string.
+
+    ``os.path.normpath("")`` returns ``"."``, which the tool resolvers
+    mis-read as a configured *directory* (the current dir).  When that
+    "directory" has no tool, ``_resolve_required_tool`` returns the
+    configured-path failure and only *attaches* the bundled binary as a
+    suggestion — so the bundled FFmpeg/ffprobe is found but discarded.
+    A blank config means "auto-detect the bundled copy", so it must stay
+    blank (``""``) and never collapse to ``"."``.
+    """
+    text = str(raw or "").strip()
+    return os.path.normpath(text) if text else ""
+
 from shared.runtime import RIP_ATTEMPT_FLAGS
 from shared.ai_diagnostics import (
     ProcessCapture, diag_exception, diag_process, diag_record, get_diagnostics,
@@ -248,11 +263,11 @@ class RipperEngine:
     def validate_tools(self) -> tuple[bool, str]:
         """Validate configured MakeMKV and ffprobe paths before starting work."""
         makemkvcon = resolve_makemkvcon(
-            os.path.normpath(self.cfg.get("makemkvcon_path", "")),
+            _norm_tool_path(self.cfg.get("makemkvcon_path", "")),
             allow_path_lookup=self._allow_path_tool_resolution(),
         )
         ffprobe = resolve_ffprobe(
-            os.path.normpath(self.cfg.get("ffprobe_path", "")),
+            _norm_tool_path(self.cfg.get("ffprobe_path", "")),
             allow_path_lookup=self._allow_path_tool_resolution(),
         )
         if not makemkvcon.path:
@@ -281,12 +296,12 @@ class RipperEngine:
                 )
             return False, msg
         self._resolved_makemkvcon = makemkvcon.path
-        self._resolved_makemkvcon_src = os.path.normpath(
+        self._resolved_makemkvcon_src = _norm_tool_path(
             self.cfg.get("makemkvcon_path", "")
         )
         self._makemkvcon_source = makemkvcon.source
         self._resolved_ffprobe = ffprobe.path
-        self._resolved_ffprobe_src = os.path.normpath(
+        self._resolved_ffprobe_src = _norm_tool_path(
             self.cfg.get("ffprobe_path", "")
         )
         self._ffprobe_source = ffprobe.source
@@ -294,7 +309,7 @@ class RipperEngine:
 
     def _get_makemkvcon(self) -> str:
         cached = getattr(self, "_resolved_makemkvcon", None)
-        current = os.path.normpath(self.cfg.get("makemkvcon_path", ""))
+        current = _norm_tool_path(self.cfg.get("makemkvcon_path", ""))
         if cached and getattr(self, "_resolved_makemkvcon_src", None) == current:
             return cached
         resolved = resolve_makemkvcon(
@@ -308,7 +323,7 @@ class RipperEngine:
 
     def _get_ffprobe(self) -> str:
         cached = getattr(self, "_resolved_ffprobe", None)
-        current = os.path.normpath(self.cfg.get("ffprobe_path", ""))
+        current = _norm_tool_path(self.cfg.get("ffprobe_path", ""))
         if cached and getattr(self, "_resolved_ffprobe_src", None) == current:
             return cached
         resolved = resolve_ffprobe(

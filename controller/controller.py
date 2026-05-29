@@ -242,6 +242,60 @@ class RipperController(LegacyControllerMixin):
         return facts
 
     @staticmethod
+    def _build_ai_title_facts(
+        classified: "Sequence[Any] | None",
+    ) -> list[dict[str, Any]]:
+        """Per-title breakdown for the AI chat context.
+
+        Each scanned title's duration, size, chapters, audio + subtitle
+        tracks, and its main-feature/extra classification — so the
+        assistant can compare individual titles (and identify the main
+        feature) instead of seeing only disc-level totals.  Capped
+        (titles, and tracks per title) so a big TV box set can't blow
+        the context budget.
+        """
+        def _num(value: object) -> int:
+            try:
+                return int(float(value or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        titles: list[dict[str, Any]] = []
+        for ct in list(classified or [])[:30]:
+            try:
+                t = getattr(ct, "title", None) or {}
+                audio: list[str] = []
+                for a in list(t.get("audio_tracks") or [])[:8]:
+                    desc = " ".join(
+                        part for part in (
+                            str(a.get("codec", "")).strip(),
+                            str(a.get("lang_name") or a.get("lang") or "").strip(),
+                            str(a.get("channels", "")).strip(),
+                        )
+                        if part
+                    )
+                    if desc:
+                        audio.append(desc)
+                subs = [
+                    str(s.get("lang_name") or s.get("lang") or "").strip()
+                    for s in list(t.get("subtitle_tracks") or [])[:15]
+                    if (s.get("lang_name") or s.get("lang"))
+                ]
+                titles.append({
+                    "id": _num(t.get("id", getattr(ct, "title_id", -1))),
+                    "duration_seconds": _num(t.get("duration_seconds")),
+                    "size_bytes": _num(t.get("size_bytes")),
+                    "chapters": _num(t.get("chapters")),
+                    "label": str(getattr(ct, "label", "") or ""),
+                    "recommended": bool(getattr(ct, "recommended", False)),
+                    "audio_tracks": audio,
+                    "subtitle_tracks": subs,
+                })
+            except Exception:
+                continue
+        return titles
+
+    @staticmethod
     def _build_ai_drive_facts(
         drive_info: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
@@ -454,6 +508,9 @@ class RipperController(LegacyControllerMixin):
             "disc": self._build_ai_disc_facts(
                 disc_record,
                 getattr(self.engine, "last_disc_info", {}) or {},
+            ),
+            "titles": self._build_ai_title_facts(
+                getattr(self.engine, "last_classification", []) or [],
             ),
             "drive": self._build_ai_drive_facts(
                 getattr(self.engine, "last_drive_info", {}) or {},

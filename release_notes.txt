@@ -1,72 +1,46 @@
-## JellyRip AI v1.0.22 Release Notes (UNSTABLE)
+## JellyRip AI v1.0.23 Release Notes (UNSTABLE)
 
-JellyRip AI v1.0.22 — deep audit cleanup.  Mirrors MAIN's v1.0.22
-across the engine + settings UI, plus AI-fork-specific security
-hardening, a new AI Settings tab, and a long list of small fixes.
+JellyRip AI v1.0.23 — the AI assistant becomes genuinely hands-on:
+docked and usable while dialogs are open, able to look things up on
+the web and TMDB, and aware of the full per-title disc scan.  Plus two
+real scan-path bug fixes.
 
 ## Download
 
-- Direct download: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.22/JellyRipAI.exe
-- Installer: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.22/JellyRipAIInstaller.exe
-- Release page: https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.22
+- Direct download: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.23/JellyRipAI.exe
+- Installer: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.23/JellyRipAIInstaller.exe
+- Release page: https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.23
 - Project site: https://unexpear-softwhere.github.io/JellyRipAI/
 
 ### Highlights
 
-Security
-- Gemini API key moved from URL to x-goog-api-key header
-  (key no longer leaks via HTTPError strings).
-- credential_store warns loudly on plaintext fallback + sets
-  0o600 perms on POSIX (was 0o644 world-readable).
-- ai_chat_replay.jsonl now scrubs API keys via regex + rotates
-  at 5 MB so it can't grow without bound.
-- Quota detector tightened — bare "token" no longer triggers
-  5-minute provider cooldowns on unrelated auth errors.
+A real assistant
+- Docked chat panel (reflows the layout) that stays usable WHILE the
+  identity / duplicate / space-override dialogs are open.  Those
+  dialogs are non-modal now, with the workflow buttons soft-locked so
+  a running rip can't desync.
+- Web toggle: the assistant searches DuckDuckGo (keyless) and TMDB
+  (your own free v3 key) before answering, with model-formulated
+  queries and cited source links.  Works with the local Ollama model.
+- Sees the disc scan in detail: the drive's disc label before a full
+  scan, and per-title duration / size / chapters / audio tracks /
+  subtitle languages / main-vs-extra after one.
 
-AI-side bug fixes
-- "Set as Active" actually persists opt_ai_mode now (was
-  reading parent.cfg vs MainWindow's private _cfg).
-- Clicking "Check for Updates" no longer crashes (ported
-  tools/update_check.py stub from MAIN).
-- Local provider check is now a 200ms TCP probe instead of a
-  5-second HTTP timeout that froze the UI on every error.
-- Drive-probe waits are abort-aware (Stop responds within
-  250ms instead of waiting out the full backoff).
-- connect_single_provider now merges instead of replacing —
-  saving one field no longer wipes the others.
+Bug fixes
+- Bundled FFmpeg / ffprobe is always used now.  A normpath("") -> "."
+  bug made the app report "tool not found" on a scan.
+- Drive picker lists the real drive + disc again (it referenced a
+  removed type and crashed).
 
-New
-- AI Settings tab — 14 previously-hidden opt_ai_* knobs now
-  editable from Settings.
-- Pages docs site nav now works (baseurl fix).
-
-Engine improvements (mirror MAIN's v1.0.22)
-- stabilize_timeout now a real deadline (was single 1s sleep).
-- ffprobe cache key normcased on Windows.
-- 5 magic numbers named as constants.
-- print() routed through logging.
-- ffprobe duration return type unified to float.
-- _move_extras_to_categories returns bool; callers flag partial
-  sessions appropriately.
-- Dead scan_disc delegate removed.
-- Engine→controller layer violation removed.
-- TINFO parser tid leak defensively reset.
-
-Provider stack
-- Default Gemini model bumped to gemini-2.5-flash.
-- Drive-probe defaults harmonized with MAIN (5 retries / 2s
-  backoff, now in DEFAULTS so Settings can surface them).
-
-Tests
-- All MAIN test improvements mirrored where applicable.
-- 14 mojibake sites in tests/test_behavior_guards.py cleaned.
+TMDB compliance
+- Required attribution notice + the TMDB logo are shown in Settings
+  and CREDITS.  Your TMDB key stays local and is never shipped — each
+  user supplies their own.
 
 ### What's NOT in this release
 
-No new AI features or workflow changes.  Chat sidebar, AI provider
-dialog, diagnostics routing, on-device fallback all behave
-identically to ai-v1.0.21.  Existing users with a saved Gemini
-configuration may want to re-test connection after upgrading.
+The disc-ripping core is unchanged.  This release is the AI assistant
+plus two scan-path bug fixes.
 
 ### Companion fork: JellyRip MAIN
 

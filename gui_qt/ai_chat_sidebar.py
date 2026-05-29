@@ -6,7 +6,8 @@ with a clean Qt widget.
 
 This module ships the **UI shell**:
 
-* ``ChatSidebar`` — a ``QDockWidget`` the user can detach / re-dock,
+* ``ChatSidebar`` — a ``QDockWidget`` locked to the main window's
+  right edge (closable + horizontally resizable, but not floatable),
   with markdown-rendering transcript (``QTextBrowser``), an input
   field (``QPlainTextEdit``), and an action row (Suggest / New /
   Copy / Send).
@@ -47,10 +48,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont, QKeyEvent, QTextCursor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
+    QDockWidget,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -100,14 +103,23 @@ class _ChatInput(QPlainTextEdit):
         super().keyPressEvent(event)
 
 
-class ChatSidebar(QWidget):
-    """Standalone companion window for the AI assistant chat.
+class ChatSidebar(QDockWidget):
+    """Docked panel for the AI assistant chat.
 
-    Was a ``QDockWidget`` through ai-v1.0.22; converted to a top-level
-    window so it stays interactive while a window-modal workflow
-    dialog blocks the main window (the "AI always available, even
-    mid-dialog" feature).  ``MainWindow.pin_to_right_of`` keeps it
-    visually flush to the main window's right edge.
+    Lives as a ``QDockWidget`` pinned to the main window's right edge.
+    Docking (rather than a separate window) means the central content
+    reflows to the left when the chat opens, and the user can drag the
+    splitter to resize its width.  It is deliberately **locked** to the
+    right area and **not** floatable — the user asked for a panel that
+    stays put, not a free-floating window.
+
+    The "assistant is always available, even while the identity step
+    is open" feature is *not* achieved by detaching this from the main
+    window (a docked panel is part of the main window, so any modal
+    dialog would freeze it).  Instead, the workflow dialogs are run
+    **non-modally** via ``gui_qt.dialogs._modeless.exec_modeless`` and
+    the workflow buttons are soft-locked for the dialog's lifetime.
+    That keeps this dock fully interactive mid-dialog.
 
     Construction is cheap and Qt-only — the widget knows nothing
     about providers, credentials, or the rip controller.  All those
@@ -127,29 +139,20 @@ class ChatSidebar(QWidget):
     new_chat_requested = Signal()
     copy_chat_requested = Signal()
     mode_changed = Signal(str)  # emits "off" / "cloud" / "local"
+    web_search_toggled = Signal(bool)  # 🌐 Web toggle on/off
     closed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("chatSidebarWindow")
+        self.setObjectName("chatSidebarDock")
         self.setWindowTitle(_DEFAULT_TITLE)
-        # Standalone top-level companion window.  Constructed with
-        # parent=None (see MainWindow.ensure_chat_sidebar) so it lives
-        # in its own window hierarchy and stays interactive while a
-        # window-modal workflow dialog blocks the main window.
-        # WindowStaysOnTopHint keeps it visible (never hidden behind
-        # the main window) — it's an overlay panel pinned inside the
-        # main window's right edge, so it works even when the main
-        # window is maximized.
-        self.setWindowFlags(
-            Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint
-        )
-        self._pinned_main: "QWidget | None" = None
-        self._pin_width = 360
-        # Tracks whether to re-show the panel after the main window is
-        # restored from a minimize (so the always-on-top panel doesn't
-        # float alone over the desktop while the app is minimized).
-        self._restore_on_main_show = False
+        # Lock the panel to the right edge: it may be closed (the title-
+        # bar ✕ hides it and fires ``closed``) but not dragged to
+        # another area or floated off into its own window.  Horizontal
+        # resize still works via the splitter handle between the dock
+        # and the central widget — that's independent of these flags.
+        self.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        self.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable)
 
         body = QWidget()
         body.setObjectName("chatSidebarBody")
@@ -209,6 +212,18 @@ class ChatSidebar(QWidget):
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         mode_row.addWidget(self._mode_combo)
 
+        # 🌐 Web toggle — when on, the assistant searches the web
+        # (DuckDuckGo) and TMDB for the question before answering.
+        self._web_toggle = QCheckBox("🌐 Web")
+        self._web_toggle.setObjectName("chatWebToggle")
+        self._web_toggle.setToolTip(
+            "Let the assistant look things up online (DuckDuckGo + TMDB) "
+            "for this question instead of guessing.  Slower while it "
+            "searches."
+        )
+        self._web_toggle.toggled.connect(self._on_web_search_toggled)
+        mode_row.addWidget(self._web_toggle)
+
         mode_row.addStretch(1)
 
         body_layout.addLayout(mode_row)
@@ -254,9 +269,7 @@ class ChatSidebar(QWidget):
 
         body_layout.addLayout(action_row)
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(body)
+        self.setWidget(body)
 
         # Track the live in-progress assistant message for streaming.
         # When set, ``append_assistant_message(text, is_streaming=True)``
@@ -303,6 +316,23 @@ class ChatSidebar(QWidget):
         """Fire ``mode_changed`` so the controller can write
         ``opt_ai_mode`` and persist."""
         self.mode_changed.emit(self.current_mode())
+
+    def set_web_search(self, enabled: bool) -> None:
+        """Seed the 🌐 Web toggle from cfg without firing the signal."""
+        self._web_toggle.blockSignals(True)
+        try:
+            self._web_toggle.setChecked(bool(enabled))
+        finally:
+            self._web_toggle.blockSignals(False)
+
+    def web_search_enabled(self) -> bool:
+        """Return whether the 🌐 Web toggle is currently on."""
+        return self._web_toggle.isChecked()
+
+    def _on_web_search_toggled(self, checked: bool) -> None:
+        """Fire ``web_search_toggled`` so the controller can write
+        ``opt_ai_web_search`` and persist."""
+        self.web_search_toggled.emit(bool(checked))
 
     # ── Public slots ───────────────────────────────────────────────
 
@@ -444,74 +474,10 @@ class ChatSidebar(QWidget):
         if sb is not None:
             sb.setValue(sb.maximum())
 
-    # ── Right-edge pinning (companion-window behavior) ─────────────
-
-    def pin_to_right_of(
-        self, main_window: "QWidget", *, width: int | None = None,
-    ) -> None:
-        """Pin this window flush to ``main_window``'s right edge,
-        matching its height, and track it so the chat follows the
-        main window's moves/resizes.  Width persists across re-pins
-        (the user can drag it); height always matches the main window
-        (vertical resize is intentionally not a goal)."""
-        if width is not None and width > 0:
-            self._pin_width = int(width)
-        self._pinned_main = main_window
-        main_window.installEventFilter(self)
-        self._reposition()
-
-    def _reposition(self) -> None:
-        main = self._pinned_main
-        if main is None or not self.isVisible():
-            return
-        try:
-            geo = main.frameGeometry()
-            # Overlay panel: pin flush INSIDE the main window's right
-            # edge so it stays on-screen even when the main window is
-            # maximized.  Always-on-top keeps it above the main
-            # content; it covers the right strip while open.
-            x = geo.right() - self._pin_width + 1
-            self.setGeometry(x, geo.top(), self._pin_width, geo.height())
-        except Exception:
-            pass
-
-    def eventFilter(self, obj, event):  # noqa: N802 — Qt convention
-        if obj is self._pinned_main:
-            et = event.type()
-            if et in (QEvent.Type.Move, QEvent.Type.Resize):
-                self._reposition()
-            elif et == QEvent.Type.WindowStateChange:
-                # Follow the main window's minimize/restore so the
-                # always-on-top panel doesn't float alone over the
-                # desktop while the app is minimized.
-                main = self._pinned_main
-                if main is not None and main.isMinimized():
-                    if self.isVisible():
-                        self._restore_on_main_show = True
-                        self.hide()
-                elif self._restore_on_main_show:
-                    self._restore_on_main_show = False
-                    self.show()
-                    self.raise_()
-                    self._reposition()
-        return super().eventFilter(obj, event)
-
-    def showEvent(self, event):  # noqa: N802 — Qt convention
-        super().showEvent(event)
-        # Re-pin on show — the main window may have moved/resized
-        # while the chat was hidden.
-        self._reposition()
-
-    def resizeEvent(self, event):  # noqa: N802 — Qt convention
-        super().resizeEvent(event)
-        # Remember the user's chosen width so re-pins preserve it.
-        # (_reposition sets height=main height; only width is the
-        # user's to choose.)
-        if self.width() > 0:
-            self._pin_width = self.width()
-
-    # ── Window-close hook ─────────────────────────────────────────
+    # ── Close hook ─────────────────────────────────────────────────
 
     def closeEvent(self, event: "QEvent") -> None:  # noqa: N802 — Qt convention
+        """Emit ``closed`` when the dock's title-bar ✕ hides it, so the
+        controller can persist ``opt_ai_sidebar_open=False``."""
         self.closed.emit()
         super().closeEvent(event)

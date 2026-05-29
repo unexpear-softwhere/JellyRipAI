@@ -187,6 +187,9 @@ def test_scan_disc_persists_last_disc_memory(tmp_path, monkeypatch):
             self.stdout = _FakeStdout()
             self.returncode = 0
 
+        def poll(self):
+            return self.returncode
+
         def wait(self, timeout=None):
             _ = timeout
             return self.returncode

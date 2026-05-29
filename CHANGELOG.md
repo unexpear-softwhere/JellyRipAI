@@ -2,6 +2,61 @@
 
 <!-- markdownlint-disable MD013 -->
 
+## [1.0.23] - 2026-05-29
+
+The AI assistant becomes genuinely hands-on: docked and usable while
+workflow dialogs are open, able to look things up on the web and TMDB,
+and aware of the full per-title disc scan.  Plus two real bug fixes on
+the scan path.
+
+### New
+
+- **AI chat is a docked panel, usable during workflow dialogs.**  The
+  chat reflows the layout (no floating window) and stays interactive
+  while the identity / duplicate / space-override dialogs are open —
+  those dialogs are now non-modal, with the workflow buttons
+  soft-locked for the dialog's lifetime so a running rip can't desync.
+- **Web lookup for the assistant (Web toggle).**  Searches DuckDuckGo
+  (keyless) and TMDB (with a free, user-supplied v3 API key) before
+  answering.  The query is formulated by the model from the disc
+  context, so "what year is this?" searches the actual title; results
+  are injected into the model context with source links.  Works with
+  the local Ollama model too.
+- **Assistant sees the disc scan in detail.**  Session facts now
+  include the drive's disc label before a full scan and, after one, a
+  per-title breakdown: duration, size, chapters, audio tracks
+  (codec / language / channels), subtitle languages, and the
+  main-feature / extra classification.
+
+### Fixed
+
+- **Bundled FFmpeg / ffprobe is always used.**  A blank configured
+  path was run through ``os.path.normpath`` -> ``"."``, which the
+  resolver mis-read as a configured directory and then discarded the
+  bundled binary — surfacing as "tool not found" on a scan.  FFmpeg
+  and ffprobe now resolve to the bundled copy unconditionally; a
+  configured path is only a source-run fallback.
+- **Drive picker lists the real drive + disc again.**  The GUI drive
+  bar referenced a removed ``MakeMKVDriveInfo`` type while the scanner
+  returns ``MakeMKVDrive``; both the label formatter and the coercion
+  raised, leaving the dropdown unpopulated.  Repointed at the real
+  type.
+
+### Compliance
+
+- **TMDB attribution.**  The required "uses TMDB and the TMDB APIs but
+  is not endorsed, certified, or otherwise approved by TMDB" notice
+  and the TMDB logo now appear in Settings -> AI -> Web lookup and in
+  CREDITS.md.  The TMDB key is per-user and never persisted to shipped
+  config.
+
+### Tests
+
+- New coverage for per-title facts, web search, TMDB lookup, the
+  non-modal dialog flow, and the workflow soft-lock.  Fixed stale scan
+  test fakes (missing ``poll()``) and a local-provider availability
+  mock.
+
 ## [1.0.22] - 2026-05-28
 
 Audit-driven cleanup release.  Mirrors MAIN's v1.0.22 cleanup

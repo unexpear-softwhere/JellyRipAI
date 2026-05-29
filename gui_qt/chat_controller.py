@@ -271,11 +271,13 @@ class ChatController(QObject):
         sidebar.new_chat_requested.connect(self.handle_new_chat)
         sidebar.copy_chat_requested.connect(self.handle_copy_chat)
         sidebar.mode_changed.connect(self.handle_mode_changed)
+        sidebar.web_search_toggled.connect(self.handle_web_search_toggled)
 
         # Seed the sidebar's mode picker from the current cfg value
         # WITHOUT firing the changed signal back at us — the cfg
         # already has this value, no save needed at construction.
         sidebar.set_mode(str(cfg.get("opt_ai_mode", "cloud") or "cloud"))
+        sidebar.set_web_search(bool(cfg.get("opt_ai_web_search", False)))
 
         # Worker thread -> GUI thread hooks.
         self.response_ready.connect(self._on_response_ready)
@@ -347,6 +349,32 @@ class ChatController(QObject):
         )
 
     @Slot(str)
+    def handle_web_search_toggled(self, enabled: bool) -> None:
+        """User flipped the 🌐 Web toggle.  Writes ``opt_ai_web_search``
+        into the live cfg and best-effort persists it so the choice
+        survives a restart.  Applies on the next message —
+        ``_with_web_context`` re-reads the live cfg each turn."""
+        value = bool(enabled)
+        try:
+            self._cfg["opt_ai_web_search"] = value  # type: ignore[index]
+        except Exception:
+            pass
+        try:
+            from config import save_config
+            save_config(self._cfg)
+        except Exception as exc:
+            import logging
+            logging.warning(
+                "Chat controller: failed to persist web-search toggle: %s",
+                exc,
+            )
+        try:
+            self._sidebar.set_status(
+                "Web lookup on" if value else "Web lookup off", state="ready",
+            )
+        except Exception:
+            pass
+
     def handle_mode_changed(self, mode: str) -> None:
         """User flipped the AI mode picker.  Writes the new value into
         ``cfg["opt_ai_mode"]`` and (best-effort) persists via
@@ -454,9 +482,11 @@ class ChatController(QObject):
         except Exception:
             return messages
         # Cap the size so a huge facts blob can't blow the context
-        # budget; the disc facts are small in practice.
-        if len(facts_json) > 4000:
-            facts_json = facts_json[:4000] + "…(truncated)"
+        # budget.  Disc + per-title facts (audio/subtitle tracks for
+        # every title) are bigger than the old disc-only facts, so the
+        # cap is generous but still bounded.
+        if len(facts_json) > 12000:
+            facts_json = facts_json[:12000] + "…(truncated)"
         system = {
             "role": "system",
             "content": (
@@ -464,11 +494,168 @@ class ChatController(QObject):
                 "currently looking at in JellyRip.  Use it to answer "
                 "questions about the disc, its titles, identification, and "
                 "the best next step.  If a field is empty or missing, say "
-                "so plainly rather than guessing.\n\n"
+                "so plainly rather than guessing.  Never state a TMDB id "
+                "from memory - it's only known from a TMDB lookup (an IMDb "
+                "id like 'tt5117670' is NOT a TMDB id).\n\n"
                 f"SESSION_FACTS = {facts_json}"
             ),
         }
         return [system, *messages]
+
+    def _with_web_context(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        provider: Any = None,
+        timeout: float = 20.0,
+    ) -> list[dict[str, str]]:
+        """When the user enables the chat's 🌐 Web toggle, search the web
+        (and TMDB, if a key is configured) and prepend the results.
+
+        The search query is **formulated by the model** from the disc
+        context plus the user's message — NOT the raw chat text.  So a
+        conversational message like "look up the year" becomes a real
+        query like ``Peter Rabbit 2018 film`` using the disc title.
+        (Searching the literal message meant "i enabled web for you try"
+        got searched verbatim and returned junk.)
+
+        Runs on the chat worker thread, so the (blocking) network calls
+        don't freeze the UI.  Fully fail-safe: disabled toggle, no
+        provider, no query, no results, or any exception all return
+        ``messages`` unchanged.  Lookup modules import lazily.
+        """
+        try:
+            if not bool(self._cfg.get("opt_ai_web_search", False)):
+                return messages
+        except Exception:
+            return messages
+        if provider is None:
+            return messages
+
+        user_text = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                user_text = str(msg.get("content") or "").strip()
+                break
+        if not user_text:
+            return messages
+
+        query = self._formulate_search_query(provider, user_text, timeout)
+        if not query:
+            return messages
+
+        from shared.ai.web_search import (
+            search_web,
+            format_for_context as _web_fmt,
+        )
+        from shared.ai.tmdb_lookup import (
+            search_tmdb,
+            format_for_context as _tmdb_fmt,
+        )
+
+        blocks: list[str] = []
+        # TMDB first — authoritative titles/IDs when a key is set.
+        try:
+            tmdb_key = str(self._cfg.get("opt_tmdb_api_key", "") or "").strip()
+            if tmdb_key:
+                tmdb_results, _status = search_tmdb(query, tmdb_key)
+                if tmdb_results:
+                    blocks.append(_tmdb_fmt(query, tmdb_results))
+        except Exception:
+            pass
+        # Keyless web search — always when the toggle is on.
+        try:
+            web_results, _status = search_web(query)
+            if web_results:
+                blocks.append(_web_fmt(query, web_results))
+        except Exception:
+            pass
+
+        if not blocks:
+            return messages
+        system = {
+            "role": "system",
+            "content": (
+                f'The user enabled web lookup.  I searched for: "{query}".  '
+                "Live results are below - use them to answer and cite "
+                "sources by URL; if they don't cover it, say so rather than "
+                "guessing.\n"
+                "TMDB IDs: only state a TMDB id if it appears in a "
+                "TMDB_RESULTS block above.  An IMDb id (starts with 'tt', "
+                "e.g. tt5117670) is NOT a TMDB id - never present one as a "
+                "TMDB id.  If there is no TMDB_RESULTS block then there is "
+                "no TMDB access (no API key) - do NOT claim to use the TMDB "
+                "API and do NOT guess an id; tell the user the exact TMDB "
+                "id needs a free TMDB key in Settings -> AI -> Web lookup."
+                "\n\n" + "\n\n".join(blocks)
+            ),
+        }
+        return [system, *messages]
+
+    # Short labels the model may prefix its query with — stripped so the
+    # actual query survives.  Kept tight so a real title with a colon
+    # (e.g. "Peter Rabbit: The Runaway") isn't mangled.
+    _QUERY_LABELS = frozenset(
+        {"query", "search query", "search", "web search",
+         "here is the query", "here's the query", "answer"}
+    )
+
+    def _formulate_search_query(
+        self, provider: Any, user_text: str, timeout: float,
+    ) -> str:
+        """Turn the user's request + disc context into ONE concise search
+        query via a short model call.  Returns ``""`` when the model says
+        no search is needed (``NONE``) or anything fails — the caller then
+        skips searching.  This is what makes web lookup useful: it
+        searches the movie/show title, not the user's literal words."""
+        facts_json = ""
+        if self._facts_provider is not None:
+            try:
+                facts = self._facts_provider() or {}
+                if facts:
+                    facts_json = json.dumps(
+                        facts, ensure_ascii=False, default=str,
+                    )[:1500]
+            except Exception:
+                facts_json = ""
+        prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "You write web search queries.  Given the disc context "
+                    "and the user's request, output ONE short query (about "
+                    "3-8 words) that best answers it.  Prefer the actual "
+                    "movie/show title from the disc context over the user's "
+                    "literal words.  Output ONLY the query - no quotes, no "
+                    "label, no explanation.  If a web search wouldn't help, "
+                    "output exactly: NONE"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Disc context: {facts_json or '(none)'}\n\n"
+                    f"User request: {user_text}\n\nSearch query:"
+                ),
+            },
+        ]
+        try:
+            raw = provider.chat(prompt, max_tokens=40, timeout=timeout)
+        except Exception:
+            return ""
+        line = next(
+            (ln.strip() for ln in str(raw or "").splitlines() if ln.strip()),
+            "",
+        )
+        # Strip a leading "Query:"-style label if the model added one.
+        if ":" in line:
+            head, _, tail = line.partition(":")
+            if head.strip().lower() in self._QUERY_LABELS and tail.strip():
+                line = tail.strip()
+        line = line.strip().strip('"').strip("'").strip()
+        if not line or line.upper() == "NONE":
+            return ""
+        return line[:120]
 
     # ── Worker thread ──────────────────────────────────────────────
 
@@ -533,7 +720,11 @@ class ChatController(QObject):
 
             try:
                 reply = provider.chat(
-                    self._with_disc_facts(messages),
+                    self._with_web_context(
+                        self._with_disc_facts(messages),
+                        provider=provider,
+                        timeout=timeout,
+                    ),
                     max_tokens=_DEFAULT_MAX_TOKENS,
                     timeout=timeout,
                 )

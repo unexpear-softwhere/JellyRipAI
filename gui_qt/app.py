@@ -150,14 +150,28 @@ def run_qt_app(cfg: dict, *, splash: Any = None) -> int:
     def _session_facts() -> dict:
         """Live disc/session facts for the chat context.  Defensive:
         the chat must never break if the controller can't produce
-        facts (method missing, mid-transition, etc.)."""
+        facts (method missing, mid-transition, etc.).
+
+        Also surfaces the drive bar's current text — which carries the
+        disc volume label from the quick drive probe — so the assistant
+        knows the inserted disc even *before* a full content scan
+        populates the disc facts.  Without this, pre-scan it has nothing
+        to go on and may invent a title."""
+        facts: dict = {}
         fn = getattr(controller, "build_ai_session_facts", None)
-        if not callable(fn):
-            return {}
+        if callable(fn):
+            try:
+                facts = fn() or {}
+            except Exception:
+                facts = {}
         try:
-            return fn() or {}
+            snapshot = window.get_chat_ui_snapshot() or {}
+            drive_text = str(snapshot.get("selected_drive", "") or "").strip()
+            if drive_text and not facts.get("drive_bar"):
+                facts = {**facts, "drive_bar": drive_text}
         except Exception:
-            return {}
+            pass
+        return facts
 
     chat_controller = ChatController(
         sidebar=sidebar, cfg=cfg, parent=window,

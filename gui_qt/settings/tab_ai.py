@@ -34,6 +34,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui_qt.tmdb_logo import tmdb_logo_pixmap
+
 
 _LOCAL_PROVIDER_OPTIONS: tuple[tuple[str, str], ...] = (
     ("ollama", "Ollama (HTTP)"),
@@ -170,6 +172,41 @@ class AITab(QWidget):
             default=3, minimum=1, maximum=20,
         )
         outer.addWidget(limit_host)
+
+        # ── Web lookup ──────────────────────────────────────────────
+        outer.addWidget(self._section_label("Web lookup"))
+        web_hint = QLabel(
+            "The chat's Web toggle searches DuckDuckGo with no key needed. "
+            "Add a free TMDB API key (themoviedb.org - Settings - API, the "
+            "v3 \"API Key\") to also pull exact movie/show titles and IDs.\n"
+            "This product uses TMDB and the TMDB APIs but is not endorsed, "
+            "certified, or otherwise approved by TMDB."
+        )
+        web_hint.setObjectName("settingsAIWebHint")
+        web_hint.setWordWrap(True)
+        outer.addWidget(web_hint)
+        # TMDB attribution logo — required by TMDB's API terms.  Shown
+        # smaller than JellyRip's own branding, with the non-endorsement
+        # notice in the hint above + a tooltip.
+        _tmdb_logo = QLabel()
+        _tmdb_logo.setObjectName("settingsTmdbLogo")
+        _tmdb_pixmap = tmdb_logo_pixmap(18)
+        if not _tmdb_pixmap.isNull():
+            _tmdb_logo.setPixmap(_tmdb_pixmap)
+            _tmdb_logo.setToolTip(
+                "This product uses TMDB and the TMDB APIs but is not "
+                "endorsed, certified, or otherwise approved by TMDB."
+            )
+            outer.addWidget(_tmdb_logo)
+        web_host = QFrame()
+        web_host.setObjectName("settingsAIWebHost")
+        web_form = QFormLayout(web_host)
+        web_form.setContentsMargins(0, 0, 0, 0)
+        web_form.setSpacing(8)
+        self._add_lineedit(
+            web_form, "opt_tmdb_api_key", "TMDB API key (optional)", default="",
+        )
+        outer.addWidget(web_host)
 
         outer.addStretch(1)
 

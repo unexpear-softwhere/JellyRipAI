@@ -50,6 +50,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from gui_qt.dialogs._modeless import exec_modeless
+
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
 
@@ -340,5 +342,5 @@ def show_disc_tree(
         preview_callback=preview_callback,
         parent=parent,
     )
-    dialog.exec()
+    exec_modeless(dialog)
     return dialog.result_value

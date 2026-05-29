@@ -40,6 +40,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from gui_qt.dialogs._modeless import exec_modeless
+
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
 
@@ -219,7 +221,7 @@ def show_extras_picker(
         return_mode="indices",
         parent=parent,
     )
-    dialog.exec()
+    exec_modeless(dialog)
     if not dialog.confirmed:
         return None
     return list(dialog.selection_indices)
@@ -247,7 +249,7 @@ def show_file_list(
         return_mode="texts",
         parent=parent,
     )
-    dialog.exec()
+    exec_modeless(dialog)
     if not dialog.confirmed:
         return []
     return list(dialog.selection_texts)

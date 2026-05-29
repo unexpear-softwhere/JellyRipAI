@@ -38,35 +38,35 @@ from gui_qt.thread_safety import submit_to_main
 
 if TYPE_CHECKING:
     from gui_qt.main_window import MainWindow
-    from utils.helpers import MakeMKVDriveInfo
+    from utils.helpers import MakeMKVDrive
 
 
-def _coerce_drive_info(drive: Any) -> "MakeMKVDriveInfo":
-    """Normalize a drive into ``MakeMKVDriveInfo``.
+def _coerce_drive_info(drive: Any) -> "MakeMKVDrive":
+    """Normalize a drive into ``MakeMKVDrive``.
 
     Mirrors ``JellyRipperGUI._coerce_drive_info`` at
     ``gui/main_window.py:233``.  Lazy-imports
-    ``utils.helpers.MakeMKVDriveInfo`` so this module stays
-    importable without that dependency in the path.
+    ``utils.helpers.MakeMKVDrive`` so this module stays importable
+    without that dependency in the path.
 
     Accepts:
 
-    * ``MakeMKVDriveInfo`` — passed through unchanged.
-    * 2-tuple ``(idx, name)`` — wrapped into a default-state info.
+    * ``MakeMKVDrive`` — passed through unchanged.
+    * 2-tuple ``(idx, name)`` — wrapped into a default-state drive.
     * Anything else — returns the default-drive sentinel.
     """
-    from utils.helpers import MakeMKVDriveInfo
+    from utils.helpers import MakeMKVDrive
 
-    if isinstance(drive, MakeMKVDriveInfo):
+    if isinstance(drive, MakeMKVDrive):
         return drive
     try:
         idx, name = drive
         idx = int(idx)
-        return MakeMKVDriveInfo(
+        return MakeMKVDrive(
             index=idx,
-            state_code=0,
-            flags_code=999,
-            disc_type_code=0,
+            visible=1,
+            enabled=1,
+            flags=0,
             drive_name=str(name),
             disc_name="",
             device_path=f"disc:{idx}",
@@ -75,15 +75,15 @@ def _coerce_drive_info(drive: Any) -> "MakeMKVDriveInfo":
         return _default_drive_info()
 
 
-def _default_drive_info() -> "MakeMKVDriveInfo":
+def _default_drive_info() -> "MakeMKVDrive":
     """The sentinel used when no drives are available.  Mirrors
     ``JellyRipperGUI._default_drive_info`` at ``gui/main_window.py:222``."""
-    from utils.helpers import MakeMKVDriveInfo
-    return MakeMKVDriveInfo(
+    from utils.helpers import MakeMKVDrive
+    return MakeMKVDrive(
         index=0,
-        state_code=0,
-        flags_code=999,
-        disc_type_code=0,
+        visible=0,
+        enabled=0,
+        flags=0,
         drive_name="(no drives detected)",
         disc_name="",
         device_path="disc:0",
@@ -123,7 +123,7 @@ class DriveHandler(QObject):
         # Latest list of drives (after coercion).  Populated on
         # successful refresh; consulted by ``_on_drive_changed`` to
         # map combo selections back to drive indices.
-        self.drive_options: list["MakeMKVDriveInfo"] = []
+        self.drive_options: list["MakeMKVDrive"] = []
         self._connected = False
 
     # ------------------------------------------------------------------

@@ -15,8 +15,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+from gui_qt.dialogs._modeless import exec_modeless
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -32,10 +33,9 @@ def ask_yesno(
     ``False`` on No or Esc / window close.
 
     Built as an instance (not the static ``QMessageBox.question``)
-    so it can be window-modal — the static convenience methods are
-    application-modal, which would freeze the standalone AI chat
-    window.  Parented to the main window by the caller, so the
-    workflow still blocks until answered."""
+    and shown via ``exec_modeless`` so the docked AI chat stays
+    usable while it's open.  Parented to the main window by the
+    caller, so the workflow still blocks until answered."""
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Question)
     box.setWindowTitle(title or "Confirm")
@@ -44,9 +44,10 @@ def ask_yesno(
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
     )
     box.setDefaultButton(QMessageBox.StandardButton.No)  # less destructive
-    box.setWindowModality(Qt.WindowModality.WindowModal)
-    result = box.exec()
-    return result == QMessageBox.StandardButton.Yes
+    yes_button = box.button(QMessageBox.StandardButton.Yes)
+    exec_modeless(box)
+    # clickedButton() is None on Esc / window close → False.
+    return box.clickedButton() is yes_button
 
 
 def ask_input(
@@ -65,14 +66,13 @@ def ask_input(
     instruction text, ``default`` pre-fills the field.
     """
     # Built as an instance (not the static ``QInputDialog.getText``)
-    # so it can be window-modal — the static method is application-
-    # modal and would freeze the standalone AI chat window.
+    # and shown via exec_modeless so the docked AI chat stays usable
+    # while it's open.
     dlg = QInputDialog(parent)
     dlg.setWindowTitle(label or "Input")
     dlg.setLabelText(prompt)
     dlg.setTextValue(default or "")
-    dlg.setWindowModality(Qt.WindowModality.WindowModal)
-    accepted = dlg.exec()
+    accepted = exec_modeless(dlg)
     if not accepted:
         return None
     return dlg.textValue()

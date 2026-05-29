@@ -28,7 +28,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from utils.helpers import MakeMKVDriveInfo
+    from utils.helpers import MakeMKVDrive
 
 
 StatusRole = Literal["ready", "error", "warn", "busy"]
@@ -53,7 +53,7 @@ _DISC_STATE_UNAVAILABLE = "◌"  # ◌ Dotted circle — not present / busy
 def _disc_state_glyph(state_code: int) -> str:
     """Pick the disc-state glyph for the drive label.
 
-    State codes match ``MakeMKVDriveInfo.usability_state``:
+    The code is ``MakeMKVDrive.visible`` (DRV field 1):
     * ``2``   → ready (disc inserted)
     * ``0``   → empty (tray open / no disc)
     * other   → unavailable (drive busy, offline, etc.)
@@ -66,11 +66,11 @@ def _disc_state_glyph(state_code: int) -> str:
 
 
 def format_drive_label(
-    drive: "MakeMKVDriveInfo",
+    drive: "MakeMKVDrive",
     *,
     include_state_glyph: bool = True,
 ) -> str:
-    """Format a ``MakeMKVDriveInfo`` for the drive picker dropdown.
+    """Format a ``MakeMKVDrive`` for the drive picker dropdown.
 
     Output shape (with glyph):
 
@@ -93,9 +93,9 @@ def format_drive_label(
     drive_name = drive.drive_name or "Unknown drive"
     disc_name = drive.disc_name or "No disc"
     device_path = drive.device_path or f"disc:{drive.index}"
-    state = f"{drive.usability_state} ({drive.state_code})"
+    state = drive.usability_state
     if include_state_glyph:
-        disc_field = f"{_disc_state_glyph(drive.state_code)} {disc_name}"
+        disc_field = f"{_disc_state_glyph(drive.visible)} {disc_name}"
     else:
         disc_field = disc_name
     return (

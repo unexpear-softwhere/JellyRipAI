@@ -56,6 +56,22 @@ The chat sidebar's on-device fallback path (the "what's happening
 on screen?" summary that fires when no provider is available) is
 all-local heuristics — no provider needed.
 
+## Movie & TV metadata (TMDB)
+
+The chat's optional **🌐 Web** lookup can query
+**[The Movie Database (TMDB)](https://www.themoviedb.org/)** (API v3)
+for exact movie/show titles, years, and IDs — but only when the user
+supplies their own free TMDB API key via **Settings → AI → Web
+lookup**.  Results are fetched live and never cached.
+
+> This product uses TMDB and the TMDB APIs but is not endorsed,
+> certified, or otherwise approved by TMDB.
+
+TMDB data is used non-commercially (JellyRip is free / GPL-3.0) and is
+fed only into the assistant's reply context — it is **not** used to
+train any model.  Commercial use of the TMDB API requires a separate
+written agreement with TMDB.
+
 ## Optional user-installed integrations
 
 * **[HandBrakeCLI](https://handbrake.fr/)** — alternate transcode

@@ -299,6 +299,26 @@ def _bundled_binary_candidates(filename: str) -> list[str]:
     return resolved
 
 
+def _resolve_bundled_tool(
+    filename: str,
+    validator: ToolValidator,
+) -> "ResolvedTool | None":
+    """Return the bundled copy of ``filename`` if present and valid.
+
+    Used to *always* prefer the binary shipped alongside the app (e.g.
+    FFmpeg / ffprobe) so the user never has to point Settings at it.
+    Returns ``None`` when running from source (no bundle present),
+    letting the caller fall back to configured / PATH resolution.
+    """
+    for candidate in _bundled_binary_candidates(filename):
+        if not _is_file(candidate):
+            continue
+        ok, _reason = validator(candidate)
+        if ok:
+            return ResolvedTool(path=candidate, source="bundled")
+    return None
+
+
 def auto_locate_ffmpeg(*, allow_path_lookup: bool = False) -> str:
     """Find a validated FFmpeg executable."""
     return resolve_ffmpeg("", allow_path_lookup=allow_path_lookup).path
@@ -798,6 +818,14 @@ def resolve_ffprobe(
     *,
     allow_path_lookup: bool = False,
 ) -> ResolvedTool:
+    # ffprobe ships bundled with the app — always prefer the bundled
+    # copy so the user never has to configure or choose it.  The
+    # candidates below are a fallback only for running from source.
+    _bundled = _resolve_bundled_tool(
+        "ffprobe.exe" if os.name == "nt" else "ffprobe", validate_ffprobe
+    )
+    if _bundled is not None:
+        return _bundled
     detected_candidates = [
         *(
             (bundled, "bundled")
@@ -828,6 +856,14 @@ def resolve_ffmpeg(
     *,
     allow_path_lookup: bool = False,
 ) -> ResolvedTool:
+    # FFmpeg ships bundled with the app — always prefer the bundled copy
+    # so the user never has to configure or choose it.  The candidates
+    # below are a fallback only for running from source.
+    _bundled = _resolve_bundled_tool(
+        "ffmpeg.exe" if os.name == "nt" else "ffmpeg", validate_ffmpeg
+    )
+    if _bundled is not None:
+        return _bundled
     detected_candidates = [
         *(
             (bundled, "bundled")

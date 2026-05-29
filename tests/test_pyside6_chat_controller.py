@@ -319,6 +319,84 @@ def test_looks_like_ai_payload_echo_pure_helper():
     assert looks_like_ai_payload_echo("") is False
 
 
+# ─── Web lookup (🌐 toggle) — added 2026-05-29 ─────────────────────
+
+
+def _fake_provider(*replies: str):
+    """Provider stub whose ``chat`` returns the queued replies in order."""
+    queue = list(replies)
+    calls: list = []
+
+    def _chat(messages, max_tokens=0, timeout=0):
+        calls.append(messages)
+        return queue.pop(0) if queue else ""
+
+    return SimpleNamespace(chat=_chat, calls=calls, is_available=lambda: True)
+
+
+def test_formulate_search_query_uses_disc_title_and_strips_label(sidebar, cfg):
+    """Query is built from the disc context, and a leading 'Search query:'
+    label the model may add is stripped — the core of the fix for
+    'searched the literal chat message' (2026-05-29)."""
+    controller = ChatController(
+        sidebar=sidebar, cfg=cfg,
+        facts_provider=lambda: {"disc": {"disc_title": "Peter Rabbit"}},
+    )
+    provider = _fake_provider("Search query: Peter Rabbit 2018 film")
+    q = controller._formulate_search_query(provider, "year and metadata", 5.0)
+    assert q == "Peter Rabbit 2018 film"
+    # Disc context reached the formulation prompt.
+    joined = " ".join(m["content"] for m in provider.calls[0])
+    assert "Peter Rabbit" in joined
+
+
+def test_formulate_search_query_none_means_no_search(sidebar, cfg):
+    controller = ChatController(sidebar=sidebar, cfg=cfg)
+    assert controller._formulate_search_query(_fake_provider("NONE"), "hi", 5.0) == ""
+
+
+def test_with_web_context_disabled_does_not_search(sidebar, cfg):
+    """Toggle off → messages unchanged and the model is never called to
+    formulate a query (no surprise network calls)."""
+    controller = ChatController(sidebar=sidebar, cfg=cfg)  # web flag absent
+    provider = _fake_provider("should-not-run")
+    msgs = [{"role": "user", "content": "hi"}]
+    out = controller._with_web_context(msgs, provider=provider, timeout=5.0)
+    assert out == msgs
+    assert provider.calls == []
+
+
+def test_with_web_context_injects_results(sidebar, cfg, monkeypatch):
+    """Toggle on → the formulated query drives a search and the results
+    are prepended as a system message."""
+    cfg = {**cfg, "opt_ai_web_search": True}
+    controller = ChatController(
+        sidebar=sidebar, cfg=cfg,
+        facts_provider=lambda: {"disc": {"disc_title": "Peter Rabbit"}},
+    )
+    import shared.ai.web_search as ws
+    monkeypatch.setattr(
+        ws, "search_web",
+        lambda q, **k: (
+            [ws.SearchResult(
+                "Peter Rabbit - Wikipedia",
+                "https://en.wikipedia.org/wiki/Peter_Rabbit_(film)",
+                "2018 film",
+            )],
+            "",
+        ),
+    )
+    provider = _fake_provider("Peter Rabbit 2018 film")  # formulation reply
+    msgs = [{"role": "user", "content": "what year did this come out"}]
+    out = controller._with_web_context(msgs, provider=provider, timeout=5.0)
+    assert len(out) == len(msgs) + 1
+    assert out[0]["role"] == "system"
+    assert "WEB_SEARCH_RESULTS" in out[0]["content"]
+    assert "en.wikipedia.org" in out[0]["content"]
+    # Keyless-honesty guard: never pass an IMDb id off as a TMDB id.
+    assert "is NOT a TMDB id" in out[0]["content"]
+
+
 def test_build_ui_help_fallback_pure_helper_active_session():
     from gui_qt.chat_controller import build_ui_help_fallback
 

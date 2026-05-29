@@ -674,16 +674,25 @@ class MainWindow(QMainWindow):
         if self._chat_sidebar is not None:
             return self._chat_sidebar
         from gui_qt.ai_chat_sidebar import ChatSidebar
-        # parent=None → standalone top-level window so window-modal
-        # workflow dialogs (which block this main window) can't freeze
-        # the chat.  pin_to_right_of keeps it visually flush to our
-        # right edge, tracking our moves and resizes.
-        sidebar = ChatSidebar(parent=None)
+        # Docked to the right edge.  Central content reflows left when
+        # it opens; the user resizes width by dragging the splitter.
+        # It stays interactive while a workflow dialog is open because
+        # those dialogs run non-modally (gui_qt/dialogs/_modeless.
+        # exec_modeless) — not by detaching the dock from this window.
+        sidebar = ChatSidebar(parent=self)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, sidebar)
         try:
             width = int(self._cfg.get("opt_ai_sidebar_width", 360) or 360)
         except (TypeError, ValueError):
             width = 360
-        sidebar.pin_to_right_of(self, width=width)
+        # resizeDocks is the reliable way to size a freshly-added dock.
+        try:
+            self.resizeDocks([sidebar], [width], Qt.Orientation.Horizontal)
+        except Exception:
+            pass
+        # Hidden until the user opens it via the ☰ Chat chip — matches
+        # the lazy "closed until asked for" contract.
+        sidebar.hide()
         self._chat_sidebar = sidebar
         return sidebar
 
@@ -706,23 +715,54 @@ class MainWindow(QMainWindow):
         triggering construction."""
         return self._chat_sidebar
 
-    def closeEvent(self, event):  # noqa: N802 — Qt convention
-        """Close the standalone chat window when the main window
-        closes.
+    # ------------------------------------------------------------------
+    # Workflow-dialog soft-lock.
+    #
+    # Workflow dialogs (identity step, duplicate resolution, space
+    # override, …) run *non-modally* so the docked AI chat stays usable
+    # while they're open (see gui_qt/dialogs/_modeless.exec_modeless).
+    # Non-modal means the main window is still clickable, so we disable
+    # the controls that would desync a running workflow — the mode
+    # buttons, Stop, and the drive picker — for the dialog's lifetime,
+    # then restore each control's exact prior enabled-state.  Ref-counted
+    # so back-to-back dialogs in one workflow don't fight over the
+    # snapshot.  Called on the GUI thread from exec_modeless — never
+    # from a worker thread — so touching widgets here is safe.
+    # ------------------------------------------------------------------
 
-        The chat sidebar is now a top-level window with no parent (so
-        it escapes window-modal dialogs).  The downside: it won't be
-        torn down with us automatically, and while it stays open
-        QApplication won't quit (it waits for the last top-level
-        window).  Closing it explicitly here makes "close the main
-        window" exit the app as users expect.
-        """
-        if self._chat_sidebar is not None:
+    def begin_workflow_dialog(self) -> None:
+        """Soft-lock workflow controls while a non-modal workflow
+        dialog is open.  Ref-counted; safe to nest."""
+        self._workflow_dialog_depth = getattr(self, "_workflow_dialog_depth", 0) + 1
+        if self._workflow_dialog_depth != 1:
+            return
+        guarded: list[QWidget] = list(self._workflow_buttons.values())
+        for attr in ("_stop_button", "_drive_combo"):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                guarded.append(widget)
+        snapshot: list[tuple[QWidget, bool]] = []
+        for widget in guarded:
+            snapshot.append((widget, widget.isEnabled()))
+            widget.setEnabled(False)
+        self._workflow_dialog_snapshot = snapshot
+
+    def end_workflow_dialog(self) -> None:
+        """Release the soft-lock, restoring each control's prior
+        enabled-state, once the outermost dialog closes."""
+        depth = getattr(self, "_workflow_dialog_depth", 0)
+        if depth <= 0:
+            return
+        depth -= 1
+        self._workflow_dialog_depth = depth
+        if depth != 0:
+            return
+        for widget, was_enabled in getattr(self, "_workflow_dialog_snapshot", []):
             try:
-                self._chat_sidebar.close()
-            except Exception:
-                pass
-        super().closeEvent(event)
+                widget.setEnabled(was_enabled)
+            except RuntimeError:
+                pass  # widget already deleted
+        self._workflow_dialog_snapshot = []
 
     def get_chat_ui_snapshot(self) -> dict[str, object]:
         """Snapshot the live UI state into a dict the chat

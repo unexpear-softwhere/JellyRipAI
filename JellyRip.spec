@@ -201,6 +201,7 @@ GUI_QT_HIDDEN_IMPORTS: list[str] = [
     "gui_qt.formatters",
     "gui_qt.log_pane",
     "gui_qt.splash",
+    "gui_qt.tmdb_logo",
     "gui_qt.status_bar",
     "gui_qt.thread_safety",
     "gui_qt.tray_icon",

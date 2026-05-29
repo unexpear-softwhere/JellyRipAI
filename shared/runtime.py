@@ -28,7 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-__version__ = "1.0.22"
+__version__ = "1.0.23"
 APP_VARIANT = "ai"
 APP_DISPLAY_NAME = "JellyRip AI"
 APP_EXE_BASENAME = "JellyRipAI"
@@ -270,6 +270,10 @@ DEFAULTS: dict[str, ConfigScalar] = {
     "opt_ai_profile_onboarded": False,
     "opt_ai_sidebar_open": False,
     "opt_ai_sidebar_width": 360,
+    # 🌐 Web lookup (chat): when on, the assistant searches DuckDuckGo
+    # (and TMDB, if a key is set) before answering.
+    "opt_ai_web_search": False,
+    "opt_tmdb_api_key": "",  # free key from themoviedb.org enables TMDB lookup
     "opt_theme_overrides": {},
 }
 

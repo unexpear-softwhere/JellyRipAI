@@ -31,6 +31,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from gui_qt.dialogs._modeless import exec_modeless
+
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
 
@@ -132,5 +134,5 @@ def ask_duplicate_resolution(
         stop_text=stop_text,
         parent=parent,
     )
-    dialog.exec()
+    exec_modeless(dialog)
     return dialog.choice
