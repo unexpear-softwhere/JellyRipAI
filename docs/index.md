@@ -17,9 +17,9 @@ treated as non-final.
 
 ## Download
 
-[Latest release: ai-v1.0.22](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.22){: .btn .btn-primary }
-[Installer (.exe)](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.22/JellyRipAIInstaller.exe){: .btn }
-[Standalone (.exe)](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.22/JellyRipAI.exe){: .btn }
+[Latest release: ai-v1.0.23](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.23){: .btn .btn-primary }
+[Installer (.exe)](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.23/JellyRipAIInstaller.exe){: .btn }
+[Standalone (.exe)](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.23/JellyRipAI.exe){: .btn }
 
 If Windows SmartScreen flags the executable, whitelist the download
 folder before retrying — known false-positive for PyInstaller binaries.
@@ -84,7 +84,7 @@ appropriate fork.
 
 - [JellyRip on GitHub](https://github.com/unexpear/JellyRip)
 - [JellyRip documentation site](https://unexpear.github.io/JellyRip/)
-- [Latest MAIN release: v1.0.22](https://github.com/unexpear/JellyRip/releases/tag/v1.0.22)
+- [Latest MAIN release: v1.0.23](https://github.com/unexpear/JellyRip/releases/tag/v1.0.23)
 
 ## Source and license
 
