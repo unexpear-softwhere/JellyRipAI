@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 _READING_PATH_RE = re.compile(r"occurred while reading '([^']+)'", re.IGNORECASE)
+# MakeMKV sometimes emits an unfilled template token (e.g. "reading '%2'")
+# instead of a real path; this matches those so they aren't reported as a
+# "location" in the scan-issue summary.
+_TEMPLATE_TOKEN_RE = re.compile(r"^%\d+$")
 
 
 def _is_scsi_error(message: str) -> bool:
@@ -77,7 +81,11 @@ class MakeMKVIssueSummary:
                 self.not_ready_count += 1
             match = _READING_PATH_RE.search(text)
             if match:
-                self.affected_paths[match.group(1)] += 1
+                location = match.group(1)
+                # Skip MakeMKV's unfilled placeholder (e.g. "%2") so it
+                # isn't surfaced as the "affected location" in summaries.
+                if not _TEMPLATE_TOKEN_RE.match(location):
+                    self.affected_paths[location] += 1
         elif _is_profile_error(text):
             self.profile_error_count += 1
             is_significant = True

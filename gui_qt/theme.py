@@ -1,87 +1,111 @@
 """Theme loader for the PySide6 GUI.
 
-Per migration plan decision #7 (equipable theme system from day 1),
-themes live as separate QSS files under ``gui_qt/qss/`` and are
-applied to the running ``QApplication`` at startup or via the
-in-app theme picker (sub-phase 3d).
-
-This module is small on purpose: list available themes, load one
-by name, raise on unknown names.  Theme **content** lives in the QSS
-files themselves; the QSS files are generated from
-``gui_qt/themes.py`` via ``tools/build_qss.py`` (rerun the script
-when tokens change).
-
-**Empty / 0-byte ``.qss`` files are treated as placeholders** and
-filtered out — they can't actually theme anything, so surfacing them
-in the picker or letting them silently render an unstyled window
-would be misleading.  This is how stale placeholders (like the
-deprecated ``warm.qss``) get sidelined without breaking the loader.
+Themes are color **token** sets rendered to QSS at runtime via
+``gui_qt.qss_render`` (no more reading static ``.qss`` files at load
+time).  Two built-in starting themes — Basic Dark / Basic Light — live
+in ``gui_qt.themes``; user-made custom themes live as JSON under
+``%APPDATA%\\JellyRipAI\\themes\\`` (``gui_qt.custom_themes``).  The
+Theme Maker dialog creates and edits the custom ones, so the picker
+shows built-ins + anything the user has made or imported.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from gui_qt.qss_render import render_qss_from_tokens
+from gui_qt.themes import THEMES, THEMES_BY_ID
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QApplication
 
+# Kept for backward-compat with anything still referencing it; the
+# committed ``.qss`` files are now just dev-time diff artifacts and are
+# no longer read at runtime (themes render from tokens).
+from pathlib import Path
 
 THEME_DIR = Path(__file__).parent / "qss"
 
 
-def _is_real_theme_file(path: Path) -> bool:
-    """A ``.qss`` file counts as a real theme only if it has content.
-
-    Zero-byte files are placeholders left over from scaffolding (or
-    from deprecated themes pending deletion); they shouldn't appear
-    in the picker because applying them would just clear the
-    stylesheet, which is indistinguishable from "no theme loaded".
-    """
+def _custom_module() -> Any:
+    """Lazy import so a stale custom-themes dir never blocks startup."""
     try:
-        return path.is_file() and path.stat().st_size > 0
-    except OSError:
-        return False
+        from gui_qt import custom_themes
+        return custom_themes
+    except Exception:
+        return None
+
+
+def theme_tokens(theme_name: str) -> dict[str, str] | None:
+    """Return the token dict for a theme id (built-in or custom), or
+    ``None`` if the id resolves to neither."""
+    built_in = THEMES_BY_ID.get(theme_name)
+    if built_in is not None:
+        return dict(built_in.tokens)
+    cm = _custom_module()
+    if cm is not None:
+        custom = cm.get_custom(theme_name)
+        if custom is not None:
+            return dict(custom.get("tokens", {}))
+    return None
+
+
+def theme_meta(theme_name: str) -> tuple[str, str, str]:
+    """Return ``(display_name, family, notes)`` for a theme id, with
+    sensible fallbacks for unknown ids."""
+    built_in = THEMES_BY_ID.get(theme_name)
+    if built_in is not None:
+        return built_in.name, built_in.family, built_in.notes
+    cm = _custom_module()
+    if cm is not None:
+        custom = cm.get_custom(theme_name)
+        if custom is not None:
+            return (
+                str(custom.get("name", theme_name)),
+                str(custom.get("family", "dark")),
+                "",
+            )
+    return theme_name, "dark", ""
 
 
 def list_themes() -> list[str]:
-    """Return available theme names (without the .qss extension),
-    sorted for stable order in pickers.
-
-    Filters out empty ``.qss`` placeholder files — see
-    ``_is_real_theme_file``.
-    """
-    return sorted(
-        p.stem for p in THEME_DIR.glob("*.qss") if _is_real_theme_file(p)
-    )
+    """Return all theme ids: the built-in basics first, then custom
+    themes (sorted).  A custom id that collides with a built-in is
+    ignored so built-ins can't be shadowed."""
+    builtin = [t.id for t in THEMES]
+    custom: list[str] = []
+    cm = _custom_module()
+    if cm is not None:
+        try:
+            custom = sorted(str(c["id"]) for c in cm.list_custom())
+        except Exception:
+            custom = []
+    seen = set(builtin)
+    return builtin + [c for c in custom if c not in seen]
 
 
 def load_theme(app: "QApplication", theme_name: str) -> None:
-    """Apply the named QSS theme to the running ``QApplication``.
+    """Render the named theme's tokens to QSS and apply them to the
+    running ``QApplication``.
 
-    Raises ``FileNotFoundError`` if the theme doesn't exist, is an
-    empty placeholder, or can't be read (locked, permission-denied,
-    or non-UTF-8 binary content).  Callers can surface a clear error
-    rather than silently rendering a stylesheet-less window or — worse
-    — crashing startup before the main window appears.
-
-    Note: a non-empty file with **invalid QSS syntax** is NOT detected
-    here; Qt's ``setStyleSheet`` swallows parse errors and degrades to
-    the default look.  That's outside this function's contract.
+    Raises ``FileNotFoundError`` (name kept for caller compatibility —
+    ``gui_qt.app`` already catches it) if the id resolves to no built-in
+    or custom theme, or if the token set can't be rendered.
     """
-    qss_path = THEME_DIR / f"{theme_name}.qss"
-    if not _is_real_theme_file(qss_path):
+    tokens = theme_tokens(theme_name)
+    if tokens is None:
         raise FileNotFoundError(
-            f"Theme not found: {theme_name!r} "
-            f"(searched: {qss_path}). "
+            f"Theme not found: {theme_name!r}. "
             f"Available: {', '.join(list_themes()) or '<none>'}"
         )
+    name, family, notes = theme_meta(theme_name)
     try:
-        qss_text = qss_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
+        qss = render_qss_from_tokens(
+            tokens, id=theme_name, name=name, family=family, notes=notes,
+        )
+    except Exception as exc:
         raise FileNotFoundError(
-            f"Theme {theme_name!r} could not be read ({type(exc).__name__}: "
-            f"{exc}).  The file may be locked, permission-denied, or "
-            f"corrupted.  Available: {', '.join(list_themes()) or '<none>'}"
+            f"Theme {theme_name!r} could not be rendered "
+            f"({type(exc).__name__}: {exc})."
         ) from exc
-    app.setStyleSheet(qss_text)
+    app.setStyleSheet(qss)

@@ -91,13 +91,14 @@ def test_qss_has_text_input_focus_rule(qss_path):
     )
 
 
-def test_at_least_six_themes_ship():
-    """Smoke check that the QSS generator actually produced
-    output.  Six themes are expected (dark_github, light_inverted,
-    dracula_light, hc_dark, slate, frost).  If this drops below
-    six, build_qss.py is broken."""
-    assert len(_THEME_FILES) >= 6, (
-        f"expected at least 6 shipping QSS themes, found "
+def test_basic_themes_ship():
+    """Smoke check that the QSS generator produced the built-in
+    starting themes.  Two ship by default — Basic Dark + Basic Light;
+    users create more in the Theme Maker (saved under %APPDATA%, not
+    here).  If this drops below two, build_qss.py / themes.py is
+    broken."""
+    assert len(_THEME_FILES) >= 2, (
+        f"expected at least the 2 built-in QSS themes, found "
         f"{len(_THEME_FILES)}"
     )
 

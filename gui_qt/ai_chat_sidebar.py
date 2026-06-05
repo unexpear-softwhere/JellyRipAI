@@ -138,7 +138,7 @@ class ChatSidebar(QDockWidget):
     suggest_requested = Signal()
     new_chat_requested = Signal()
     copy_chat_requested = Signal()
-    mode_changed = Signal(str)  # emits "off" / "cloud" / "local"
+    model_selected = Signal(str)  # emits chosen model name, "" for Off
     web_search_toggled = Signal(bool)  # 🌐 Web toggle on/off
     closed = Signal()
 
@@ -181,36 +181,34 @@ class ChatSidebar(QDockWidget):
 
         body_layout.addLayout(header_row)
 
-        # ── Mode picker row: Off / Cloud / Local ───────────────────
-        # Lets the user flip the AI backend without leaving the
-        # sidebar.  Writes to ``opt_ai_mode`` via the controller's
-        # signal/slot wiring.  Three values match the cfg key:
-        #   "off"   — no AI calls; the on-device fallback still
-        #             runs for "what's happening?" prompts.
-        #   "cloud" — try the active cloud provider first, fall
-        #             back to local if the cloud provider isn't
-        #             configured (matches ChatController._resolve_provider).
-        #   "local" — local provider only (Ollama).
+        # ── Model picker row ───────────────────────────────────────
+        # Replaces the old Off/Cloud/Local "AI mode" combo.  Shows the
+        # ACTIVE provider's usable models (chosen in the ✦ AI Providers
+        # dialog) plus an "Off" entry at the top.  The controller
+        # populates it via ``set_model_options`` and reacts to the
+        # user's pick via ``model_selected``:
+        #   ""           — Off (disable AI; controller writes opt_ai_mode="off").
+        #   <model name>  — use that model on the active provider (the
+        #                   controller writes the provider's model and
+        #                   flips opt_ai_mode to its category).
+        # Switching *which* provider (a cloud one, or local) stays in
+        # the AI Providers dialog's "Set as Active" buttons — this
+        # dropdown only changes the model within the active provider.
         mode_row = QHBoxLayout()
         mode_row.setSpacing(8)
 
-        mode_label = QLabel("AI mode:")
-        mode_label.setObjectName("chatSidebarModeLabel")
-        mode_row.addWidget(mode_label)
+        model_label = QLabel("Model:")
+        model_label.setObjectName("chatSidebarModelLabel")
+        mode_row.addWidget(model_label)
 
-        self._mode_combo = QComboBox()
-        self._mode_combo.setObjectName("chatSidebarModeCombo")
-        # Tuple shape: (cfg-value, user-facing label).  The label is
-        # what the user sees; the cfg-value is what we write.
-        self._MODE_OPTIONS: tuple[tuple[str, str], ...] = (
-            ("off",   "Off"),
-            ("cloud", "Cloud"),
-            ("local", "Local"),
+        self._model_combo = QComboBox()
+        self._model_combo.setObjectName("chatSidebarModelCombo")
+        self._model_combo.setToolTip(
+            "Pick the model for the active AI provider, or Off to "
+            "disable the assistant.  Change providers in ✦ AI Providers."
         )
-        for value, label in self._MODE_OPTIONS:
-            self._mode_combo.addItem(label, userData=value)
-        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        mode_row.addWidget(self._mode_combo)
+        self._model_combo.currentIndexChanged.connect(self._on_model_changed)
+        mode_row.addWidget(self._model_combo, stretch=1)
 
         # 🌐 Web toggle — when on, the assistant searches the web
         # (DuckDuckGo) and TMDB for the question before answering.
@@ -276,46 +274,54 @@ class ChatSidebar(QDockWidget):
         # appends to this position rather than adding a new bubble.
         self._streaming_position: int | None = None
 
-    # ── Mode picker ────────────────────────────────────────────────
+    # ── Model picker ───────────────────────────────────────────────
 
-    def set_mode(self, mode: str) -> None:
-        """Seed the mode combo without firing ``mode_changed``.
+    def set_model_options(
+        self, options: "list[tuple]", current_value: str,
+    ) -> None:
+        """Populate the model dropdown WITHOUT firing ``model_selected``.
 
-        Used by the controller at startup to render the cfg's current
-        ``opt_ai_mode`` value into the picker without re-saving it.
-        Falls back to "cloud" if the cfg has an unknown value.
+        ``options`` is a list of ``(value, label)`` or
+        ``(value, label, enabled)`` tuples — ``value`` is ``""`` for the
+        Off entry, else a model name.  Entries with ``enabled=False`` are
+        rendered red and made unselectable (e.g. Ollama cloud models you
+        aren't signed in for).  ``current_value`` is pre-selected.
+        Called by the controller at startup and whenever the active
+        provider/model changes, so it must not loop the change back at
+        the controller.
         """
-        normalized = str(mode or "").strip().lower()
-        target_idx = 1  # default to "cloud"
-        for idx, (value, _label) in enumerate(self._MODE_OPTIONS):
-            if value == normalized:
-                target_idx = idx
-                break
-        # Block signals during the seed so we don't fire mode_changed
-        # back at the controller for a value the controller already
-        # knows about.
-        self._mode_combo.blockSignals(True)
+        self._model_combo.blockSignals(True)
         try:
-            self._mode_combo.setCurrentIndex(target_idx)
+            self._model_combo.clear()
+            target_idx = 0
+            model = self._model_combo.model()
+            for idx, opt in enumerate(options):
+                value, label = opt[0], opt[1]
+                enabled = opt[2] if len(opt) > 2 else True
+                self._model_combo.addItem(label, userData=value)
+                if not enabled and hasattr(model, "item"):
+                    # Disable so it can't be picked; the theme QSS rule
+                    # (QComboBox QAbstractItemView::item:disabled) colours it
+                    # with the muted token - no baked-in hex here.
+                    item = model.item(idx)
+                    if item is not None:
+                        item.setEnabled(False)
+                if value == current_value:
+                    target_idx = idx
+            self._model_combo.setCurrentIndex(target_idx)
         finally:
-            self._mode_combo.blockSignals(False)
+            self._model_combo.blockSignals(False)
 
-    def current_mode(self) -> str:
-        """Return the currently-selected mode value
-        (``"off"``/``"cloud"``/``"local"``)."""
-        data = self._mode_combo.currentData()
-        if data:
-            return str(data)
-        # Fallback for the case where userData wasn't set somehow.
-        idx = self._mode_combo.currentIndex()
-        if 0 <= idx < len(self._MODE_OPTIONS):
-            return self._MODE_OPTIONS[idx][0]
-        return "cloud"
+    def current_model_choice(self) -> str:
+        """Return the selected dropdown value (``""`` = Off, else a
+        model name)."""
+        data = self._model_combo.currentData()
+        return str(data) if data is not None else ""
 
-    def _on_mode_changed(self, _idx: int) -> None:
-        """Fire ``mode_changed`` so the controller can write
-        ``opt_ai_mode`` and persist."""
-        self.mode_changed.emit(self.current_mode())
+    def _on_model_changed(self, _idx: int) -> None:
+        """Fire ``model_selected`` so the controller can apply the model
+        + mode and persist."""
+        self.model_selected.emit(self.current_model_choice())
 
     def set_web_search(self, enabled: bool) -> None:
         """Seed the 🌐 Web toggle from cfg without firing the signal."""

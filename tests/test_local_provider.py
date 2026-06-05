@@ -1,7 +1,7 @@
 import json
 import urllib.request
 
-from shared.ai.providers.local_provider import LocalProvider
+from shared.ai.providers.local_provider import LocalProvider, _is_embedding_model
 
 
 def test_is_available_stubbed_false_by_default():
@@ -122,3 +122,111 @@ def test_local_provider_chat_uses_chat_endpoint(monkeypatch):
         "stream": False,
         "options": {"num_predict": 222},
     }
+
+
+def test_is_embedding_model_detects_embeddings_by_name_and_family():
+    # By name — covers nomic-embed-text, mxbai-embed-large, etc.
+    assert _is_embedding_model({"name": "nomic-embed-text:latest"}) is True
+    assert _is_embedding_model({"name": "mxbai-embed-large:latest"}) is True
+    # By family — bge / all-minilm names lack "embed" but report bert.
+    assert _is_embedding_model(
+        {"name": "all-minilm:latest", "details": {"family": "bert"}}
+    ) is True
+    assert _is_embedding_model(
+        {"name": "bge-m3:latest", "details": {"families": ["nomic-bert"]}}
+    ) is True
+    # Chat models pass through.
+    assert _is_embedding_model(
+        {"name": "qwen2.5:14b-instruct", "details": {"family": "qwen2"}}
+    ) is False
+    assert _is_embedding_model(
+        {"name": "llama3.1:8b", "details": {"family": "llama"}}
+    ) is False
+    # Malformed / missing details must not raise (else the whole model
+    # list would be silently emptied by _get_available_models' guard).
+    assert _is_embedding_model({"name": "weird", "details": "oops"}) is False
+    assert _is_embedding_model({}) is False
+
+
+def test_get_available_models_excludes_embedding_models(monkeypatch):
+    """Embedding / non-chat models must never reach the model picker —
+    they can't run the assistant, so listing them only confuses users."""
+    payload = {
+        "models": [
+            {"name": "qwen2.5:14b-instruct",
+             "details": {"family": "qwen2", "families": ["qwen2"]}},
+            {"name": "llama3.1:8b",
+             "details": {"family": "llama", "families": ["llama"]}},
+            {"name": "nomic-embed-text:latest",
+             "details": {"family": "nomic-bert", "families": ["nomic-bert"]}},
+            {"name": "mxbai-embed-large:latest",
+             "details": {"family": "bert", "families": ["bert"]}},
+            {"name": "all-minilm:latest",
+             "details": {"family": "bert", "families": ["bert"]}},
+        ]
+    }
+    monkeypatch.setattr(
+        urllib.request, "urlopen", lambda req, timeout=0: _FakeResponse(payload)
+    )
+
+    models = LocalProvider()._get_available_models()
+
+    assert models == ["qwen2.5:14b-instruct", "llama3.1:8b"]
+    assert not any("embed" in m or "minilm" in m for m in models)
+
+
+def test_is_cloud_model_detects_cloud_tags():
+    from shared.ai.providers.local_provider import _is_cloud_model
+    assert _is_cloud_model("qwen3.5:cloud") is True
+    assert _is_cloud_model("qwen3-vl:235b-cloud") is True
+    assert _is_cloud_model("llama3.1:8b") is False
+    assert _is_cloud_model("gemma3:12b") is False
+    assert _is_cloud_model("") is False
+
+
+def test_cloud_models_usable_true_when_no_cloud_models():
+    from shared.ai.providers import local_provider as lp
+    lp._reset_cloud_auth_cache()
+    # No cloud models pulled → nothing to probe, trivially usable.
+    assert lp.LocalProvider().cloud_models_usable(
+        ["llama3.1:8b", "gemma3:12b"]
+    ) is True
+    lp._reset_cloud_auth_cache()
+
+
+def test_cloud_models_usable_false_on_403(monkeypatch):
+    """A cloud model returning 403 (not signed in) marks cloud unusable."""
+    import urllib.error
+    import urllib.request as ur
+    from shared.ai.providers import local_provider as lp
+    lp._reset_cloud_auth_cache()
+
+    def _forbidden(req, timeout=0):
+        raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr(ur, "urlopen", _forbidden)
+    assert lp.LocalProvider().cloud_models_usable(
+        ["qwen3.5:cloud", "llama3.1:8b"]
+    ) is False
+    lp._reset_cloud_auth_cache()
+
+
+def test_cloud_models_usable_true_on_success(monkeypatch):
+    """A successful probe (signed in) keeps cloud models usable."""
+    import urllib.request as ur
+    from shared.ai.providers import local_provider as lp
+    lp._reset_cloud_auth_cache()
+
+    class _Resp:
+        def read(self):
+            return b'{"response":"ok"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(ur, "urlopen", lambda req, timeout=0: _Resp())
+    assert lp.LocalProvider().cloud_models_usable(["qwen3.5:cloud"]) is True
+    lp._reset_cloud_auth_cache()

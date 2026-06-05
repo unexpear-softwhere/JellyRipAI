@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -44,6 +45,56 @@ def _sort_local_models(models: list[str]) -> list[str]:
         seen.add(key)
         unique.append(name)
     return sorted(unique, key=_local_model_sort_key)
+
+
+# Ollama embedding / non-chat model families (as reported under the
+# /api/tags "details" block).  These models can't run chat/generate,
+# so they must never appear as a selectable assistant model.
+_EMBEDDING_FAMILIES = frozenset({"bert", "nomic-bert"})
+
+
+def _is_embedding_model(model: dict[str, Any]) -> bool:
+    """True for an Ollama embedding / non-chat model.
+
+    Such models have no chat/generate capability, so they can't run the
+    assistant and shouldn't be offered as a model choice.  Detected by
+    name (contains ``"embed"`` — nomic-embed-text, mxbai-embed-large,
+    snowflake-arctic-embed, ...) or by the embedding families Ollama
+    reports under ``details`` (``bert`` / ``nomic-bert``, which also
+    catches bge / all-minilm whose names lack "embed").
+    """
+    name = str(model.get("name", "")).lower()
+    if "embed" in name:
+        return True
+    details = model.get("details")
+    if not isinstance(details, dict):
+        return False
+    if str(details.get("family", "")).lower() in _EMBEDDING_FAMILIES:
+        return True
+    families = details.get("families") or []
+    return any(str(f).lower() in _EMBEDDING_FAMILIES for f in families)
+
+
+def _is_cloud_model(name: str) -> bool:
+    """True for an Ollama *cloud* model (e.g. ``qwen3.5:cloud``,
+    ``qwen3-vl:235b-cloud``).  These run on Ollama's servers and return
+    HTTP 403 unless the user has run ``ollama signin`` — so they're
+    unusable until then and the model picker greys them out."""
+    lowered = str(name or "").lower()
+    tag = lowered.split(":", 1)[1] if ":" in lowered else ""
+    return "cloud" in tag or lowered.endswith("-cloud")
+
+
+# Process-level cache for the cloud sign-in probe (avoid re-probing on
+# every picker refresh).  None = not yet checked; True = cloud usable
+# (signed in, or no cloud models); False = a cloud model returned 403.
+_cloud_auth_usable: bool | None = None
+
+
+def _reset_cloud_auth_cache() -> None:
+    """Test hook / used after sign-in state may have changed."""
+    global _cloud_auth_usable
+    _cloud_auth_usable = None
 
 
 class LocalProvider(BaseProvider):
@@ -148,10 +199,65 @@ class LocalProvider(BaseProvider):
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read())
             return _sort_local_models(
-                [m["name"] for m in data.get("models", []) if "name" in m]
+                [
+                    m["name"]
+                    for m in data.get("models", [])
+                    if "name" in m and not _is_embedding_model(m)
+                ]
             )
         except Exception:
             return []
+
+    def cloud_models_usable(
+        self, available: "list[str] | None" = None, *, timeout: float = 3.0,
+    ) -> bool:
+        """Whether Ollama *cloud* models can actually run right now.
+
+        Cloud models 403 unless the user has signed in to Ollama, and
+        the model list alone can't tell us — so we probe once with a
+        1-token generate and cache the verdict for the process.  Returns
+        ``True`` unless we positively observe a 403; a timeout or network
+        hiccup never hides a model.  Cheap in the common cases: no cloud
+        models installed → no probe; not signed in → the 403 is instant.
+        """
+        global _cloud_auth_usable
+        if _cloud_auth_usable is not None:
+            return _cloud_auth_usable
+        try:
+            models = (
+                available if available is not None
+                else self._get_available_models()
+            )
+        except Exception:
+            models = []
+        cloud = [m for m in models if _is_cloud_model(m)]
+        if not cloud:
+            _cloud_auth_usable = True
+            return True
+        body = json.dumps({
+            "model": cloud[0],
+            "prompt": "ok",
+            "stream": False,
+            "options": {"num_predict": 1},
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self._base_url}/api/generate",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                resp.read()
+            _cloud_auth_usable = True
+        except urllib.error.HTTPError as exc:
+            # 403 = not signed in → cloud models unusable.  Other HTTP
+            # errors aren't an auth problem, so don't hide on them.
+            _cloud_auth_usable = exc.code != 403
+        except Exception:
+            # Timeout / connection error: don't hide on a transient.
+            _cloud_auth_usable = True
+        return _cloud_auth_usable
 
     def _call(self, system: str, user: str, max_tokens: int, timeout: float) -> str:
         actual_model = self._require_model_name()
@@ -201,7 +307,11 @@ class LocalProvider(BaseProvider):
                 data = json.loads(resp.read())
             ms = (time.time() - start) * 1000
 
-            available_models = [m.get("name", "") for m in data.get("models", []) if m.get("name")]
+            available_models = [
+                m.get("name", "")
+                for m in data.get("models", [])
+                if m.get("name") and not _is_embedding_model(m)
+            ]
             available_models = _sort_local_models(available_models)
             resolved_model = self._resolve_model_name(available_models)
             if not resolved_model:

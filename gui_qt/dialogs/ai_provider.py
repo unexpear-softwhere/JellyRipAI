@@ -501,15 +501,19 @@ class AIProviderDialog(QDialog):
         save_btn.clicked.connect(lambda _checked=False, p=pid: self._save_provider(p))
         btn_row.addWidget(save_btn)
 
-        if info.category == "cloud":
-            set_active_btn = QPushButton("Set as Active")
-            set_active_btn.setObjectName("aiProviderSetActiveButton")
-            set_active_btn.setProperty("active", bool(is_active))
-            set_active_btn.clicked.connect(
-                lambda _checked=False, p=pid: self._set_active(p)
-            )
-            btn_row.addWidget(set_active_btn)
-            widgets["set_active_btn"] = set_active_btn
+        # "Set as Active" on every provider (cloud + local).  Local
+        # used to be selected via the chat sidebar's old AI-mode combo;
+        # with that combo replaced by a model dropdown, the only place
+        # to choose local-vs-cloud is here, so the Local card needs this
+        # button too.
+        set_active_btn = QPushButton("Set as Active")
+        set_active_btn.setObjectName("aiProviderSetActiveButton")
+        set_active_btn.setProperty("active", bool(is_active))
+        set_active_btn.clicked.connect(
+            lambda _checked=False, p=pid: self._set_active(p)
+        )
+        btn_row.addWidget(set_active_btn)
+        widgets["set_active_btn"] = set_active_btn
 
         if has_creds:
             disconnect_btn = QPushButton("Disconnect")
@@ -713,7 +717,9 @@ class AIProviderDialog(QDialog):
         )
 
         set_provider_credentials(pid, **kwargs)
-        if make_active and pid != "local":
+        if make_active:
+            # Cloud and local alike: the active provider id is the
+            # single source of truth the chat model picker reads.
             set_active_provider_id(pid)
 
     def _save_provider(self, pid: str, *, make_active: bool = False) -> None:
@@ -757,7 +763,9 @@ class AIProviderDialog(QDialog):
             self._set_provider_status(pid, "failed", detail=f"Save error: {e}")
             return
 
-        if make_active and pid != "local":
+        if make_active:
+            # Writes opt_ai_mode = "local"/"cloud" so _resolve_provider
+            # and the diagnostics manager follow the chosen backend.
             self._apply_parent_mode(pid)
         self._handle_test_result(pid, result)
 

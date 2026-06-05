@@ -241,6 +241,8 @@ class ChatController(QObject):
     # marshaled.
     response_ready = Signal(str, str)   # text, backend_label
     error_occurred = Signal(str)        # human-readable message
+    disc_identified = Signal(str, str)  # (chat_md, log_line) — chat_md may
+    #                                     be "" to post to the Live Log only
 
     def __init__(
         self,
@@ -264,24 +266,28 @@ class ChatController(QObject):
         # Multi-turn message history.  Each element is a dict
         # {"role": "user" | "assistant", "content": str}.
         self._history: list[dict[str, str]] = []
+        # Last disc auto-identified via TMDB, so a drive refresh doesn't
+        # re-identify the same inserted disc on every populate.
+        self._last_identified_disc: str = ""
 
         # Sidebar -> controller hooks.
         sidebar.message_submitted.connect(self.handle_message_submitted)
         sidebar.suggest_requested.connect(self.handle_suggest_requested)
         sidebar.new_chat_requested.connect(self.handle_new_chat)
         sidebar.copy_chat_requested.connect(self.handle_copy_chat)
-        sidebar.mode_changed.connect(self.handle_mode_changed)
+        sidebar.model_selected.connect(self.handle_model_selected)
         sidebar.web_search_toggled.connect(self.handle_web_search_toggled)
 
-        # Seed the sidebar's mode picker from the current cfg value
-        # WITHOUT firing the changed signal back at us — the cfg
-        # already has this value, no save needed at construction.
-        sidebar.set_mode(str(cfg.get("opt_ai_mode", "cloud") or "cloud"))
+        # Seed the sidebar's model picker from the active provider +
+        # current cfg WITHOUT firing model_selected back at us (the cfg
+        # already reflects this; no save needed at construction).
+        self.refresh_model_picker()
         sidebar.set_web_search(bool(cfg.get("opt_ai_web_search", False)))
 
         # Worker thread -> GUI thread hooks.
         self.response_ready.connect(self._on_response_ready)
         self.error_occurred.connect(self._on_error_occurred)
+        self.disc_identified.connect(self._on_disc_identified)
 
     # ── Public properties (test hooks) ─────────────────────────────
 
@@ -375,44 +381,65 @@ class ChatController(QObject):
         except Exception:
             pass
 
-    def handle_mode_changed(self, mode: str) -> None:
-        """User flipped the AI mode picker.  Writes the new value into
-        ``cfg["opt_ai_mode"]`` and (best-effort) persists via
-        ``save_config`` so the choice survives restarts.
+    def handle_model_selected(self, choice: str) -> None:
+        """User picked an entry in the chat model dropdown.
 
-        Three modes match the cfg key:
+        ``choice`` is ``""`` for the Off entry (disable the assistant),
+        otherwise a model name belonging to the *active* provider.
+        Picking a model writes that model onto the active provider,
+        makes it active, and flips ``opt_ai_mode`` to the provider's
+        category — so the next turn routes through ``_resolve_provider``
+        unchanged.  Choosing *which* provider (a cloud one, or local)
+        lives in the AI Providers dialog's "Set as Active" buttons.
+        """
+        value = str(choice or "").strip()
+        if not value:
+            # Off — disable AI.  Leave the active provider untouched so
+            # picking a model again restores the previous backend.
+            self._set_ai_mode_cfg("off")
+            try:
+                self._sidebar.set_status("AI: Off", state="ready")
+            except Exception:
+                pass
+            return
 
-        * ``"off"``   — no AI calls; on-device fallback still runs
-                        for "what's happening?" prompts.
-        * ``"cloud"`` — try active cloud provider, fall back to local
-                        if cloud isn't configured.
-        * ``"local"`` — local provider only.
+        pid, category, _models, _current, _provider = self._picker_target()
+        try:
+            from shared.ai.credential_store import (
+                set_active_provider_id,
+                set_provider_credentials,
+            )
+            set_provider_credentials(pid, model=value)
+            set_active_provider_id(pid)
+        except Exception as exc:
+            import logging
+            logging.warning(
+                "Chat controller: failed to persist model selection: %s", exc,
+            )
+        self._set_ai_mode_cfg("local" if category == "local" else "cloud")
+        try:
+            self._sidebar.set_status(f"Model: {value}", state="ready")
+        except Exception:
+            pass
 
-        The change applies immediately — the next ``handle_message_submitted``
-        call routes via ``_resolve_provider`` which reads the live
-        ``cfg`` dict.  No restart needed.
+    def _set_ai_mode_cfg(self, mode: str) -> None:
+        """Write ``opt_ai_mode`` into the live cfg + best-effort persist.
+
+        Shared by the Off path and the model-selection path.  Invalid
+        values are ignored.  ``_resolve_provider`` and the diagnostics
+        manager both read ``opt_ai_mode``, so keeping it in sync is what
+        makes the dropdown actually switch the backend.  Persist
+        failures aren't fatal (the in-memory cfg already reflects the
+        choice) but are logged so a "my AI keeps reverting" report has
+        a trail.
         """
         normalized = str(mode or "").strip().lower()
         if normalized not in ("off", "cloud", "local"):
-            return  # ignore garbage
-        # Mutate the live cfg dict so _resolve_provider sees the new
-        # value on the next turn.  ChatController._cfg is a Mapping in
-        # type signature but in practice the runtime cfg is a dict.
+            return
         try:
             self._cfg["opt_ai_mode"] = normalized  # type: ignore[index]
         except Exception:
-            # If the cfg is genuinely immutable, silently degrade —
-            # the user's runtime choice still applies for the next
-            # provider lookup because resolve_provider re-reads cfg
-            # each time.
             pass
-        # Best-effort persistence so the choice survives a restart.
-        # Failures here aren't fatal (the in-memory cfg already
-        # reflects the user's choice), but they were previously
-        # invisible — a disk-full or locked-config.json save error
-        # would mean the mode reset on next launch with no
-        # explanation.  Log so a "my mode keeps reverting" report
-        # has a trail.
         try:
             from config import save_config
             save_config(self._cfg)
@@ -421,13 +448,130 @@ class ChatController(QObject):
             logging.warning(
                 "Chat controller: failed to persist AI mode change: %s", exc,
             )
-        # Surface the change in the status line so the user sees it
-        # took effect.
-        labels = {"off": "Off", "cloud": "Cloud", "local": "Local"}
-        self._sidebar.set_status(
-            f"AI mode: {labels.get(normalized, normalized)}",
-            state="ready",
-        )
+
+    def _picker_target(self) -> "tuple[str, str, list[str], str]":
+        """Resolve which provider the model dropdown reflects.
+
+        Returns ``(provider_id, category, models, current_model, provider)``.  The
+        target is the active provider (``get_active_provider_id``),
+        defaulting to ``local`` when none is set.  For local we only hit
+        the (blocking) HTTP model list after a fast TCP probe says
+        Ollama is up, so this stays cheap when it isn't.
+        """
+        try:
+            from shared.ai.credential_store import (
+                get_active_provider_id,
+                get_provider_credentials,
+            )
+            from shared.ai.provider_registry import get_provider
+        except Exception:
+            return ("local", "local", [], "", None)
+
+        try:
+            pid = get_active_provider_id() or "local"
+        except Exception:
+            pid = "local"
+        provider = get_provider(pid)
+        if provider is None:
+            pid = "local"
+            provider = get_provider("local")
+        if provider is None:
+            return ("local", "local", [], "", None)
+
+        try:
+            creds = get_provider_credentials(pid)
+        except Exception:
+            creds = {}
+        if creds:
+            try:
+                provider.configure(**creds)
+            except Exception:
+                pass
+
+        category = "local" if pid == "local" else "cloud"
+        current = str(creds.get("model", "") or "")
+        models: list[str] = []
+        if category == "local":
+            try:
+                if provider.is_available():
+                    models = list(provider._get_available_models())
+            except Exception:
+                models = []
+            if not current and models:
+                current = models[0]
+        else:
+            try:
+                info = provider.info()
+                models = list(info.available_models or [])
+                if not current:
+                    current = str(
+                        info.default_model or (models[0] if models else "")
+                    )
+            except Exception:
+                models = []
+        return (pid, category, models, current, provider)
+
+    def refresh_model_picker(self) -> None:
+        """Repopulate the chat model dropdown from the active provider.
+
+        Called at construction and whenever the AI Providers dialog
+        reports a change.  Shows ``Off`` + the active provider's models;
+        embedding/non-chat models are already filtered out by the local
+        provider.  Models that won't work right now (Ollama *cloud*
+        models when you aren't signed in) are still listed but flagged
+        disabled + red so they can't be picked until usable.  The
+        selection is ``Off`` when ``opt_ai_mode == "off"``, else the
+        configured model.
+        """
+        try:
+            _pid, category, models, current, provider = self._picker_target()
+        except Exception:
+            return
+        mode = str(self._cfg.get("opt_ai_mode", "cloud") or "cloud").lower()
+        disabled = self._unusable_models(category, models, provider)
+        options: list[tuple[str, str, bool]] = [("", "Off", True)]
+        seen: set[str] = set()
+        for name in models:
+            if name and name not in seen:
+                seen.add(name)
+                if name in disabled:
+                    options.append((name, f"{name}  (needs Ollama sign-in)", False))
+                else:
+                    options.append((name, name, True))
+        current_value = "" if mode == "off" else current
+        if current_value and current_value not in seen:
+            options.append((current_value, current_value, True))
+        try:
+            self._sidebar.set_model_options(options, current_value)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _unusable_models(
+        category: str, models: "list[str]", provider: Any,
+    ) -> "set[str]":
+        """Model names that can't be used right now.
+
+        Today: Ollama *cloud* models when the user isn't signed in (they
+        403).  Detected via the local provider's one-time cached sign-in
+        probe, so a signed-in user keeps their cloud models and we never
+        hide a model on a transient error.
+        """
+        if category != "local" or provider is None:
+            return set()
+        try:
+            from shared.ai.providers.local_provider import _is_cloud_model
+        except Exception:
+            return set()
+        cloud = {m for m in models if _is_cloud_model(m)}
+        if not cloud:
+            return set()
+        try:
+            if provider.cloud_models_usable(list(models)):
+                return set()
+        except Exception:
+            return set()
+        return cloud
 
     @Slot()
     def handle_new_chat(self) -> None:
@@ -456,6 +600,49 @@ class ChatController(QObject):
 
     # ── Disc/session context injection ─────────────────────────────
 
+    @staticmethod
+    def _reconcile_inserted_disc(facts: dict[str, Any]) -> dict[str, Any]:
+        """Drop stale scanned-disc facts when a *different* disc is now
+        inserted.
+
+        ``build_ai_session_facts`` reports the last *scanned* disc
+        (``last_classification`` etc.), which only updates on a scan — not
+        when the user swaps discs.  ``_session_facts`` also surfaces the
+        live drive-bar text (the inserted disc's volume label).  If the
+        scanned disc's label is absent from the drive-bar text, a disc was
+        swapped without re-scanning, so the disc/title facts belong to the
+        *previous* disc.  Drop them and add a note, so the assistant
+        describes the inserted disc honestly instead of naming the old one
+        (the bug a tester hit swapping discs between consecutive rips).
+        """
+        if not isinstance(facts, dict):
+            return facts
+        disc = facts.get("disc")
+        scanned = ""
+        if isinstance(disc, dict):
+            scanned = str(
+                disc.get("disc_title") or disc.get("volume_id") or ""
+            ).strip()
+        drive_bar = str(facts.get("drive_bar") or "").strip()
+        # Need both signals; only act on a clear disagreement.
+        if not scanned or not drive_bar:
+            return facts
+        if scanned.upper() in drive_bar.upper():
+            return facts  # same disc — the scan is current
+        stale_keys = {"disc", "titles", "drive", "scan_issue_summary", "session"}
+        cleaned = {
+            key: value for key, value in facts.items() if key not in stale_keys
+        }
+        cleaned["disc_context_note"] = (
+            f"A disc is inserted (drive shows: {drive_bar}) but it has NOT "
+            "been scanned yet, so its titles are unknown. The "
+            f'previously-scanned disc ("{scanned}") is no longer in the '
+            "drive, so its titles are omitted here. Do NOT describe the "
+            "previous disc as if it is the inserted one — tell the user to "
+            "scan the current disc to see its contents."
+        )
+        return cleaned
+
     def _with_disc_facts(
         self, messages: list[dict[str, str]],
     ) -> list[dict[str, str]]:
@@ -477,6 +664,7 @@ class ChatController(QObject):
             return messages
         if not facts:
             return messages
+        facts = self._reconcile_inserted_disc(facts)
         try:
             facts_json = json.dumps(facts, ensure_ascii=False, default=str)
         except Exception:
@@ -509,27 +697,30 @@ class ChatController(QObject):
         provider: Any = None,
         timeout: float = 20.0,
     ) -> list[dict[str, str]]:
-        """When the user enables the chat's 🌐 Web toggle, search the web
-        (and TMDB, if a key is configured) and prepend the results.
+        """Run a TMDB (and optionally web) lookup and prepend the results.
 
-        The search query is **formulated by the model** from the disc
-        context plus the user's message — NOT the raw chat text.  So a
-        conversational message like "look up the year" becomes a real
-        query like ``Peter Rabbit 2018 film`` using the disc title.
-        (Searching the literal message meant "i enabled web for you try"
-        got searched verbatim and returned junk.)
+        TMDB is **automatic**: whenever a TMDB key is configured it runs
+        on every chat turn, independent of the 🌐 Web toggle — so a user
+        who added their key gets exact titles / years / IDs without
+        flipping anything on.  The keyless DuckDuckGo web search stays
+        behind the Web toggle and is only the backup when TMDB doesn't
+        answer.
 
-        Runs on the chat worker thread, so the (blocking) network calls
-        don't freeze the UI.  Fully fail-safe: disabled toggle, no
-        provider, no query, no results, or any exception all return
-        ``messages`` unchanged.  Lookup modules import lazily.
+        Query choice: with the Web toggle ON the model formulates a
+        precise query (reused for TMDB).  With it OFF (TMDB-only / auto)
+        we use the user's own words directly — no model call — so a slow
+        or timing-out local model can never block the TMDB lookup.
+
+        Runs on the chat worker thread (blocking network calls don't
+        freeze the UI).  Fully fail-safe: nothing configured, no message,
+        no results, or any exception all return ``messages`` unchanged.
         """
         try:
-            if not bool(self._cfg.get("opt_ai_web_search", False)):
-                return messages
+            web_on = bool(self._cfg.get("opt_ai_web_search", False))
+            tmdb_key = str(self._cfg.get("opt_tmdb_api_key", "") or "").strip()
         except Exception:
             return messages
-        if provider is None:
+        if not web_on and not tmdb_key:
             return messages
 
         user_text = ""
@@ -540,9 +731,17 @@ class ChatController(QObject):
         if not user_text:
             return messages
 
-        query = self._formulate_search_query(provider, user_text, timeout)
-        if not query:
-            return messages
+        # Precise model-formulated query only when web search is on (it
+        # needs precision, and the model also decides whether a search is
+        # warranted at all).  TMDB-auto just uses the user's own words.
+        formulated = ""
+        if web_on and provider is not None:
+            try:
+                formulated = self._formulate_search_query(
+                    provider, user_text, timeout,
+                ) or ""
+            except Exception:
+                formulated = ""
 
         from shared.ai.web_search import (
             search_web,
@@ -554,40 +753,45 @@ class ChatController(QObject):
         )
 
         blocks: list[str] = []
-        # TMDB first — authoritative titles/IDs when a key is set.
-        try:
-            tmdb_key = str(self._cfg.get("opt_tmdb_api_key", "") or "").strip()
-            if tmdb_key:
-                tmdb_results, _status = search_tmdb(query, tmdb_key)
+        # TMDB first — the authoritative source for titles/IDs/years.
+        # Use the model's query if it made one, else the user's message.
+        tmdb_answered = False
+        tmdb_query = formulated or user_text
+        if tmdb_key and tmdb_query:
+            try:
+                tmdb_results, _status = search_tmdb(tmdb_query, tmdb_key)
                 if tmdb_results:
-                    blocks.append(_tmdb_fmt(query, tmdb_results))
-        except Exception:
-            pass
-        # Keyless web search — always when the toggle is on.
-        try:
-            web_results, _status = search_web(query)
-            if web_results:
-                blocks.append(_web_fmt(query, web_results))
-        except Exception:
-            pass
+                    blocks.append(_tmdb_fmt(tmdb_query, tmdb_results))
+                    tmdb_answered = True
+            except Exception:
+                pass
+        # Keyless web search: the BACKUP, and only when the Web toggle is
+        # on.  Uses the model-formulated query so conversational messages
+        # aren't searched verbatim.
+        if web_on and not tmdb_answered and formulated:
+            try:
+                web_results, _status = search_web(formulated)
+                if web_results:
+                    blocks.append(_web_fmt(formulated, web_results))
+            except Exception:
+                pass
 
         if not blocks:
             return messages
+        searched_for = tmdb_query if tmdb_answered else (formulated or tmdb_query)
         system = {
             "role": "system",
             "content": (
-                f'The user enabled web lookup.  I searched for: "{query}".  '
-                "Live results are below - use them to answer and cite "
-                "sources by URL; if they don't cover it, say so rather than "
-                "guessing.\n"
+                f'I looked up "{searched_for}" for the user (TMDB / web).  '
+                "Live results are below - use them to answer; if they don't "
+                "cover it, say so rather than guessing.  You DO have these "
+                "results, so never claim you can't access an API.\n"
                 "TMDB IDs: only state a TMDB id if it appears in a "
                 "TMDB_RESULTS block above.  An IMDb id (starts with 'tt', "
                 "e.g. tt5117670) is NOT a TMDB id - never present one as a "
                 "TMDB id.  If there is no TMDB_RESULTS block then there is "
-                "no TMDB access (no API key) - do NOT claim to use the TMDB "
-                "API and do NOT guess an id; tell the user the exact TMDB "
-                "id needs a free TMDB key in Settings -> AI -> Web lookup."
-                "\n\n" + "\n\n".join(blocks)
+                "no TMDB match - do NOT guess an id.\n\n"
+                + "\n\n".join(blocks)
             ),
         }
         return [system, *messages]
@@ -612,6 +816,16 @@ class ChatController(QObject):
         if self._facts_provider is not None:
             try:
                 facts = self._facts_provider() or {}
+                # Same disc-swap reconciliation as the disc-facts path, so
+                # the query is grounded in the disc CURRENTLY in the drive,
+                # not a held/stale one — otherwise search drifts back to a
+                # previous disc across back-to-back rips.
+                facts = self._reconcile_inserted_disc(facts)
+                if isinstance(facts, dict):
+                    # The optical drive's make/model (e.g. "BD-RE BUFFALO")
+                    # is hardware, never the search subject — drop it so a
+                    # vague query can't latch onto it instead of the movie.
+                    facts = {k: v for k, v in facts.items() if k != "drive"}
                 if facts:
                     facts_json = json.dumps(
                         facts, ensure_ascii=False, default=str,
@@ -622,13 +836,23 @@ class ChatController(QObject):
             {
                 "role": "system",
                 "content": (
-                    "You write web search queries.  Given the disc context "
-                    "and the user's request, output ONE short query (about "
-                    "3-8 words) that best answers it.  Prefer the actual "
-                    "movie/show title from the disc context over the user's "
-                    "literal words.  Output ONLY the query - no quotes, no "
-                    "label, no explanation.  If a web search wouldn't help, "
-                    "output exactly: NONE"
+                    "You write a web search query about the MOVIE/SHOW on "
+                    "the disc currently in the drive.  Anchor the query on "
+                    "the disc's title (its disc_title / volume label, e.g. "
+                    "'Spirit') - that is the movie's name.  NEVER use the "
+                    "optical drive's make/model (e.g. 'BD-RE BUFFALO Optical "
+                    "Drive') - that is hardware, not the movie.  Output ONE "
+                    "short query (about 3-8 words), ONLY the query - no "
+                    "quotes, no label, no explanation.  Requests to identify "
+                    "the disc or get its year / title / id / metadata - "
+                    "INCLUDING 'use the api', 'check the api', 'look it up' - "
+                    "are lookups: output the disc's title as the query.  "
+                    "Output exactly NONE only when the disc context names no "
+                    "movie/show, or the message clearly isn't about "
+                    "identifying the disc (e.g. 'forget that', 'thanks', "
+                    "'look at the log').  NEVER invent a topic that isn't in "
+                    "the disc context - no streaming services, no titles "
+                    "from earlier in the chat."
                 ),
             },
             {
@@ -1010,6 +1234,119 @@ class ChatController(QObject):
         self._sidebar.set_status("Error", state="error")
         self._busy = False
         self._sidebar.focus_input()
+
+    # ── Auto disc identification (TMDB on drive reload) ────────────
+
+    def reset_disc_identify(self) -> None:
+        """Forget the last auto-identified disc so the next identify
+        fires even for the same disc — used by an explicit drive reload
+        (the Reload button by the drive bar)."""
+        self._last_identified_disc = ""
+
+    def _log_disc(self, msg: str) -> None:
+        """Diagnostic line to the main window log pane (GUI thread only)."""
+        try:
+            parent = self.parent()
+            if parent is not None and hasattr(parent, "append_log"):
+                parent.append_log(f"[disc-id] {msg}")
+        except Exception:
+            pass
+
+    def identify_disc_async(self, disc_name: str) -> None:
+        """Auto-identify a freshly-loaded disc via TMDB and post the
+        result to the chat.  Called by the drive handler when the drive
+        reloads.  No-op without a TMDB key or disc name; deduped so the
+        same disc isn't re-identified on every refresh.  The network call
+        runs on a worker thread and the post lands on the GUI thread via
+        ``disc_identified`` — it never touches the user-turn busy flag or
+        history.
+        """
+        name = str(disc_name or "").strip()
+        if not name:
+            self._log_disc("skip: empty disc name")
+            return
+        if name == self._last_identified_disc:
+            self._log_disc(f"skip: already identified {name!r}")
+            return
+        tmdb_key = str(self._cfg.get("opt_tmdb_api_key", "") or "").strip()
+        if not tmdb_key:
+            self._log_disc("skip: no TMDB key configured")
+            return
+        self._last_identified_disc = name
+        self._log_disc(f"looking up {name!r} via TMDB...")
+        threading.Thread(
+            target=self._identify_disc_worker,
+            args=(name, tmdb_key),
+            daemon=True,
+            name="disc-identify",
+        ).start()
+
+    @staticmethod
+    def _clean_disc_label(disc_name: str) -> str:
+        """Make a volume label more TMDB-searchable: ``_ - . +`` become
+        spaces and runs of whitespace collapse.  So
+        ``SPONGEBOB_SPONGE_OUT_OF_WATER`` -> ``SPONGEBOB SPONGE OUT OF
+        WATER``.  Cryptic labels (e.g. ``L3M0NNW1``) just won't match,
+        which is fine — auto-identify is best-effort."""
+        s = str(disc_name or "")
+        for ch in ("_", "-", ".", "+"):
+            s = s.replace(ch, " ")
+        return " ".join(s.split()).strip()
+
+    def _identify_disc_worker(self, disc_name: str, tmdb_key: str) -> None:
+        query = self._clean_disc_label(disc_name) or disc_name
+        try:
+            from shared.ai.tmdb_lookup import search_tmdb
+            results, _status = search_tmdb(query, tmdb_key)
+        except Exception as exc:
+            # Errors and misses go to the Live Log only (chat_md="") so the
+            # transcript isn't spammed on every reload of an unmatchable
+            # disc.  Only a positive identification posts to the chat.
+            self.disc_identified.emit(
+                "", f'Disc auto-identify error for "{disc_name}": {exc}'
+            )
+            return
+        if not results:
+            self.disc_identified.emit(
+                "",
+                f'Disc "{disc_name}" — no TMDB match (searched "{query}"). '
+                f"Type the title in chat to look it up.",
+            )
+            return
+        r = results[0]
+        kind = "Movie" if r.media_type == "movie" else "TV"
+        year = f" ({r.year})" if r.year else ""
+        chat_md = (
+            f'**Auto-identified the inserted disc** ("{disc_name}") via '
+            f"TMDB:\n- Title: {r.title}{year}\n- Type: {kind}\n"
+            f"- TMDB ID: {r.media_type}/{r.tmdb_id}"
+        )
+        log_line = f"Disc identified via TMDB: {r.title}{year}"
+        self.disc_identified.emit(chat_md, log_line)
+
+    @Slot(str, str)
+    def _on_disc_identified(self, chat_md: str, log_line: str) -> None:
+        """Deliver an auto-identification result on the GUI thread.
+
+        ``log_line`` always goes to the main-window Live Log — visible
+        even when the chat sidebar is hidden (which it is by default), so
+        the user actually sees that identification happened.  ``chat_md``
+        is the richer transcript note, posted only on a positive match
+        ("" for misses/errors) so the chat isn't spammed.  Never touches
+        the user-turn busy flag or history.
+        """
+        if log_line:
+            try:
+                parent = self.parent()
+                if parent is not None and hasattr(parent, "append_log"):
+                    parent.append_log(log_line)
+            except Exception:
+                pass
+        if chat_md:
+            try:
+                self._sidebar.append_assistant_message(chat_md)
+            except Exception:
+                pass
 
     # ── Welcome message (called by app.py once on construction) ───
 

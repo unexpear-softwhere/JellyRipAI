@@ -159,6 +159,16 @@ class DriveHandler(QObject):
 
     def _on_refresh_click(self) -> None:
         self._window.append_log("Scanning for drives...")
+        # Explicit reload → re-identify the current disc even if it's the
+        # same one (clear the chat controller's dedup before the scan, so
+        # populate_combo's auto-identify always fires on a manual reload).
+        controller = getattr(self._window, "_chat_controller", None)
+        reset = getattr(controller, "reset_disc_identify", None)
+        if callable(reset):
+            try:
+                reset()
+            except Exception:
+                pass
         self.refresh_async()
 
     def refresh_async(self) -> threading.Thread:
@@ -242,6 +252,9 @@ class DriveHandler(QObject):
         finally:
             combo.blockSignals(False)
 
+        # Drive reloaded — best-effort auto-identify the inserted disc.
+        self._maybe_identify_current_disc()
+
     def refresh_labels(self) -> None:
         """Re-render the combo's current labels using the current cfg.
 
@@ -290,6 +303,47 @@ class DriveHandler(QObject):
             include_state_glyph=bool(self._cfg.get("opt_drive_state_glyph", True)),
         )
         self._window.append_log(f"Drive selected: {label}")
+        self._maybe_identify_current_disc()
+
+    # ------------------------------------------------------------------
+    # Auto disc identification (TMDB on drive reload)
+    # ------------------------------------------------------------------
+
+    def _maybe_identify_current_disc(self) -> None:
+        """When the drive reloads or a drive is selected, ask the chat
+        controller to auto-identify the inserted disc via TMDB.  Fully
+        guarded + best-effort: no controller, no disc, or no TMDB key all
+        just no-op (the controller dedupes + skips without a key)."""
+        try:
+            combo = self._window.drive_combo
+            idx = combo.currentIndex()
+            if idx < 0 or idx >= len(self.drive_options):
+                self._window.append_log(
+                    f"[disc-id] reload: no drive selected (idx={idx})"
+                )
+                return
+            disc_name = str(
+                getattr(self.drive_options[idx], "disc_name", "") or ""
+            ).strip()
+            controller = getattr(self._window, "_chat_controller", None)
+            self._window.append_log(
+                f"[disc-id] reload: disc_name={disc_name!r}, "
+                f"controller={'present' if controller else 'MISSING'}"
+            )
+            if not disc_name:
+                self._window.append_log(
+                    "[disc-id] reload: the drive reports no disc label, so "
+                    "there's nothing to look up (insert a disc + reload)."
+                )
+                return
+            ident = getattr(controller, "identify_disc_async", None)
+            if callable(ident):
+                ident(disc_name)
+        except Exception as exc:
+            try:
+                self._window.append_log(f"[disc-id] reload error: {exc}")
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Default scanner — lazy-imports the engine helpers

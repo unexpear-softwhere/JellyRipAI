@@ -44,13 +44,14 @@ def _theme_tag_colors(theme_name: str) -> dict[str, str]:
     """Pull the active theme's prompt/answer colors so the log pane
     can apply them inline via ``QTextCharFormat``.
 
-    Falls back to the ``dark_github`` defaults if the configured
-    theme name doesn't resolve.
+    Falls back to the ``basic_dark`` defaults if the configured theme
+    name doesn't resolve.  Handles custom (user-made) themes too.
     """
-    theme = THEMES_BY_ID.get(theme_name) or THEMES_BY_ID["dark_github"]
+    from gui_qt.theme import theme_tokens
+    tokens = theme_tokens(theme_name) or THEMES_BY_ID["basic_dark"].tokens
     return {
-        "prompt": theme.tokens["promptFg"],
-        "answer": theme.tokens["answerFg"],
+        "prompt": tokens["promptFg"],
+        "answer": tokens["answerFg"],
     }
 
 
@@ -93,7 +94,13 @@ def run_qt_app(cfg: dict, *, splash: Any = None) -> int:
     """
     app = QApplication.instance() or QApplication(sys.argv)
 
-    theme_name = cfg.get("opt_pyside6_theme", "dark_github")
+    theme_name = cfg.get("opt_pyside6_theme", "basic_dark")
+    # A theme id saved from the old multi-theme set (or a since-deleted
+    # custom theme) no longer resolves — fall back to a basic so the
+    # app never launches unstyled.
+    from gui_qt.theme import list_themes
+    if theme_name not in list_themes():
+        theme_name = "basic_dark"
     try:
         load_theme(app, theme_name)
     except FileNotFoundError as e:

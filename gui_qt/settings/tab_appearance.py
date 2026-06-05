@@ -42,9 +42,11 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -70,7 +72,7 @@ def normalize_theme_choice(
 
     * If ``cfg_value`` is in ``available_themes``, returns it.
     * If ``cfg_value`` is missing or unknown, falls back to
-      ``"dark_github"`` if available, otherwise the first entry.
+      ``"basic_dark"`` if available, otherwise the first entry.
     * If ``available_themes`` is empty, returns ``""`` (defensive —
       caller should hide the tab in this case).
     """
@@ -78,8 +80,8 @@ def normalize_theme_choice(
         return ""
     if cfg_value and cfg_value in available_themes:
         return cfg_value
-    if "dark_github" in available_themes:
-        return "dark_github"
+    if "basic_dark" in available_themes:
+        return "basic_dark"
     return available_themes[0]
 
 
@@ -180,6 +182,25 @@ class AppearanceTab(QWidget):
         self._notes_label.setWordWrap(True)
         self._notes_label.setMinimumHeight(48)
         outer.addWidget(self._notes_label)
+
+        # Theme Maker entry points: create a custom theme, edit the
+        # selected one, or import a shared .json theme into your library.
+        maker_row = QHBoxLayout()
+        maker_row.setSpacing(6)
+        _new_btn = QPushButton("New Theme…")
+        _new_btn.setObjectName("themeMakerNewButton")
+        _new_btn.clicked.connect(lambda: self._open_maker(from_selected=False))
+        _edit_btn = QPushButton("Edit Selected…")
+        _edit_btn.setObjectName("themeMakerEditButton")
+        _edit_btn.clicked.connect(lambda: self._open_maker(from_selected=True))
+        _import_btn = QPushButton("Import…")
+        _import_btn.setObjectName("themeImportButton")
+        _import_btn.clicked.connect(self._import_theme)
+        maker_row.addWidget(_new_btn)
+        maker_row.addWidget(_edit_btn)
+        maker_row.addWidget(_import_btn)
+        maker_row.addStretch(1)
+        outer.addLayout(maker_row)
 
         # Connect AFTER populate so the initial setCurrentItem during
         # populate doesn't fire a redundant load_theme (the current
@@ -314,26 +335,57 @@ class AppearanceTab(QWidget):
     # ------------------------------------------------------------------
 
     def _populate_list(self) -> None:
-        available = self._list_themes()
         chosen = normalize_theme_choice(
-            self._cfg.get("opt_pyside6_theme"),
-            available,
+            self._cfg.get("opt_pyside6_theme"), self._list_themes(),
         )
-        for theme_id in theme_ids():
-            if theme_id not in available:
-                continue
-            item = QListWidgetItem(format_theme_label(theme_id))
-            item.setData(Qt.ItemDataRole.UserRole, theme_id)
-            self._list.addItem(item)
-            if theme_id == chosen:
-                self._list.setCurrentItem(item)
-        for theme_id in available:
-            if theme_id not in THEMES_BY_ID:
-                item = QListWidgetItem(format_theme_label(theme_id))
-                item.setData(Qt.ItemDataRole.UserRole, theme_id)
-                self._list.addItem(item)
-                if theme_id == chosen:
-                    self._list.setCurrentItem(item)
+        self._repopulate_list(select_id=chosen)
+
+    def _add_theme_item(self, theme_id: str) -> "QListWidgetItem":
+        """Add one theme row; custom themes show their display name."""
+        label = format_theme_label(theme_id)
+        if theme_id not in THEMES_BY_ID:
+            try:
+                from gui_qt import custom_themes
+                ct = custom_themes.get_custom(theme_id)
+                if ct and ct.get("name"):
+                    label = f"{ct['name']} — {ct.get('family', '')} (custom)"
+            except Exception:
+                pass
+        item = QListWidgetItem(label)
+        item.setData(Qt.ItemDataRole.UserRole, theme_id)
+        self._list.addItem(item)
+        return item
+
+    def _select_theme_id(self, theme_id: str) -> None:
+        for i in range(self._list.count()):
+            it = self._list.item(i)
+            if it is not None and it.data(Qt.ItemDataRole.UserRole) == theme_id:
+                self._list.setCurrentItem(it)
+                return
+
+    def _repopulate_list(self, select_id: str | None = None) -> None:
+        """Rebuild the list (built-ins first, then custom) and select
+        ``select_id``.  Signals are blocked so rebuilding never fires a
+        spurious live-preview load."""
+        self._list.blockSignals(True)
+        try:
+            self._list.clear()
+            available = self._list_themes()
+            for theme_id in theme_ids():
+                if theme_id in available:
+                    self._add_theme_item(theme_id)
+            for theme_id in available:
+                if theme_id not in THEMES_BY_ID:
+                    self._add_theme_item(theme_id)
+            if select_id:
+                self._select_theme_id(select_id)
+        finally:
+            self._list.blockSignals(False)
+        # ``_notes_label`` doesn't exist yet on the first populate (the
+        # list is built before the notes label in __init__); the
+        # explicit call at the end of __init__ covers that first pass.
+        if getattr(self, "_notes_label", None) is not None:
+            self._refresh_notes_for_current()
 
     def _on_theme_changed(self, *_args: Any) -> None:
         """Live preview only — swap the QSS at runtime.
@@ -369,6 +421,67 @@ class AppearanceTab(QWidget):
         if item is None:
             return ""
         return item.data(Qt.ItemDataRole.UserRole) or ""
+
+    # ------------------------------------------------------------------
+    # Theme Maker + import
+    # ------------------------------------------------------------------
+
+    def _open_maker(self, *, from_selected: bool) -> None:
+        """Open the Theme Maker, seeded from the selected theme (Edit)
+        or from Basic Dark (New).  On save, the new custom theme is
+        added to the list, selected, and applied."""
+        from gui_qt.dialogs.theme_maker import open_theme_maker
+        from gui_qt.theme import theme_meta, theme_tokens
+
+        base_id = self.selected_theme_id() if from_selected else "basic_dark"
+        tokens = (
+            theme_tokens(base_id)
+            or theme_tokens("basic_dark")
+            or dict(THEMES_BY_ID["basic_dark"].tokens)
+        )
+        name, family, _notes = theme_meta(base_id)
+        if not from_selected:
+            name = "My Theme"
+
+        def _on_saved(theme_id: str) -> None:
+            self._repopulate_list(select_id=theme_id)
+            try:
+                self._load_theme(theme_id)
+            except Exception:
+                pass
+
+        open_theme_maker(
+            self,
+            base_tokens=tokens,
+            base_name=name,
+            base_family=family,
+            on_saved=_on_saved,
+        )
+
+    def _import_theme(self) -> None:
+        """Import a shared ``.json`` theme into the user's library."""
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        from gui_qt import custom_themes
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import theme", "",
+            "JellyRip theme (*.json);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            theme = custom_themes.import_theme(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Couldn't import theme", str(exc))
+            return
+        theme_id = str(theme.get("id", ""))
+        self._repopulate_list(select_id=theme_id)
+        try:
+            if theme_id:
+                self._load_theme(theme_id)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Live-apply handlers — wired to runtime state via self._window

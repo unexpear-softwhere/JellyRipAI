@@ -157,10 +157,17 @@ class UtilityHandler(QObject):
             return
 
         def _on_change() -> None:
-            # Today: just append a log line so the user sees the
-            # provider state changed.  Future: emit a signal the
-            # AI mode indicator can listen on.
             self._window.append_log("AI provider configuration updated.")
+            # Refresh the chat model dropdown so a provider/model change
+            # made in this dialog shows up immediately in the sidebar
+            # picker (active provider + its usable models).
+            controller = getattr(self._window, "_chat_controller", None)
+            refresh = getattr(controller, "refresh_model_picker", None)
+            if callable(refresh):
+                try:
+                    refresh()
+                except Exception:
+                    pass
 
         open_ai_provider_dialog(self._window, on_change=_on_change)
 

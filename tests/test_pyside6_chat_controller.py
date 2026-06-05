@@ -781,20 +781,23 @@ def test_replay_failure_does_not_break_chat(sidebar, cfg, monkeypatch):
 # ─── AI mode switcher (added 2026-05-05) ───────────────────────────
 
 
-def test_controller_seeds_sidebar_mode_from_cfg(sidebar, cfg):
-    """The controller pushes ``cfg['opt_ai_mode']`` into the sidebar's
-    mode combo at construction so the picker reflects the saved
-    value without re-firing ``mode_changed``."""
-    cfg["opt_ai_mode"] = "local"
-    controller = ChatController(sidebar=sidebar, cfg=cfg)
-    assert sidebar.current_mode() == "local"
+def test_controller_seeds_sidebar_model_picker_off(sidebar, cfg):
+    """With opt_ai_mode='off', the controller seeds the model picker
+    with Off selected at construction — and seeding must not re-fire
+    ``model_selected`` back at the controller."""
+    cfg["opt_ai_mode"] = "off"
+    fired: list[str] = []
+    sidebar.model_selected.connect(fired.append)
+    ChatController(sidebar=sidebar, cfg=cfg)
+    assert sidebar.current_model_choice() == ""  # Off
+    assert fired == []
 
 
-def test_handle_mode_changed_writes_cfg_and_persists(
+def test_handle_model_selected_off_writes_cfg_and_persists(
     sidebar, cfg, monkeypatch,
 ):
-    """User flips the picker → controller writes the new value into
-    cfg + calls ``config.save_config`` so it survives a restart."""
+    """Picking 'Off' writes opt_ai_mode='off' + persists via
+    ``config.save_config`` so it survives a restart."""
     saved: list[dict] = []
     import config
     monkeypatch.setattr(
@@ -802,30 +805,51 @@ def test_handle_mode_changed_writes_cfg_and_persists(
     )
 
     controller = ChatController(sidebar=sidebar, cfg=cfg)
-    controller.handle_mode_changed("local")
+    controller.handle_model_selected("")
 
-    assert cfg["opt_ai_mode"] == "local"
-    assert len(saved) == 1
-    assert saved[0]["opt_ai_mode"] == "local"
+    assert cfg["opt_ai_mode"] == "off"
+    assert saved and saved[-1]["opt_ai_mode"] == "off"
 
 
-def test_handle_mode_changed_ignores_invalid_values(sidebar, cfg, monkeypatch):
-    """Garbage values shouldn't corrupt cfg."""
-    cfg["opt_ai_mode"] = "cloud"
+def test_handle_model_selected_model_sets_mode_and_persists(
+    sidebar, cfg, monkeypatch,
+):
+    """Picking a model writes it onto the active provider, makes it
+    active, and flips opt_ai_mode to the provider's category."""
     import config
     monkeypatch.setattr(config, "save_config", lambda c: None)
 
     controller = ChatController(sidebar=sidebar, cfg=cfg)
-    controller.handle_mode_changed("nonsense")
+    # Fake the target so the test never touches real on-disk creds.
+    monkeypatch.setattr(
+        controller,
+        "_picker_target",
+        lambda: ("local", "local", ["qwen3.5:cloud"], "qwen3.5:cloud", None),
+    )
+    import shared.ai.credential_store as cs
+    calls: dict = {}
+    monkeypatch.setattr(
+        cs, "set_provider_credentials",
+        lambda pid, **kw: calls.update({"pid": pid, **kw}),
+    )
+    monkeypatch.setattr(
+        cs, "set_active_provider_id",
+        lambda pid: calls.update({"active": pid}),
+    )
 
-    assert cfg["opt_ai_mode"] == "cloud"  # unchanged
+    controller.handle_model_selected("qwen3.5:cloud")
+
+    assert cfg["opt_ai_mode"] == "local"
+    assert calls.get("pid") == "local"
+    assert calls.get("model") == "qwen3.5:cloud"
+    assert calls.get("active") == "local"
 
 
-def test_handle_mode_changed_save_failure_does_not_break_chat(
+def test_handle_model_selected_off_save_failure_does_not_break(
     sidebar, cfg, monkeypatch,
 ):
-    """If ``save_config`` raises, the cfg mutation still applies and
-    the chat path keeps working — persistence is best-effort."""
+    """If ``save_config`` raises, the cfg mutation still applies —
+    persistence is best-effort."""
     def boom(_c):
         raise OSError("config write failed")
 
@@ -833,58 +857,187 @@ def test_handle_mode_changed_save_failure_does_not_break_chat(
     monkeypatch.setattr(config, "save_config", boom)
 
     controller = ChatController(sidebar=sidebar, cfg=cfg)
-    controller.handle_mode_changed("local")
+    controller.handle_model_selected("")
 
     # Mutation applied even though save failed.
-    assert cfg["opt_ai_mode"] == "local"
+    assert cfg["opt_ai_mode"] == "off"
 
 
-def test_mode_change_takes_effect_on_next_resolve(sidebar, cfg, monkeypatch):
-    """After ``handle_mode_changed("off")``, the next provider
-    resolution returns ``("off", ...)`` regardless of how the
-    controller was originally configured."""
+def test_off_takes_effect_on_next_resolve(sidebar, cfg, monkeypatch):
+    """After picking Off, the next provider resolution returns
+    ``("off", ...)`` regardless of the original configuration."""
     cfg["opt_ai_mode"] = "cloud"
     import config
     monkeypatch.setattr(config, "save_config", lambda c: None)
 
     controller = ChatController(sidebar=sidebar, cfg=cfg)
-    # Resolve once with cloud — confirm baseline
-    provider, label, _t = controller._resolve_provider()
-    # (May or may not find a real cloud provider in the test env;
-    # the label is what we care about.)
-
-    controller.handle_mode_changed("off")
+    controller.handle_model_selected("")
     provider, label, _t = controller._resolve_provider()
     assert provider is None
     assert label == "off"
 
 
-def test_sidebar_set_mode_does_not_emit_mode_changed(sidebar, qtbot):
-    """``set_mode`` is the controller→sidebar seed path — it must NOT
-    fire ``mode_changed`` back at the controller (would cause an
-    infinite save loop on construction)."""
+def test_sidebar_set_model_options_does_not_emit(sidebar, qtbot):
+    """``set_model_options`` is the controller→sidebar seed path — it
+    must NOT fire ``model_selected`` back at the controller (would
+    cause a save loop on construction)."""
     fired: list[str] = []
-    sidebar.mode_changed.connect(fired.append)
+    sidebar.model_selected.connect(fired.append)
 
-    sidebar.set_mode("local")
-    sidebar.set_mode("off")
+    sidebar.set_model_options([("", "Off"), ("m1", "m1")], "m1")
+    sidebar.set_model_options([("", "Off"), ("m2", "m2")], "")
 
     assert fired == []
-    assert sidebar.current_mode() == "off"
+    assert sidebar.current_model_choice() == ""
 
 
-def test_sidebar_user_changing_combo_emits_mode_changed(sidebar, qtbot):
-    """When the USER clicks a combo entry, ``mode_changed`` fires.
-    Distinguishes user-initiated changes from controller-initiated
-    seeds."""
+def test_sidebar_user_changing_model_combo_emits(sidebar, qtbot):
+    """When the USER changes the model combo, ``model_selected`` fires
+    with the chosen value.  Distinguishes user changes from seeds."""
     fired: list[str] = []
-    sidebar.mode_changed.connect(fired.append)
+    sidebar.model_selected.connect(fired.append)
 
-    sidebar.set_mode("cloud")  # baseline (no fire)
+    sidebar.set_model_options([("", "Off"), ("m1", "m1")], "")  # baseline (no fire)
     # Now simulate a user click via direct index change.
-    sidebar._mode_combo.setCurrentIndex(2)  # "local"
+    sidebar._model_combo.setCurrentIndex(1)  # "m1"
 
-    assert fired == ["local"]
+    assert fired == ["m1"]
+
+
+def test_sidebar_disabled_option_is_unselectable(sidebar, qtbot):
+    """A model marked enabled=False (e.g. a cloud model with no Ollama
+    sign-in) is greyed out and the combo item reports itself disabled,
+    while usable models stay enabled."""
+    sidebar.set_model_options(
+        [
+            ("", "Off", True),
+            ("qwen3.5:cloud", "qwen3.5:cloud  (needs Ollama sign-in)", False),
+            ("llama3.1:8b", "llama3.1:8b", True),
+        ],
+        "",
+    )
+    model = sidebar._model_combo.model()
+    assert model.item(1).isEnabled() is False  # cloud model: disabled
+    assert model.item(2).isEnabled() is True   # local model: usable
+
+
+def test_tmdb_auto_runs_with_key_even_when_web_off(sidebar, cfg, monkeypatch):
+    """TMDB-auto: a configured key triggers a TMDB lookup every turn even
+    with the 🌐 Web toggle off, using the user's raw message (no model
+    call) so a slow local model can't block it."""
+    cfg["opt_ai_web_search"] = False
+    cfg["opt_tmdb_api_key"] = "a" * 32
+    controller = ChatController(sidebar=sidebar, cfg=cfg)
+
+    import shared.ai.tmdb_lookup as tl
+    from shared.ai.tmdb_lookup import TMDBResult
+    seen: dict = {}
+
+    def fake_search(query, key, **kw):
+        seen["query"] = query
+        return (
+            [TMDBResult("movie", 12345,
+                        "The Little Mermaid: Ariel's Beginning", "2008", "")],
+            "",
+        )
+
+    monkeypatch.setattr(tl, "search_tmdb", fake_search)
+
+    msgs = [{"role": "user", "content": "the Little Mermaid ariels beginning"}]
+    out = controller._with_web_context(msgs, provider=None, timeout=5.0)
+
+    # Queried with the raw message — no provider/model call needed.
+    assert seen.get("query") == "the Little Mermaid ariels beginning"
+    # A system block carrying the TMDB result was prepended.
+    assert len(out) == 2
+    assert "TMDB_RESULTS" in out[0]["content"]
+
+
+def test_no_lookup_when_web_off_and_no_tmdb_key(sidebar, cfg, monkeypatch):
+    """Web off + no key → nothing is looked up; messages pass through
+    untouched (TMDB-auto is only for key-holders)."""
+    cfg["opt_ai_web_search"] = False
+    cfg.pop("opt_tmdb_api_key", None)
+    controller = ChatController(sidebar=sidebar, cfg=cfg)
+
+    import shared.ai.tmdb_lookup as tl
+
+    def _boom(*a, **k):
+        raise AssertionError("must not search TMDB without a key")
+
+    monkeypatch.setattr(tl, "search_tmdb", _boom)
+    msgs = [{"role": "user", "content": "the Little Mermaid"}]
+    assert controller._with_web_context(msgs, provider=None) == msgs
+
+
+def test_clean_disc_label_makes_volume_labels_searchable():
+    assert (
+        ChatController._clean_disc_label("SPONGEBOB_SPONGE_OUT_OF_WATER")
+        == "SPONGEBOB SPONGE OUT OF WATER"
+    )
+    assert ChatController._clean_disc_label("SHREK") == "SHREK"
+    assert ChatController._clean_disc_label("toy-story.2") == "toy story 2"
+
+
+def test_identify_disc_worker_emits_real_tmdb_id(sidebar, cfg, monkeypatch):
+    """Auto-identify posts a chat note with the real TMDB id (movie/808),
+    NOT an IMDb tt-id, when TMDB matches the disc label — plus a concise
+    Live-Log line so the result is visible with the chat hidden."""
+    controller = ChatController(sidebar=sidebar, cfg=cfg)
+
+    import shared.ai.tmdb_lookup as tl
+    from shared.ai.tmdb_lookup import TMDBResult
+    monkeypatch.setattr(
+        tl, "search_tmdb",
+        lambda q, k, **kw: ([TMDBResult("movie", 808, "Shrek", "2001", "")], ""),
+    )
+
+    posted: list = []
+    controller.disc_identified.connect(lambda md, log: posted.append((md, log)))
+    controller._identify_disc_worker("SHREK", "key123")
+
+    assert len(posted) == 1
+    chat_md, log_line = posted[0]
+    assert "Shrek" in chat_md
+    assert "movie/808" in chat_md
+    assert "Shrek" in log_line
+
+
+def test_identify_disc_worker_miss_is_log_only(sidebar, cfg, monkeypatch):
+    """A TMDB miss posts nothing to the chat (chat_md="") but still emits
+    a Live-Log line, so an unmatchable disc doesn't spam the transcript on
+    every reload yet the user still sees the attempt."""
+    controller = ChatController(sidebar=sidebar, cfg=cfg)
+
+    import shared.ai.tmdb_lookup as tl
+    monkeypatch.setattr(
+        tl, "search_tmdb", lambda q, k, **kw: ([], "no results"),
+    )
+
+    posted: list = []
+    controller.disc_identified.connect(lambda md, log: posted.append((md, log)))
+    controller._identify_disc_worker("BUGSLIFE", "key123")
+
+    assert len(posted) == 1
+    chat_md, log_line = posted[0]
+    assert chat_md == ""
+    assert "no TMDB match" in log_line
+
+
+def test_identify_disc_async_skips_without_key(sidebar, cfg, monkeypatch):
+    """No TMDB key → no lookup and dedup stays unset (returned early)."""
+    cfg.pop("opt_tmdb_api_key", None)
+    controller = ChatController(sidebar=sidebar, cfg=cfg)
+
+    import shared.ai.tmdb_lookup as tl
+    monkeypatch.setattr(
+        tl, "search_tmdb",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("must not look up without a key")
+        ),
+    )
+    controller.identify_disc_async("SHREK")
+    assert controller._last_identified_disc == ""
 
 
 def test_main_window_get_chat_ui_snapshot_returns_dict(qtbot):

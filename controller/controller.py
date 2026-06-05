@@ -493,9 +493,13 @@ class RipperController(LegacyControllerMixin):
         pipeline_step = str(
             getattr(self.diagnostics, "_pipeline_step", "") or ""
         ).strip()
+        # Only the CURRENT session's scan feeds the chat's disc facts —
+        # never the persisted ``last_disc_memory`` (which is read from disk
+        # on launch and would surface a finished/previous disc as if it
+        # were the one inserted now; it survived even a relaunch).
         disc_record = cast(
             Mapping[str, Any] | None,
-            self.engine.current_disc_memory or self.engine.last_disc_memory,
+            self.engine.current_disc_memory,
         )
         session_info = self._extract_same_disc_session_info(disc_record or {})
 
