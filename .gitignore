@@ -45,6 +45,11 @@ Thumbs.db
 
 # Config
 config.json
+# AI provider credential store — normally lives in %APPDATA%, but it
+# can hold PLAINTEXT API keys when DPAPI encryption is unavailable,
+# and a misconfigured (empty) APPDATA resolves the profile dir
+# relative to the CWD.  Never commit it from anywhere.
+ai_credentials.json
 *.log
 rip_log.txt
 
