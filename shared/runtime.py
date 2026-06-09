@@ -274,6 +274,7 @@ DEFAULTS: dict[str, ConfigScalar] = {
     # (and TMDB, if a key is set) before answering.
     "opt_ai_web_search": False,
     "opt_tmdb_api_key": "",  # free key from themoviedb.org enables TMDB lookup
+    "opt_omdb_api_key": "",  # free key from omdbapi.com enables OMDb lookup
     "opt_theme_overrides": {},
 }
 

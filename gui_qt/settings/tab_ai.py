@@ -201,7 +201,25 @@ class AITab(QWidget):
         self._add_lineedit(
             web_form, "opt_tmdb_api_key", "TMDB API key (optional)", default="",
         )
+        self._add_lineedit(
+            web_form, "opt_omdb_api_key", "OMDb API key (optional)", default="",
+        )
         outer.addWidget(web_host)
+
+        # OMDb (omdbapi.com) is an optional second source — a free key
+        # (1,000 lookups/day) adds IMDb IDs.  Its data is CC BY-NC, so we
+        # show a credit line (no logo is required, unlike TMDB).  When both
+        # keys are set the assistant queries both.
+        omdb_hint = QLabel(
+            "OMDb (omdbapi.com) is an optional second lookup — a free key "
+            "adds IMDb IDs.  When both a TMDB and an OMDb key are set, the "
+            "assistant uses both.\n"
+            "Movie data provided by OMDb, licensed CC BY-NC 4.0.  JellyRip "
+            "is not affiliated with OMDb or IMDb."
+        )
+        omdb_hint.setObjectName("settingsAIOmdbHint")
+        omdb_hint.setWordWrap(True)
+        outer.addWidget(omdb_hint)
 
         outer.addStretch(1)
 

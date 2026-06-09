@@ -718,9 +718,10 @@ class ChatController(QObject):
         try:
             web_on = bool(self._cfg.get("opt_ai_web_search", False))
             tmdb_key = str(self._cfg.get("opt_tmdb_api_key", "") or "").strip()
+            omdb_key = str(self._cfg.get("opt_omdb_api_key", "") or "").strip()
         except Exception:
             return messages
-        if not web_on and not tmdb_key:
+        if not web_on and not tmdb_key and not omdb_key:
             return messages
 
         user_text = ""
@@ -765,6 +766,23 @@ class ChatController(QObject):
                     tmdb_answered = True
             except Exception:
                 pass
+        # OMDb — optional second source (the user opted in with a key).
+        # Runs alongside TMDB, so with both keys set the model sees both
+        # result sets (OMDb's value-add is the IMDb id).  Counts as
+        # "answered" so the keyless web backup is skipped when it returns
+        # something.
+        if omdb_key and tmdb_query:
+            try:
+                from shared.ai.omdb_lookup import (
+                    search_omdb,
+                    format_for_context as _omdb_fmt,
+                )
+                omdb_results, _ = search_omdb(tmdb_query, omdb_key)
+                if omdb_results:
+                    blocks.append(_omdb_fmt(tmdb_query, omdb_results))
+                    tmdb_answered = True
+            except Exception:
+                pass
         # Keyless web search: the BACKUP, and only when the Web toggle is
         # on.  Uses the model-formulated query so conversational messages
         # aren't searched verbatim.
@@ -782,7 +800,7 @@ class ChatController(QObject):
         system = {
             "role": "system",
             "content": (
-                f'I looked up "{searched_for}" for the user (TMDB / web).  '
+                f'I looked up "{searched_for}" for the user (TMDB / OMDb / web).  '
                 "Live results are below - use them to answer; if they don't "
                 "cover it, say so rather than guessing.  You DO have these "
                 "results, so never claim you can't access an API.\n"
@@ -1269,14 +1287,18 @@ class ChatController(QObject):
             self._log_disc(f"skip: already identified {name!r}")
             return
         tmdb_key = str(self._cfg.get("opt_tmdb_api_key", "") or "").strip()
-        if not tmdb_key:
-            self._log_disc("skip: no TMDB key configured")
+        omdb_key = str(self._cfg.get("opt_omdb_api_key", "") or "").strip()
+        if not tmdb_key and not omdb_key:
+            self._log_disc("skip: no TMDB or OMDb key configured")
             return
         self._last_identified_disc = name
-        self._log_disc(f"looking up {name!r} via TMDB...")
+        providers = " + ".join(
+            p for p, k in (("TMDB", tmdb_key), ("OMDb", omdb_key)) if k
+        )
+        self._log_disc(f"looking up {name!r} via {providers}...")
         threading.Thread(
             target=self._identify_disc_worker,
-            args=(name, tmdb_key),
+            args=(name, tmdb_key, omdb_key),
             daemon=True,
             name="disc-identify",
         ).start()
@@ -1293,35 +1315,65 @@ class ChatController(QObject):
             s = s.replace(ch, " ")
         return " ".join(s.split()).strip()
 
-    def _identify_disc_worker(self, disc_name: str, tmdb_key: str) -> None:
+    def _identify_disc_worker(
+        self, disc_name: str, tmdb_key: str, omdb_key: str = "",
+    ) -> None:
         query = self._clean_disc_label(disc_name) or disc_name
-        try:
-            from shared.ai.tmdb_lookup import search_tmdb
-            results, _status = search_tmdb(query, tmdb_key)
-        except Exception as exc:
-            # Errors and misses go to the Live Log only (chat_md="") so the
-            # transcript isn't spammed on every reload of an unmatchable
-            # disc.  Only a positive identification posts to the chat.
-            self.disc_identified.emit(
-                "", f'Disc auto-identify error for "{disc_name}": {exc}'
-            )
-            return
-        if not results:
+
+        # Query whichever providers have a key.  Per-provider failures are
+        # swallowed so one bad/absent source never blocks the other.
+        tmdb_r = None
+        if tmdb_key:
+            try:
+                from shared.ai.tmdb_lookup import search_tmdb
+                res, _ = search_tmdb(query, tmdb_key)
+                tmdb_r = res[0] if res else None
+            except Exception:
+                tmdb_r = None
+        omdb_r = None
+        if omdb_key:
+            try:
+                from shared.ai.omdb_lookup import search_omdb
+                res, _ = search_omdb(query, omdb_key)
+                omdb_r = res[0] if res else None
+            except Exception:
+                omdb_r = None
+
+        if tmdb_r is None and omdb_r is None:
+            # Miss/error -> Live Log only (chat_md="") so an unmatchable
+            # disc doesn't spam the transcript on every reload.
             self.disc_identified.emit(
                 "",
-                f'Disc "{disc_name}" — no TMDB match (searched "{query}"). '
+                f'Disc "{disc_name}" — no match (searched "{query}"). '
                 f"Type the title in chat to look it up.",
             )
             return
-        r = results[0]
-        kind = "Movie" if r.media_type == "movie" else "TV"
-        year = f" ({r.year})" if r.year else ""
-        chat_md = (
-            f'**Auto-identified the inserted disc** ("{disc_name}") via '
-            f"TMDB:\n- Title: {r.title}{year}\n- Type: {kind}\n"
-            f"- TMDB ID: {r.media_type}/{r.tmdb_id}"
-        )
-        log_line = f"Disc identified via TMDB: {r.title}{year}"
+
+        if tmdb_r is not None:
+            # TMDB is canonical for the title; enrich with OMDb's IMDb id.
+            kind = "Movie" if tmdb_r.media_type == "movie" else "TV"
+            year = f" ({tmdb_r.year})" if tmdb_r.year else ""
+            lines = [
+                f'**Auto-identified the inserted disc** ("{disc_name}"):',
+                f"- Title: {tmdb_r.title}{year}",
+                f"- Type: {kind}",
+                f"- TMDB ID: {tmdb_r.media_type}/{tmdb_r.tmdb_id}",
+            ]
+            if omdb_r is not None and omdb_r.imdb_id:
+                lines.append(f"- IMDb ID: {omdb_r.imdb_id} (via OMDb)")
+            chat_md = "\n".join(lines)
+            src = "TMDB + OMDb" if omdb_r is not None else "TMDB"
+            log_line = f"Disc identified via {src}: {tmdb_r.title}{year}"
+        else:
+            # OMDb only (no TMDB key, or TMDB had no match).
+            kind = "Movie" if omdb_r.media_type == "movie" else "TV"
+            year = f" ({omdb_r.year})" if omdb_r.year else ""
+            chat_md = (
+                f'**Auto-identified the inserted disc** ("{disc_name}") via '
+                f"OMDb:\n- Title: {omdb_r.title}{year}\n- Type: {kind}\n"
+                f"- IMDb ID: {omdb_r.imdb_id}"
+            )
+            log_line = f"Disc identified via OMDb: {omdb_r.title}{year}"
         self.disc_identified.emit(chat_md, log_line)
 
     @Slot(str, str)

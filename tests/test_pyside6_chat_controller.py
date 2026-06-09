@@ -1021,7 +1021,55 @@ def test_identify_disc_worker_miss_is_log_only(sidebar, cfg, monkeypatch):
     assert len(posted) == 1
     chat_md, log_line = posted[0]
     assert chat_md == ""
-    assert "no TMDB match" in log_line
+    assert "no match" in log_line
+
+
+def test_identify_disc_worker_omdb_only(sidebar, cfg, monkeypatch):
+    """With only an OMDb key, the worker identifies via OMDb and reports
+    the IMDb ID."""
+    controller = ChatController(sidebar=sidebar, cfg=cfg)
+    import shared.ai.omdb_lookup as ol
+    from shared.ai.omdb_lookup import OMDbResult
+    monkeypatch.setattr(
+        ol, "search_omdb",
+        lambda q, k, **kw: ([OMDbResult("movie", "tt0126029", "Shrek", "2001")], ""),
+    )
+    posted: list = []
+    controller.disc_identified.connect(lambda md, log: posted.append((md, log)))
+    controller._identify_disc_worker("SHREK", "", "omdbkey")
+
+    assert len(posted) == 1
+    chat_md, log_line = posted[0]
+    assert "Shrek" in chat_md
+    assert "tt0126029" in chat_md
+    assert "OMDb" in log_line
+
+
+def test_identify_disc_worker_both_enriches_with_imdb(sidebar, cfg, monkeypatch):
+    """With both keys, TMDB gives the canonical title + TMDB ID and OMDb
+    adds the IMDb ID."""
+    controller = ChatController(sidebar=sidebar, cfg=cfg)
+    import shared.ai.tmdb_lookup as tl
+    import shared.ai.omdb_lookup as ol
+    from shared.ai.tmdb_lookup import TMDBResult
+    from shared.ai.omdb_lookup import OMDbResult
+    monkeypatch.setattr(
+        tl, "search_tmdb",
+        lambda q, k, **kw: ([TMDBResult("movie", 808, "Shrek", "2001", "")], ""),
+    )
+    monkeypatch.setattr(
+        ol, "search_omdb",
+        lambda q, k, **kw: ([OMDbResult("movie", "tt0126029", "Shrek", "2001")], ""),
+    )
+    posted: list = []
+    controller.disc_identified.connect(lambda md, log: posted.append((md, log)))
+    controller._identify_disc_worker("SHREK", "tmdbkey", "omdbkey")
+
+    assert len(posted) == 1
+    chat_md, log_line = posted[0]
+    assert "movie/808" in chat_md       # TMDB id
+    assert "tt0126029" in chat_md       # OMDb-supplied IMDb id
+    assert "TMDB + OMDb" in log_line
 
 
 def test_identify_disc_async_skips_without_key(sidebar, cfg, monkeypatch):
