@@ -178,6 +178,71 @@ def test_status_state_machine_updates_label_and_qss_property(
     assert "200ms" in detail_label.text()
 
 
+# ─── Worker-thread result marshaling ─────────────────────────────────
+#
+# Pinned because the original code marshaled with
+# ``QTimer.singleShot(0, ...)`` from a plain ``threading.Thread`` — a
+# zero-timeout functor singleShot binds to the *calling* thread, which
+# has no Qt event loop, so the callback NEVER fired: Test / Save /
+# "Set as Active" stuck at "Validating…" forever and credentials were
+# never persisted from this dialog.
+
+
+def test_provider_check_result_reaches_gui_callback(qtbot, patched_registry):
+    """The worker's test_connection result must arrive at ``on_result``
+    on the GUI thread.  Fails on the old QTimer marshal (callback never
+    runs); passes with the Invoker."""
+    from PySide6.QtCore import QThread
+
+    dlg = AIProviderDialog()
+    qtbot.addWidget(dlg)
+
+    sentinel = SimpleNamespace(success=True, latency_ms=12.0,
+                               model_confirmed="stub", error="")
+    fake_provider = SimpleNamespace(
+        test_connection=lambda timeout=15.0: sentinel,
+    )
+
+    received: list = []
+    threads: list = []
+
+    def on_result(result):
+        received.append(result)
+        threads.append(QThread.currentThread())
+
+    dlg._run_provider_check("claude", fake_provider, on_result)
+
+    qtbot.waitUntil(lambda: bool(received), timeout=3000)
+    assert received == [sentinel]
+    # Delivered on the GUI thread, where widget-touching callbacks
+    # are safe.
+    assert threads[0] is dlg.thread()
+
+
+def test_provider_check_exception_becomes_failed_result(
+    qtbot, patched_registry,
+):
+    """test_connection's contract is "must not raise" — but if a
+    provider bug raises anyway, the worker must deliver a failed
+    ConnectionResult instead of dying silently and stranding the card
+    at "Validating…"."""
+    dlg = AIProviderDialog()
+    qtbot.addWidget(dlg)
+
+    def boom(timeout=15.0):
+        raise RuntimeError("provider exploded")
+
+    fake_provider = SimpleNamespace(test_connection=boom)
+
+    received: list = []
+    dlg._run_provider_check("claude", fake_provider, received.append)
+
+    qtbot.waitUntil(lambda: bool(received), timeout=3000)
+    result = received[0]
+    assert result.success is False
+    assert "provider exploded" in result.error
+
+
 # ─── Toolbar wiring ──────────────────────────────────────────────────
 
 

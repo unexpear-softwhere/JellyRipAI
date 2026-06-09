@@ -29,7 +29,7 @@ import threading
 import webbrowser
 from typing import Any, Callable
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui_qt.thread_safety import Invoker, submit_to_main
 from shared.runtime import APP_DISPLAY_NAME
 
 
@@ -242,6 +243,10 @@ class AIProviderDialog(QDialog):
         self._on_change = on_change
         self._provider_widgets: dict[str, dict[str, Any]] = {}
         self._setup_hints: dict[str, QFrame] = {}
+        # Marshals worker-thread check results onto the GUI thread.
+        # Constructed here (on the GUI thread) so its queued signal
+        # dispatches on this dialog's event loop.
+        self._invoker = Invoker(self)
 
         self.setObjectName("aiProviderDialog")
         self.setWindowTitle("AI Provider Setup")
@@ -690,17 +695,31 @@ class AIProviderDialog(QDialog):
     ) -> None:
         """Run a provider validation check on a worker thread.
 
-        Marshals the result back to the GUI thread via QTimer so the
-        callbacks can safely touch widgets.
+        Marshals the result back to the GUI thread via the dialog's
+        ``Invoker`` (gui_qt.thread_safety) so the callbacks can safely
+        touch widgets.  ``QTimer.singleShot(0, ...)`` is NOT equivalent
+        here: a zero-timeout functor singleShot binds to the *calling*
+        thread, and a plain ``threading.Thread`` has no Qt event loop —
+        the callback never fired, so Test/Save/Set-Active stuck at
+        "Validating..." forever and credentials were never persisted.
         """
         self._set_provider_status(pid, "validating")
 
         def _run() -> None:
-            result = provider.test_connection(timeout=15.0)
-            # QTimer.singleShot is the Qt-idiomatic equivalent of
-            # tkinter's ``win.after(0, ...)`` — schedules the call on
-            # the GUI event loop.
-            QTimer.singleShot(0, lambda r=result: on_result(r))
+            try:
+                result = provider.test_connection(timeout=15.0)
+            except Exception as exc:  # noqa: BLE001 — the provider
+                # contract says test_connection must not raise, but a
+                # provider bug must not strand the card at
+                # "Validating..." with the buttons dead.
+                from shared.ai.providers.base import ConnectionResult
+                result = ConnectionResult(success=False, error=str(exc))
+            try:
+                submit_to_main(self._invoker, on_result, result)
+            except RuntimeError:
+                # Dialog (and its invoker) torn down while the check
+                # was in flight — nothing left to update.
+                pass
 
         threading.Thread(target=_run, daemon=True).start()
 
