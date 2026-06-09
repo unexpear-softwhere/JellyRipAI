@@ -1109,3 +1109,48 @@ def test_main_window_get_chat_ui_snapshot_returns_dict(qtbot):
     ):
         assert key in snap
     assert snap["ai_mode"] == "cloud"
+
+
+def test_get_chat_ui_snapshot_marshals_to_gui_thread(qtbot):
+    """The chat worker calls ``get_chat_ui_snapshot`` on every turn,
+    and its body reads live widgets (labels, buttons, the log pane's
+    QTextDocument) — which Qt forbids off the GUI thread.  Pin: a
+    worker-thread call must execute the widget-reading body ON the
+    GUI thread (via the invoker) and still return the full dict."""
+    import threading
+
+    from PySide6.QtCore import QThread
+
+    from gui_qt.main_window import MainWindow
+
+    mw = MainWindow(cfg={"opt_ai_mode": "local"})
+    qtbot.addWidget(mw)
+
+    body_threads: list = []
+    orig_body = mw._get_chat_ui_snapshot_main
+
+    def spying_body():
+        body_threads.append(QThread.currentThread())
+        return orig_body()
+
+    mw._get_chat_ui_snapshot_main = spying_body
+
+    out: dict = {}
+
+    def worker():
+        out["snap"] = mw.get_chat_ui_snapshot()
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    # The worker blocks until the invoker dispatches on the GUI
+    # thread — which needs the event loop to spin, which waitUntil does.
+    qtbot.waitUntil(lambda: "snap" in out, timeout=3000)
+    t.join(timeout=3)
+
+    assert body_threads, "snapshot body never ran"
+    assert body_threads[0] is mw.thread(), (
+        "widget-reading snapshot body must execute on the GUI thread"
+    )
+    snap = out["snap"]
+    assert isinstance(snap, dict) and "live_log_tail" in snap
+    assert snap["ai_mode"] == "local"

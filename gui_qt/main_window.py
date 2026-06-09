@@ -815,7 +815,18 @@ class MainWindow(QMainWindow):
         which UI built the snapshot.  Resilient to missing widgets:
         missing fields land as empty strings or zero so the helper
         can still produce a sensible answer.
+
+        Thread-safe: the chat worker calls this on every turn (facts
+        provider + fallback paths), and the body reads live widgets —
+        status labels, the stop button, the drive combo, and the log
+        pane's QTextDocument — which Qt forbids off the GUI thread
+        (worst case: a native crash while a rip is appending to the
+        log).  Marshals via the invoker; GUI-thread callers take the
+        same-thread fast path.
         """
+        return run_on_main(self._invoker, self._get_chat_ui_snapshot_main)
+
+    def _get_chat_ui_snapshot_main(self) -> dict[str, object]:
         snapshot: dict[str, object] = {
             "status": "",
             "selected_drive": "",
