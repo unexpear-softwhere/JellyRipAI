@@ -239,3 +239,76 @@ def test_fetch_latest_release_filters_channel_and_extracts_version(monkeypatch):
     assert release["tag"] == "ai-v1.0.18"
     assert release["version"] == "1.0.18"
     assert release["asset_name"] == "JellyRipAI.exe"
+
+
+def test_download_asset_rejects_truncated_body(monkeypatch, tmp_path):
+    """http.client treats a connection dropped mid-body as a clean
+    EOF, so the byte count must be checked against Content-Length —
+    and nothing may remain at the destination (or .partial) after a
+    failed download."""
+    chunks = [b"abc", b""]  # 3 of a promised 10 bytes
+    monkeypatch.setattr(
+        updater.urllib.request,
+        "urlopen",
+        lambda *_a, **_k: _FakeResponse(chunks, total="10"),
+    )
+    out_file = Path(tmp_path) / "update.bin"
+
+    with pytest.raises(OSError):
+        updater.download_asset(
+            "https://example.invalid/update.bin",
+            str(out_file),
+            stall_window_seconds=0,
+        )
+
+    assert not out_file.exists(), \
+        "a truncated download must never land at the destination"
+    assert not Path(str(out_file) + ".partial").exists(), \
+        "the partial is cleaned up on failure"
+
+
+def test_download_asset_complete_body_lands_at_destination(
+    monkeypatch, tmp_path,
+):
+    chunks = [b"abc", b"de", b""]
+    monkeypatch.setattr(
+        updater.urllib.request,
+        "urlopen",
+        lambda *_a, **_k: _FakeResponse(chunks, total="5"),
+    )
+    out_file = Path(tmp_path) / "update.bin"
+
+    updater.download_asset(
+        "https://example.invalid/update.bin",
+        str(out_file),
+        stall_window_seconds=0,
+    )
+
+    assert out_file.read_bytes() == b"abcde"
+    assert not Path(str(out_file) + ".partial").exists()
+
+
+def test_authenticode_query_binds_path_for_real(tmp_path):
+    """End-to-end against real PowerShell.  With ``-Command``,
+    trailing argv tokens are NOT bound to ``param()`` — the old
+    ``-p <path>`` form left ``$p`` empty, so every signature query
+    raised and the verify gate could never pass.  The env-var form
+    must bind: an unsigned file reports NotSigned (a real, parsed
+    answer — not an error)."""
+    import sys
+
+    if sys.platform != "win32":
+        pytest.skip("Authenticode is Windows-only")
+
+    target = Path(tmp_path) / "unsigned.exe"
+    target.write_bytes(b"MZ not really an exe")
+
+    sig = updater.get_authenticode_signature(str(target))
+
+    # The old broken invocation RAISED here (exit 1: $p never bound,
+    # the trailing -p arg hit ParameterBindingValidationException).
+    # With the path bound, PowerShell parses the file and returns a
+    # real status — "NotSigned" for unsigned PEs, "UnknownError" for
+    # a non-PE like this stub.  Either proves the round-trip works.
+    assert sig["status"] in ("NotSigned", "UnknownError")
+    assert sig["status"] != "Valid"

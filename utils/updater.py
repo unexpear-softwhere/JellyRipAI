@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys as _sys
@@ -121,41 +122,62 @@ def fetch_latest_release(
 def download_asset(url, destination_path, progress_callback=None, timeout=15,
                    abort_event=None, max_total_seconds=1800,
                    stall_window_seconds=120, min_window_bytes=64 * 1024):
-    """Download a release asset to destination_path."""
+    """Download a release asset to destination_path.
+
+    Writes to ``<destination>.partial`` and renames into place only
+    after the byte count matches Content-Length.  http.client treats a
+    connection dropped mid-body as a clean EOF, so without the length
+    check a half-downloaded exe looked like success — and failures
+    used to leave partial bytes at the final path.
+    """
     req = urllib.request.Request(
         url,
         headers={"User-Agent": "JellyRip-Updater"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        total = int(resp.headers.get("Content-Length") or 0)
-        written = 0
-        start_time = time.time()
-        window_start = start_time
-        window_bytes = 0
-        with open(destination_path, "wb") as out:
-            while True:
-                if abort_event and abort_event.is_set():
-                    raise InterruptedError("Download aborted by user")
-                now = time.time()
-                if max_total_seconds and now - start_time > max_total_seconds:
-                    raise TimeoutError(
-                        "Download exceeded maximum allowed duration"
-                    )
-                chunk = resp.read(1024 * 256)
-                if not chunk:
-                    break
-                out.write(chunk)
-                written += len(chunk)
-                window_bytes += len(chunk)
-                if stall_window_seconds and (now - window_start) >= stall_window_seconds:
-                    if window_bytes < min_window_bytes:
+    temp_path = str(destination_path) + ".partial"
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            total = int(resp.headers.get("Content-Length") or 0)
+            written = 0
+            start_time = time.time()
+            window_start = start_time
+            window_bytes = 0
+            with open(temp_path, "wb") as out:
+                while True:
+                    if abort_event and abort_event.is_set():
+                        raise InterruptedError("Download aborted by user")
+                    now = time.time()
+                    if max_total_seconds and now - start_time > max_total_seconds:
                         raise TimeoutError(
-                            "Download stalled (throughput below minimum threshold)"
+                            "Download exceeded maximum allowed duration"
                         )
-                    window_start = now
-                    window_bytes = 0
-                if progress_callback:
-                    progress_callback(written, total)
+                    chunk = resp.read(1024 * 256)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    written += len(chunk)
+                    window_bytes += len(chunk)
+                    if stall_window_seconds and (now - window_start) >= stall_window_seconds:
+                        if window_bytes < min_window_bytes:
+                            raise TimeoutError(
+                                "Download stalled (throughput below minimum threshold)"
+                            )
+                        window_start = now
+                        window_bytes = 0
+                    if progress_callback:
+                        progress_callback(written, total)
+        if total and written != total:
+            raise OSError(
+                f"Download truncated: received {written} of {total} bytes"
+            )
+        os.replace(temp_path, destination_path)
+    finally:
+        # On any failure the partial never reaches the destination.
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except OSError:
+            pass
 
 
 def sha256_file(path):
@@ -172,10 +194,14 @@ def sha256_file(path):
 
 def get_authenticode_signature(path):
     """Get Authenticode signature details via PowerShell on Windows."""
-    # Pass the path as a PS variable to avoid any injection via string formatting.
-    # -LiteralPath treats the value as a literal string (no wildcards, no PS expansion).
+    # The path travels via an environment variable.  With -Command,
+    # trailing argv tokens are appended to the command text rather than
+    # bound to param() — the old "-p <path>" form left $p empty, so
+    # every signature query failed (the verify gate could never pass).
+    # An env var is also injection-proof: the value is never parsed as
+    # PowerShell, and -LiteralPath disables wildcard expansion.
     ps = (
-        "param([string]$p); "
+        "$p = $env:JELLYRIP_VERIFY_PATH; "
         "$sig = Get-AuthenticodeSignature -LiteralPath $p; "
         "$out = [PSCustomObject]@{"
         "Status = [string]$sig.Status; "
@@ -185,12 +211,17 @@ def get_authenticode_signature(path):
         "}; "
         "$out | ConvertTo-Json -Compress"
     )
+    env = dict(os.environ)
+    env["JELLYRIP_VERIFY_PATH"] = str(path)
     proc = subprocess.run(
-        [_ps_exe, "-NoProfile", "-Command", ps, "-p", path],
+        [_ps_exe, "-NoProfile", "-Command", ps],
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=15,
         shell=False,
+        env=env,
         **_POPEN_FLAGS
     )
     if proc.returncode != 0:
