@@ -955,6 +955,12 @@ class RipperEngine:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                # makemkvcon emits UTF-8; without this, text=True decodes
+                # with the Windows ANSI code page — non-ASCII disc titles
+                # mojibake and some byte sequences raise mid-stream,
+                # killing the reader thread.
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
                 **_POPEN_FLAGS
             )
@@ -1348,6 +1354,12 @@ class RipperEngine:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                # makemkvcon emits UTF-8; without this, text=True decodes
+                # with the Windows ANSI code page — non-ASCII disc titles
+                # mojibake and some byte sequences raise mid-stream,
+                # killing the reader thread.
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
                 **_POPEN_FLAGS
             )
@@ -1738,6 +1750,9 @@ class RipperEngine:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            # makemkvcon emits UTF-8 (see note at the scan Popen).
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             **_POPEN_FLAGS
         )
@@ -1941,6 +1956,9 @@ class RipperEngine:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            # makemkvcon emits UTF-8 (see note at the scan Popen).
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             **_POPEN_FLAGS
         )
@@ -2168,6 +2186,9 @@ class RipperEngine:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            # ffprobe's JSON output is UTF-8 (filenames echo into it).
+            encoding="utf-8",
+            errors="replace",
             **_POPEN_FLAGS
         )
         try:

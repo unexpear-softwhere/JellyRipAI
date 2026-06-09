@@ -79,7 +79,10 @@ def is_network_path(path: str | PathLike[str] | None) -> bool:
                 pass
             # Fallback: if /proc/mounts is unavailable, try 'mount' command
             try:
-                result = subprocess.run(["mount"], capture_output=True, text=True, timeout=2)
+                result = subprocess.run(
+                    ["mount"], capture_output=True, text=True,
+                    encoding="utf-8", errors="replace", timeout=2,
+                )
                 for line in result.stdout.split("\n"):
                     if any(fs in line.lower() for fs in ("nfs", "cifs", "smb")):
                         # Try to extract mount point and see if path is under it
@@ -185,6 +188,11 @@ def get_available_drives(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                # makemkvcon emits UTF-8; the text=True default decodes
+                # with the locale code page and mojibakes non-ASCII
+                # disc/drive names (or raises mid-read).
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
                 creationflags=0x08000000,
             )
@@ -194,6 +202,11 @@ def get_available_drives(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                # makemkvcon emits UTF-8; the text=True default decodes
+                # with the locale code page and mojibakes non-ASCII
+                # disc/drive names (or raises mid-read).
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
             )
         try:

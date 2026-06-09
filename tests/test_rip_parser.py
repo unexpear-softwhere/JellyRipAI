@@ -313,3 +313,28 @@ def test_progress_capped_at_100_when_total_exceeds_max(monkeypatch):
     engine._run_rip_process(["fake"], progress.append, lambda _m: None)
 
     assert progress == [100]
+
+
+def test_subprocess_text_mode_always_pins_utf8_encoding():
+    """makemkvcon (and ffprobe's JSON) emit UTF-8.  ``text=True``
+    without ``encoding=`` decodes with the Windows ANSI code page —
+    non-ASCII disc titles ("Amélie", anime) mojibake into filenames,
+    and byte sequences undefined in cp1252 raise UnicodeDecodeError
+    mid-stream, killing the reader thread.  Pin: every text-mode
+    subprocess in the engine + drive helpers specifies utf-8."""
+    from pathlib import Path
+
+    import engine.ripper_engine as engine_mod
+    import utils.helpers as helpers_mod
+
+    for mod in (engine_mod, helpers_mod):
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        lines = src.splitlines()
+        for i, line in enumerate(lines):
+            if "text=True" not in line:
+                continue
+            window = "\n".join(lines[i:i + 8])
+            assert 'encoding="utf-8"' in window, (
+                f"{mod.__name__} line {i + 1}: text=True without "
+                f'encoding="utf-8" — locale-decoding regression'
+            )
