@@ -346,6 +346,13 @@ class WorkflowLauncher(QObject):
 
         self._window.set_progress(0)
 
+        # Enable Stop / disable the mode buttons for the task's
+        # lifetime (the step-4 promise in the module docstring —
+        # previously never implemented, leaving Stop permanently
+        # disabled).  ``_task_wrapper``'s finally flips it back on
+        # every exit path.
+        self._set_running_ui(True)
+
         thread = threading.Thread(
             target=self._task_wrapper,
             args=(target, button_name),
@@ -353,8 +360,25 @@ class WorkflowLauncher(QObject):
             name=f"workflow:{button_name or 'unknown'}",
         )
         self._rip_thread = thread
-        thread.start()
+        try:
+            thread.start()
+        except Exception:
+            self._set_running_ui(False)
+            raise
         return True
+
+    def _set_running_ui(self, running: bool) -> None:
+        """Flip the shell's workflow-lifecycle button states (mode
+        buttons vs Stop).  Defensive — older shells / bare test stubs
+        without the hook, or a hook failure, must never take the
+        task down with them."""
+        fn = getattr(self._window, "set_workflow_running", None)
+        if not callable(fn):
+            return
+        try:
+            fn(running)
+        except Exception:  # noqa: BLE001 — UI nicety, not task-critical
+            pass
 
     def _task_wrapper(self, target: Callable[[], Any], button_name: str) -> None:
         """Worker-thread entry point.  Runs ``target`` and routes
@@ -387,3 +411,4 @@ class WorkflowLauncher(QObject):
                 self._window.set_status("Ready")
             except Exception:  # noqa: BLE001
                 pass
+            self._set_running_ui(False)

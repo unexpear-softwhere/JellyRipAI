@@ -764,6 +764,48 @@ class MainWindow(QMainWindow):
                 pass  # widget already deleted
         self._workflow_dialog_snapshot = []
 
+    # ------------------------------------------------------------------
+    # Workflow-lifecycle button states.
+    # ------------------------------------------------------------------
+
+    def set_workflow_running(self, running: bool) -> None:
+        """Flip the workflow-lifecycle control states.
+
+        ``running=True`` (a workflow worker just started): the mode
+        buttons disable so a second workflow can't launch, and Stop
+        Session enables so the run can be aborted.  ``running=False``
+        (the worker exited — success, error, or abort): the reverse.
+
+        Called by ``WorkflowLauncher``.  Thread-safe — the finish
+        call arrives from the worker thread's ``finally``.
+        """
+        submit_to_main(
+            self._invoker, self._set_workflow_running_main, bool(running),
+        )
+
+    def _set_workflow_running_main(self, running: bool) -> None:
+        if getattr(self, "_workflow_dialog_depth", 0) > 0:
+            # A modeless workflow dialog holds the soft-lock: every
+            # guarded control is disabled right now, and closing the
+            # dialog restores the snapshot.  Rewrite the snapshot so
+            # that restore lands on the new lifecycle state instead
+            # of resurrecting the pre-dialog one.
+            buttons = set(self._workflow_buttons.values())
+            self._workflow_dialog_snapshot = [
+                (
+                    widget,
+                    running if widget is self._stop_button
+                    else (not running) if widget in buttons
+                    else was_enabled,
+                )
+                for widget, was_enabled in
+                getattr(self, "_workflow_dialog_snapshot", [])
+            ]
+            return
+        for btn in self._workflow_buttons.values():
+            btn.setEnabled(not running)
+        self._stop_button.setEnabled(running)
+
     def get_chat_ui_snapshot(self) -> dict[str, object]:
         """Snapshot the live UI state into a dict the chat
         controller's on-device fallback path consumes.

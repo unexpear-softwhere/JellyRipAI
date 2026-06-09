@@ -344,12 +344,16 @@ def test_finalize_abort_cleanup_skips_when_no_rip_path(tmp_path):
 
 def test_finalize_abort_cleanup_skips_terminal_phases(tmp_path):
     """When the session's phase is already terminal (complete /
-    organized / failed / aborted), the hook does NOT overwrite it
-    with "aborted".  Pins the phase-check guard — protects sessions
-    that finished or failed cleanly before the user clicked Stop."""
+    organized / failed / aborted) or deliberately preserved (partial /
+    moving), the hook does NOT overwrite it with "aborted".  Pins the
+    phase-check guard — protects sessions that finished, failed
+    cleanly, were preserved for retry ("Temp preserved at ..."), or
+    hold fully-validated MKVs mid-move when the user clicks Stop."""
     controller, engine = _controller_with_engine()
 
-    for phase in ("complete", "organized", "failed", "aborted"):
+    for phase in (
+        "complete", "organized", "failed", "aborted", "partial", "moving",
+    ):
         rip_path = tmp_path / f"session_{phase}"
         rip_path.mkdir()
         engine.write_temp_metadata(
@@ -372,6 +376,74 @@ def test_finalize_abort_cleanup_skips_terminal_phases(tmp_path):
         # Reset for next iteration.
         engine.reset_abort()
         controller._current_rip_path = None
+
+
+def test_single_dump_success_writes_terminal_phase_and_clears_pointer(
+    tmp_path, monkeypatch,
+):
+    """The dump success path writes ``phase="complete"`` and clears
+    ``_current_rip_path``.  Before this, dump sessions stayed at
+    ``phase="ripping"`` forever, so a Stop pressed after the dump
+    finished swept the COMPLETED session into the abort cleanup and
+    deleted its MKVs — right after the UI said they were saved."""
+    from types import SimpleNamespace
+
+    controller, engine = _controller_with_engine()
+
+    temp_root = tmp_path / "temp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    out = tmp_path / "title_t00.mkv"
+    out.write_bytes(b"a" * 10)
+
+    engine.cfg["temp_folder"] = str(temp_root)
+    engine.cfg["opt_show_temp_manager"] = False
+    engine.cfg["opt_scan_disc_size"] = False
+
+    controller.gui.ask_yesno = lambda _prompt: False  # single-disc mode
+    controller.gui.ask_input = (
+        lambda _label, _prompt, default_value="": "My Dump Disc"
+    )
+    controller.gui.show_info = lambda *_a, **_k: None
+
+    monkeypatch.setattr(
+        engine, "run_job",
+        lambda _job, **_kw: SimpleNamespace(success=True, errors=[]),
+    )
+    monkeypatch.setattr(
+        controller, "_normalize_rip_result",
+        lambda *_a, **_k: (True, [str(out)]),
+    )
+    monkeypatch.setattr(
+        controller, "_stabilize_ripped_files",
+        lambda *_a, **_k: (True, False),
+    )
+    monkeypatch.setattr(
+        controller, "_verify_container_integrity", lambda *_a, **_k: True,
+    )
+    monkeypatch.setattr(controller, "write_session_summary", lambda: None)
+    monkeypatch.setattr(controller, "flush_log", lambda: None)
+
+    controller.run_dump_all()
+
+    # The session metadata reached the terminal phase ...
+    sessions = [p for p in temp_root.iterdir() if p.is_dir()]
+    assert len(sessions) == 1, f"expected one rip session, got {sessions}"
+    meta = engine.read_temp_metadata(str(sessions[0]))
+    assert meta is not None
+    assert meta["phase"] == "complete"
+    # ... and the per-run pointer is dropped.
+    assert controller._current_rip_path is None
+
+    # End-to-end: even if a late Stop re-arms the hook against this
+    # session, the terminal phase preserves the completed outputs.
+    keeper = sessions[0] / "title_t00.mkv"
+    keeper.write_bytes(b"keep me")
+    controller._current_rip_path = str(sessions[0])
+    engine.abort_event.set()
+    controller._finalize_abort_cleanup_if_needed()
+    assert keeper.exists(), "completed dump must survive a late Stop"
+    meta = engine.read_temp_metadata(str(sessions[0]))
+    assert meta is not None and meta["phase"] == "complete"
 
 
 def test_finalize_abort_cleanup_skips_when_flag_not_set(tmp_path):

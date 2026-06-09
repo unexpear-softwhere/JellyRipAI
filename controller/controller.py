@@ -3107,6 +3107,11 @@ class RipperController(LegacyControllerMixin):
                 "Container integrity check failed (ffprobe)."
             )
             return
+        # Dump fully ripped + verified — write the terminal phase and
+        # drop the tracking pointer so a Stop pressed after success
+        # can't sweep this session into the abort cleanup.
+        self.engine.update_temp_metadata(rip_path, phase="complete")
+        self._current_rip_path = None
         # All single-disc dump checkpoints passed → mark SM complete
         # before write_session_summary so its message picks COMPLETED.
         self.sm.complete()
@@ -3954,6 +3959,13 @@ class RipperController(LegacyControllerMixin):
                     "Stopping multi-disc dump to prevent corrupt files."
                 )
                 break
+            # This disc is fully ripped + verified — write the terminal
+            # phase and drop the per-disc pointer so a Stop during the
+            # next disc swap can't sweep a COMPLETED disc into the
+            # abort cleanup (it used to wipe the most recently finished
+            # disc of the batch).
+            self.engine.update_temp_metadata(rip_path, phase="complete")
+            self._current_rip_path = None
             self.gui.set_progress(0)
             disc_number += 1
 
