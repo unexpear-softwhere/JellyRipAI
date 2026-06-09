@@ -499,6 +499,189 @@ def test_organize_source_not_under_temp_root_preserves_folder(
         "source files must not be touched when source is outside temp_root"
 
 
+def test_organize_tv_passes_real_season_to_select_and_move(
+    tmp_path, monkeypatch
+):
+    """The user's season number must reach ``_select_and_move`` — it
+    used to be hardcoded ``0``, so every TV episode was named S00Exx
+    (which Jellyfin indexes as Specials) while sitting inside the
+    correctly-named ``Season NN`` folder."""
+    temp_root = tmp_path / "temp"
+    tv_root = tmp_path / "tv"
+    source = temp_root / "Disc_2026-05-03_10-00-00"
+    source.mkdir(parents=True)
+    tv_root.mkdir()
+    mkv = source / "title_t00.mkv"
+    mkv.write_text("data")
+
+    gui = _OrganizeGUI(scripted_inputs=[
+        str(source), "t", "Chosen Show", "", "5",
+    ])
+    controller, engine = _build_controller(gui, _engine_cfg(
+        temp_folder=str(temp_root),
+        tv_folder=str(tv_root),
+        opt_auto_delete_temp=False,
+        opt_auto_delete_session_metadata=False,
+    ))
+
+    monkeypatch.setattr(
+        controller, "_prompt_run_path_overrides", lambda _fields: {}
+    )
+    monkeypatch.setattr(
+        engine, "analyze_files",
+        lambda *_a, **_kw: [(str(mkv), 60.0, 100.0)],
+    )
+
+    captured: list[tuple] = []
+
+    def _capture_move(*args, **_kwargs):
+        captured.append(args)
+        return True
+
+    monkeypatch.setattr(controller, "_select_and_move", _capture_move)
+    _patch_session_helpers(controller, monkeypatch)
+
+    controller.run_organize()
+
+    assert captured, "_select_and_move should have been called"
+    # Positional signature: (titles_list, is_tv, title, dest_folder,
+    # extras_folder, season, year, ...)
+    assert captured[0][5] == 5, \
+        "the user's season number must be passed, not a hardcoded 0"
+    # And the folder agrees with the filenames.
+    assert (tv_root / "Chosen Show" / "Season 05").exists()
+
+
+def test_organize_sibling_of_temp_root_is_not_auto_deleted(
+    tmp_path, monkeypatch
+):
+    """A source folder whose name merely STARTS WITH the temp root's
+    name (``...\\RipsArchive`` vs temp ``...\\Rips``) must never be
+    auto-deleted.  The old check used a bare ``startswith`` with no
+    path-separator anchor, which would rmtree the sibling folder."""
+    temp_root = tmp_path / "Rips"
+    source = tmp_path / "RipsArchive"      # sibling, shares name prefix
+    movies_root = tmp_path / "movies"
+    temp_root.mkdir()
+    source.mkdir()
+    movies_root.mkdir()
+    mkv = source / "a.mkv"
+    mkv.write_text("data")
+
+    gui = _OrganizeGUI(scripted_inputs=[
+        str(source), "m", "Chosen Movie", "", "2024",
+    ])
+    controller, engine = _build_controller(gui, _engine_cfg(
+        temp_folder=str(temp_root),
+        movies_folder=str(movies_root),
+        opt_auto_delete_temp=True,
+        opt_auto_delete_session_metadata=False,
+    ))
+
+    monkeypatch.setattr(
+        controller, "_prompt_run_path_overrides", lambda _fields: {}
+    )
+    monkeypatch.setattr(
+        engine, "analyze_files",
+        lambda *_a, **_kw: [(str(mkv), 60.0, 100.0)],
+    )
+    monkeypatch.setattr(
+        controller, "_select_and_move", lambda *_a, **_kw: True,
+    )
+    _patch_session_helpers(controller, monkeypatch)
+
+    controller.run_organize()
+
+    assert source.exists() and mkv.exists(), \
+        "a sibling folder sharing the temp root's name prefix must " \
+        "never be auto-deleted"
+
+
+def test_organize_temp_root_itself_is_not_auto_deleted(
+    tmp_path, monkeypatch
+):
+    """Organizing the temp ROOT itself must not rmtree it — the root
+    may hold other sessions' rips.  Only strict subfolders qualify
+    for auto-delete."""
+    temp_root = tmp_path / "temp"
+    movies_root = tmp_path / "movies"
+    other_session = temp_root / "Disc_other_session"
+    other_session.mkdir(parents=True)
+    movies_root.mkdir()
+    (other_session / "other.mkv").write_text("someone else's rip")
+    mkv = temp_root / "a.mkv"
+    mkv.write_text("data")
+
+    gui = _OrganizeGUI(scripted_inputs=[
+        str(temp_root), "m", "Chosen Movie", "", "2024",
+    ])
+    controller, engine = _build_controller(gui, _engine_cfg(
+        temp_folder=str(temp_root),
+        movies_folder=str(movies_root),
+        opt_auto_delete_temp=True,
+        opt_auto_delete_session_metadata=False,
+    ))
+
+    monkeypatch.setattr(
+        controller, "_prompt_run_path_overrides", lambda _fields: {}
+    )
+    monkeypatch.setattr(
+        engine, "analyze_files",
+        lambda *_a, **_kw: [(str(mkv), 60.0, 100.0)],
+    )
+    monkeypatch.setattr(
+        controller, "_select_and_move", lambda *_a, **_kw: True,
+    )
+    _patch_session_helpers(controller, monkeypatch)
+
+    controller.run_organize()
+
+    assert temp_root.exists(), "the temp root itself must never be rmtree'd"
+    assert (other_session / "other.mkv").exists(), \
+        "other sessions' rips inside the temp root must survive"
+
+
+def test_organize_failed_move_reports_incomplete_not_done(
+    tmp_path, monkeypatch
+):
+    """When ``_select_and_move`` returns False, the user must see an
+    'Organize Incomplete' error — NOT the unconditional
+    'Organize complete!' the old code showed even on failure."""
+    source = tmp_path / "source"
+    source.mkdir()
+    mkv = source / "a.mkv"
+    mkv.write_text("data")
+
+    gui = _OrganizeGUI(scripted_inputs=[
+        str(source), "m", "Chosen Movie", "", "2024",
+    ])
+    controller, engine = _build_controller(gui, _engine_cfg(
+        temp_folder=str(tmp_path / "temp"),
+        movies_folder=str(tmp_path / "movies"),
+        opt_auto_delete_temp=False,
+        opt_auto_delete_session_metadata=False,
+    ))
+
+    monkeypatch.setattr(
+        controller, "_prompt_run_path_overrides", lambda _fields: {}
+    )
+    monkeypatch.setattr(
+        engine, "analyze_files",
+        lambda *_a, **_kw: [(str(mkv), 60.0, 100.0)],
+    )
+    monkeypatch.setattr(
+        controller, "_select_and_move", lambda *_a, **_kw: False,
+    )
+    _patch_session_helpers(controller, monkeypatch)
+
+    controller.run_organize()
+
+    assert ("Done", "Organize complete!") not in gui.shown_info, \
+        "failure must not show the success dialog"
+    assert gui.shown_errors, "an error dialog should be shown on failure"
+    assert gui.shown_errors[-1][0] == "Organize Incomplete"
+
+
 def test_organize_recursive_glob_uses_double_star_when_user_says_yes(
     tmp_path, monkeypatch
 ):

@@ -4092,6 +4092,7 @@ class RipperController(LegacyControllerMixin):
             self.log(f"Metadata ID: {parse_metadata_id(metadata_id)}")
 
         year = "0000"
+        season = 0  # movies don't have one; TV overwrites below
         if is_tv:
             season_input = self.gui.ask_input(
                 "Season", "Season number:"
@@ -4148,7 +4149,7 @@ class RipperController(LegacyControllerMixin):
             title,
             dest_folder,
             extras_folder,
-            0,
+            season,
             year,
         )
 
@@ -4156,8 +4157,18 @@ class RipperController(LegacyControllerMixin):
             self.sm.complete()
             self._cleanup_success_session_metadata(folder_path)
             norm_folder = os.path.normpath(folder_path)
-            if (cfg.get("opt_auto_delete_temp", True) and
-                    norm_folder.startswith(temp_root)):
+            # Auto-delete only when the source is strictly INSIDE the
+            # temp root: separator-anchored + case-normalized so e.g.
+            # "D:\RipsArchive" can never prefix-match temp "D:\Rips",
+            # and the temp root itself (which may hold other sessions'
+            # rips) is never rmtree'd.
+            temp_prefix = os.path.normcase(
+                os.path.join(os.path.normpath(temp_root), "")
+            )
+            inside_temp = os.path.normcase(norm_folder).startswith(
+                temp_prefix
+            )
+            if cfg.get("opt_auto_delete_temp", True) and inside_temp:
                 try:
                     shutil.rmtree(norm_folder)
                     self.log(
@@ -4178,7 +4189,16 @@ class RipperController(LegacyControllerMixin):
 
         self.write_session_summary()
         self.flush_log()
-        self.gui.show_info("Done", "Organize complete!")
+        if move_ok:
+            self.gui.show_info("Done", "Organize complete!")
+        else:
+            self.gui.show_error(
+                "Organize Incomplete",
+                "Organize stopped before all files were moved.\n\n"
+                "Check the log for details.  The source folder was "
+                "kept (not auto-deleted) so you can run Organize "
+                "again.",
+            )
 
     def _cleanup_success_session_metadata(
         self,
