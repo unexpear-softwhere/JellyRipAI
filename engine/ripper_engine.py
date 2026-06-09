@@ -1799,25 +1799,30 @@ class RipperEngine:
                 _diag_raw_lines.append(line)
 
             if line.startswith("PRGV:"):
+                # PRGV:current,total,max — ``current`` is the current
+                # *task*'s progress, ``total`` the whole *operation*'s,
+                # and ``max`` a fixed scale (65536).  Percent must be
+                # total/max: current/total runs far ahead on single-title
+                # rips and pegs at 100% / sawtooths on multi-title dumps.
                 parts = line[5:].split(",")
-                if len(parts) >= 2:
+                if len(parts) >= 3:
                     try:
-                        current = int(parts[0])
-                        total   = int(parts[1])
-                        if total > 0 and current > 0:
+                        total = int(parts[1])
+                        scale = int(parts[2])
+                        if scale > 0 and total > 0:
                             pct = min(
-                                int(current / total * 100), 100
+                                int(total / scale * 100), 100
                             )
                             on_progress(pct)
                             if pct != last_pct:
                                 last_pct = pct
                                 elapsed  = time.time() - rip_start
                                 rate     = (
-                                    current / elapsed
+                                    total / elapsed
                                     if elapsed > 0 else 0
                                 )
                                 remain   = (
-                                    int((total - current) / rate)
+                                    int((scale - total) / rate)
                                     if rate > 0 else 0
                                 )
                                 mins, secs = divmod(remain, 60)
