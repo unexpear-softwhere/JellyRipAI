@@ -562,6 +562,10 @@ class RipperEngine:
         self._ffprobe_cache_lock = threading.Lock()
         self._ffprobe_cache_max_size = 1000
         self._last_scan_total_bytes = None
+        # Per-title expected bytes from the last scan — consulted by
+        # rip_ops' degraded-success gate so a truncated rip can't be
+        # accepted as a salvage.
+        self._last_scan_title_bytes: dict[int, int] = {}
         self._last_scan_timestamp = 0.0
         self._last_scan_target = None
         self.last_disc_info = {}
@@ -1288,6 +1292,10 @@ class RipperEngine:
         self._last_scan_total_bytes = sum(
             max(0, int(t.get("size_bytes", 0) or 0)) for t in result
         )
+        self._last_scan_title_bytes = {
+            int(t.get("id", -1)): max(0, int(t.get("size_bytes", 0) or 0))
+            for t in result
+        }
         self._last_scan_timestamp = time.time()
         self._last_scan_target = disc_target
         disc_info["title_count"] = len(result)
@@ -2288,6 +2296,20 @@ class RipperEngine:
             )
             return False
 
+    def _quarantine_bad_destination(self, io_final_path, on_log):
+        """Rename a destination that failed post-move validation to
+        ``<name>.failed-validation`` so a corrupt file never sits in
+        the library under its real name (media servers index it
+        immediately)."""
+        try:
+            os.replace(io_final_path, io_final_path + ".failed-validation")
+            on_log(
+                "Quarantined failed destination as "
+                f"{os.path.basename(io_final_path)}.failed-validation"
+            )
+        except Exception as q_err:
+            on_log(f"WARNING: could not quarantine bad destination: {q_err}")
+
     def move_file_atomic(
         self,
         source,
@@ -2406,12 +2428,16 @@ class RipperEngine:
                         "Move failed — network write mismatch. "
                         "Destination size did not match source."
                     )
+                    # shutil.move already consumed the source; don't
+                    # leave the bad copy at the library path.
+                    self._quarantine_bad_destination(io_final_path, on_log)
                     return False
                 if not self._quick_ffprobe_ok(io_final_path, on_log):
                     self.last_move_error = (
                         "Move failed — destination file failed integrity "
                         "probe (ffprobe)."
                     )
+                    self._quarantine_bad_destination(io_final_path, on_log)
                     return False
                 return True
             except Exception as e:
@@ -2445,6 +2471,39 @@ class RipperEngine:
                 final_path = new_final
                 io_final_path = self._io_path(final_path)
             src_size = os.path.getsize(io_source)  # read before replace — source may vanish after
+            # Validate the STAGED copy before it takes the final name —
+            # a short/corrupt copy must never appear in the library
+            # under its real filename (media servers index it
+            # immediately, and a later retry would just uniquify
+            # around it).  The old order validated after os.replace,
+            # leaving the bad file at the destination on failure.
+            size_ok, dst_size = wait_for_size_match(src_size, io_temp_dest)
+            if not size_ok:
+                on_log(
+                    "ERROR: staged copy size mismatch before finalize "
+                    f"(src={src_size} bytes, staged={dst_size} bytes) "
+                    f"after {verify_retries} verification check(s).  "
+                    "Source file retained; destination not created."
+                )
+                self.last_move_error = (
+                    "Move failed — staged copy size mismatch (network "
+                    "write?).  Destination was not finalized."
+                )
+                try:
+                    os.remove(io_temp_dest)
+                except Exception:
+                    pass
+                return False
+            if not self._quick_ffprobe_ok(io_temp_dest, on_log):
+                self.last_move_error = (
+                    "Move failed — staged copy failed integrity probe "
+                    "(ffprobe).  Destination was not finalized."
+                )
+                try:
+                    os.remove(io_temp_dest)
+                except Exception:
+                    pass
+                return False
             try:
                 os.replace(io_temp_dest, io_final_path)
             except OSError as e:
@@ -2462,27 +2521,6 @@ class RipperEngine:
                     self.last_move_error = f"Move failed — fallback move error: {move_err}"
                     return False
             if os.path.exists(io_final_path):
-                size_ok, dst_size = wait_for_size_match(
-                    src_size, io_final_path
-                )
-                if not size_ok:
-                    on_log(
-                        "ERROR: destination size mismatch after move "
-                        f"(src={src_size} bytes, dst={dst_size} bytes). "
-                        f"after {verify_retries} verification check(s). "
-                        "Source file retained."
-                    )
-                    self.last_move_error = (
-                        "Move failed — network write mismatch. "
-                        "Destination size did not match source."
-                    )
-                    return False
-                if not self._quick_ffprobe_ok(io_final_path, on_log):
-                    self.last_move_error = (
-                        "Move failed — destination file failed integrity "
-                        "probe (ffprobe)."
-                    )
-                    return False
                 try:
                     os.remove(io_source)
                 except Exception as remove_err:

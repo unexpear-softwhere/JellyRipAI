@@ -225,15 +225,46 @@ def rip_selected_titles(self, rip_path, title_ids, on_progress, on_log):
                     self._log_rip_dir_contents(rip_path, before, on_log)
                     success = False
             if new_files:
-                on_log(
-                    f"Warning: MakeMKV reported errors for title "
-                    f"{tid+1} but produced {len(new_files)} "
-                    f"output file(s) — treating as degraded success."
+                # Degraded-acceptance gate: MakeMKV errored, so the
+                # output may be a truncated rip rather than a salvage.
+                # When the scan knows this title's size, require the
+                # output to clear the hard-fail ratio before accepting
+                # — otherwise a 60%-of-a-movie file sails through with
+                # only a log warning.  Unknown size (no scan data)
+                # keeps the legacy accept-with-warning behavior.
+                expected = int(
+                    (getattr(self, "_last_scan_title_bytes", {}) or {})
+                    .get(int(tid), 0)
                 )
-                self.last_title_file_map[int(tid)] = list(new_files)
-                self.last_degraded_titles.append(int(tid) + 1)
-                title_success = True
-                break
+                actual = 0
+                for p in new_files:
+                    try:
+                        actual += os.path.getsize(p)
+                    except OSError:
+                        pass
+                floor_pct = max(
+                    0, int(self.cfg.get("opt_hard_fail_ratio_pct", 40) or 0)
+                )
+                if expected > 0 and actual < expected * floor_pct / 100:
+                    on_log(
+                        f"Title {tid+1}: rejecting degraded output — "
+                        f"{actual / (1024**2):.0f} MB vs expected "
+                        f"{expected / (1024**2):.0f} MB (below the "
+                        f"{floor_pct}% floor).  Treating as failed."
+                    )
+                    # Remove the truncated output so a retry's
+                    # before/after diff can't double-count it.
+                    self._clean_new_mkv_files(rip_path, before, on_log)
+                else:
+                    on_log(
+                        f"Warning: MakeMKV reported errors for title "
+                        f"{tid+1} but produced {len(new_files)} "
+                        f"output file(s) — treating as degraded success."
+                    )
+                    self.last_title_file_map[int(tid)] = list(new_files)
+                    self.last_degraded_titles.append(int(tid) + 1)
+                    title_success = True
+                    break
             on_log(
                 f"Attempt {attempt_num} failed "
                 f"for title {tid+1}."
