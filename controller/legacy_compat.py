@@ -679,7 +679,9 @@ class LegacyControllerMixin:
 
     def _title_id_from_filename(self, path: str) -> int | None:
         name = os.path.basename(path)
-        m = re.search(r'title_t(\d+)', name, re.IGNORECASE)
+        # Suffix-anchored: MakeMKV emits "<DiscLabel>_tNN.mkv"; the
+        # literal "title_tNN" only appears for label-less discs.
+        m = re.search(r'_t(\d+)(?:_part\d+)?\.mkv$', name, re.IGNORECASE)
         if not m:
             return None
         try:

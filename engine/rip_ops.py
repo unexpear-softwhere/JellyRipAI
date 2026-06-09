@@ -52,8 +52,16 @@ def rip_all_titles(self, rip_path, on_progress, on_log):
     self.last_degraded_titles = []
 
     def _title_id_from_path(path):
+        # MakeMKV names outputs "<DiscLabel>_tNN.mkv" (with optional
+        # "_partM" splits); the literal "title_tNN" form only occurs
+        # for discs with no usable label.  Anchor on the suffix so
+        # labeled discs build a title-file map too — otherwise the
+        # integrity expectations and partial-resume credit silently
+        # skip for every labeled disc.
         match = re.search(
-            r"title_t(\d+)", os.path.basename(path), re.IGNORECASE
+            r"_t(\d+)(?:_part\d+)?\.mkv$",
+            os.path.basename(path),
+            re.IGNORECASE,
         )
         if not match:
             return None

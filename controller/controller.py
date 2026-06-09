@@ -4255,7 +4255,9 @@ class RipperController(LegacyControllerMixin):
             if not files:
                 # Fallback: check temp rip path for title pattern
                 import glob as _glob
-                pattern = os.path.join(rip_path, f"*title_t{tid:02d}*")
+                # "*_tNN*" (not "*title_tNN*") — MakeMKV prefixes the
+                # disc label, so labeled discs never matched the old glob.
+                pattern = os.path.join(rip_path, f"*_t{tid:02d}*")
                 files = _glob.glob(pattern)
             if not files:
                 self.log(f"Missing ripped extra output for title {tid + 1}.")

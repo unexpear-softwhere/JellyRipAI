@@ -1072,6 +1072,36 @@ def test_identify_disc_worker_both_enriches_with_imdb(sidebar, cfg, monkeypatch)
     assert "TMDB + OMDb" in log_line
 
 
+def test_identify_disc_worker_disagreeing_omdb_hit_is_dropped(
+    sidebar, cfg, monkeypatch,
+):
+    """When TMDB's and OMDb's top hits are DIFFERENT titles (both
+    services rank a fuzzy volume-label query independently), the card
+    must not pair TMDB's title with the other movie's IMDb id."""
+    controller = ChatController(sidebar=sidebar, cfg=cfg)
+    import shared.ai.tmdb_lookup as tl
+    import shared.ai.omdb_lookup as ol
+    from shared.ai.tmdb_lookup import TMDBResult
+    from shared.ai.omdb_lookup import OMDbResult
+    monkeypatch.setattr(
+        tl, "search_tmdb",
+        lambda q, k, **kw: ([TMDBResult("movie", 9487, "Spirit: Stallion of the Cimarron", "2002", "")], ""),
+    )
+    monkeypatch.setattr(
+        ol, "search_omdb",
+        lambda q, k, **kw: ([OMDbResult("movie", "tt0117756", "Spirit", "1996")], ""),
+    )
+    posted: list = []
+    controller.disc_identified.connect(lambda md, log: posted.append((md, log)))
+    controller._identify_disc_worker("SPIRIT", "tmdbkey", "omdbkey")
+
+    assert len(posted) == 1
+    chat_md, log_line = posted[0]
+    assert "movie/9487" in chat_md          # TMDB's hit is shown
+    assert "tt0117756" not in chat_md       # the mismatched IMDb id is NOT
+    assert "TMDB + OMDb" not in log_line    # source line says TMDB only
+
+
 def test_identify_disc_async_skips_without_key(sidebar, cfg, monkeypatch):
     """No TMDB key → no lookup and dedup stays unset (returned early)."""
     cfg.pop("opt_tmdb_api_key", None)

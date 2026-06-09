@@ -5,7 +5,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ffmpegFileNames = @("ffmpeg.exe", "ffprobe.exe", "ffplay.exe")
+# ffplay.exe dropped (unused by the app; ~130 MB per artifact).
+$ffmpegFileNames = @("ffmpeg.exe", "ffprobe.exe")
 $searchRoots = New-Object System.Collections.Generic.List[string]
 $seenRoots = @{}
 $preferredDesktopRoot = Join-Path $HOME "Desktop\ffmpeg"

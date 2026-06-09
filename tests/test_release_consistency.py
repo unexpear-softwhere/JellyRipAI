@@ -80,7 +80,9 @@ def test_release_script_checks_git_state_and_release_notes():
     assert 'set "BUILD_DIR=build\\ai"' in release_script
     assert 'type nul > "%ARTIFACT_DIR%\\.gitkeep"' in release_script
     assert 'LICENSE THIRD_PARTY_NOTICES.md "%ARTIFACT_DIR%\\FFmpeg-LICENSE.txt" "%ARTIFACT_DIR%\\FFmpeg-README.txt"' in release_script
-    assert '"%ARTIFACT_DIR%\\ffmpeg.exe" "%ARTIFACT_DIR%\\ffprobe.exe" "%ARTIFACT_DIR%\\ffplay.exe"' in release_script
+    assert '"%ARTIFACT_DIR%\\ffmpeg.exe" "%ARTIFACT_DIR%\\ffprobe.exe"' in release_script
+    # ffplay was dropped 2026-06-09 (unused; ~130 MB per artifact).
+    assert "ffplay" not in release_script.lower()
     assert 'set "RELEASE_BRANCH=main"' in release_script
     assert 'set "RELEASE_TAG=ai-v%VERSION%"' in release_script
     assert "%ARTIFACT_DIR%\\JellyRipAI.exe" in release_script
@@ -107,7 +109,7 @@ def test_release_metadata_tracks_license_notices():
     assert '#define MyAppBuildOutputDir "..\\dist\\ai"' in installer
     assert 'Source: "{#MyAppBuildOutputDir}\\ffmpeg.exe"' in installer
     assert 'Source: "{#MyAppBuildOutputDir}\\ffprobe.exe"' in installer
-    assert 'Source: "{#MyAppBuildOutputDir}\\ffplay.exe"' in installer
+    assert "ffplay" not in installer.lower()
     assert 'Source: "{#MyAppBuildOutputDir}\\JellyRipAI.exe"' in installer
     assert 'Source: "..\\LICENSE"' in installer
     assert 'Source: "..\\THIRD_PARTY_NOTICES.md"' in installer
@@ -134,7 +136,8 @@ def test_spec_bundles_ffmpeg_intentionally():
     assert 'StringStruct("OriginalFilename", APP_EXE_NAME)' in spec
     assert "ffmpeg.exe" in spec.lower()
     assert "ffprobe.exe" in spec.lower()
-    assert "ffplay.exe" in spec.lower()
+    # ffplay is referenced only in the drop-note comment, never bundled.
+    assert '"ffplay.exe"' not in spec
     assert 'PREFERRED_FFMPEG_ROOT = Path.home() / "Desktop" / "ffmpeg"' in spec
     assert '$preferredDesktopRoot = Join-Path $HOME "Desktop\\ffmpeg"' in bundle_stager
     assert "C:/Users/" not in spec

@@ -47,7 +47,6 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Source: "{#MyAppBuildOutputDir}\JellyRipAI.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyAppBuildOutputDir}\ffmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyAppBuildOutputDir}\ffprobe.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MyAppBuildOutputDir}\ffplay.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyAppBuildOutputDir}\FFmpeg-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion

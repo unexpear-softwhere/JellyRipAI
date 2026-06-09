@@ -1304,6 +1304,22 @@ class ChatController(QObject):
         ).start()
 
     @staticmethod
+    def _results_agree(tmdb_r: Any, omdb_r: Any) -> bool:
+        """True when TMDB's and OMDb's top hits look like the SAME
+        title: same punctuation/case-insensitive name, and same year
+        when both services report one."""
+        import re
+
+        def norm(s: str) -> str:
+            return re.sub(r"[^a-z0-9]+", " ", str(s or "").lower()).strip()
+
+        if norm(tmdb_r.title) != norm(omdb_r.title):
+            return False
+        if tmdb_r.year and omdb_r.year and tmdb_r.year != omdb_r.year:
+            return False
+        return True
+
+    @staticmethod
     def _clean_disc_label(disc_name: str) -> str:
         """Make a volume label more TMDB-searchable: ``_ - . +`` become
         spaces and runs of whitespace collapse.  So
@@ -1350,7 +1366,11 @@ class ChatController(QObject):
             return
 
         if tmdb_r is not None:
-            # TMDB is canonical for the title; enrich with OMDb's IMDb id.
+            # TMDB is canonical for the title; enrich with OMDb's IMDb
+            # id ONLY when the two services agree they found the same
+            # thing — both independently rank a fuzzy volume-label
+            # query, and on a generic label their #1 hits can be
+            # different movies entirely (wrong IMDb id on the card).
             kind = "Movie" if tmdb_r.media_type == "movie" else "TV"
             year = f" ({tmdb_r.year})" if tmdb_r.year else ""
             lines = [
@@ -1359,10 +1379,14 @@ class ChatController(QObject):
                 f"- Type: {kind}",
                 f"- TMDB ID: {tmdb_r.media_type}/{tmdb_r.tmdb_id}",
             ]
-            if omdb_r is not None and omdb_r.imdb_id:
+            agreed = (
+                omdb_r is not None and omdb_r.imdb_id
+                and self._results_agree(tmdb_r, omdb_r)
+            )
+            if agreed:
                 lines.append(f"- IMDb ID: {omdb_r.imdb_id} (via OMDb)")
             chat_md = "\n".join(lines)
-            src = "TMDB + OMDb" if omdb_r is not None else "TMDB"
+            src = "TMDB + OMDb" if agreed else "TMDB"
             log_line = f"Disc identified via {src}: {tmdb_r.title}{year}"
         else:
             # OMDb only (no TMDB key, or TMDB had no match).

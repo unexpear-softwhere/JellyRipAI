@@ -91,3 +91,12 @@ def test_render_from_tokens_produces_qss():
 def test_render_from_tokens_rejects_incomplete():
     with pytest.raises(ValueError):
         render_qss_from_tokens({"bg": "#000000"})
+
+
+def test_default_theme_id_is_a_real_builtin():
+    """``DEFAULTS['opt_pyside6_theme']`` must name a shipping theme.
+    It pointed at the long-deleted ``dark_github`` for a while —
+    masked at runtime by the fallback, but every fresh config
+    persisted a dangling id."""
+    from shared.runtime import DEFAULTS
+    assert DEFAULTS["opt_pyside6_theme"] in THEMES_BY_ID

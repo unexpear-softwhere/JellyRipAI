@@ -23,7 +23,9 @@ APP_DISPLAY_NAME = "JellyRip AI"
 APP_EXE_BASENAME = "JellyRipAI"
 APP_EXE_NAME = f"{APP_EXE_BASENAME}.exe"
 FFMPEG_ENV_VARS = ("JELLYRIP_FFMPEG_DIR", "FFMPEG_DIR")
-FFMPEG_FILENAMES = ("ffmpeg.exe", "ffprobe.exe", "ffplay.exe")
+# ffplay.exe was dropped 2026-06-09: nothing in the app references it
+# (the MKV preview uses QMediaPlayer), and it added ~130 MB per artifact.
+FFMPEG_FILENAMES = ("ffmpeg.exe", "ffprobe.exe")
 FFMPEG_NOTICE_FILENAMES = ("LICENSE", "README.txt")
 PREFERRED_FFMPEG_ROOT = Path.home() / "Desktop" / "ffmpeg"
 

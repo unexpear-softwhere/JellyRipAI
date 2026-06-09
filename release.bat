@@ -134,7 +134,7 @@ if errorlevel 1 (
     echo ABORT: FFmpeg bundle staging failed.
     exit /b 1
 )
-for %%F in ("%ARTIFACT_DIR%\ffmpeg.exe" "%ARTIFACT_DIR%\ffprobe.exe" "%ARTIFACT_DIR%\ffplay.exe") do (
+for %%F in ("%ARTIFACT_DIR%\ffmpeg.exe" "%ARTIFACT_DIR%\ffprobe.exe") do (
     if not exist %%F (
         echo ABORT: %%F is missing; JellyRip AI releases intentionally bundle FFmpeg.
         exit /b 1

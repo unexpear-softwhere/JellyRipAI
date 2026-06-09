@@ -230,7 +230,7 @@ DEFAULTS: dict[str, ConfigScalar] = {
     # Selected QSS theme name (without .qss extension); switchable
     # live from Settings -> Themes.  Available themes live under
     # ``gui_qt/qss/``.
-    "opt_pyside6_theme": "dark_github",
+    "opt_pyside6_theme": "basic_dark",
     # Appearance-tab toggles inherited from MAIN.  All default True
     # so existing AI BRANCH config.json files see no behavior change
     # after the Phase 4 graft; see

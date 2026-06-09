@@ -45,7 +45,6 @@ echo Build complete! Output:
 echo   %ARTIFACT_DIR%\JellyRipAI.exe
 echo   %ARTIFACT_DIR%\ffmpeg.exe
 echo   %ARTIFACT_DIR%\ffprobe.exe
-echo   %ARTIFACT_DIR%\ffplay.exe
 echo   %ARTIFACT_DIR%\FFmpeg-LICENSE.txt
 echo   %ARTIFACT_DIR%\FFmpeg-README.txt
 pause
