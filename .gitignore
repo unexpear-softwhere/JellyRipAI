@@ -53,7 +53,6 @@ rip_log.txt
 .git_status_now.txt
 
 # Session debris (pytest log, diff scratch, codex auto-backups)
-..txt
 origin_main_controller.tmp
 .codex_backup/
 

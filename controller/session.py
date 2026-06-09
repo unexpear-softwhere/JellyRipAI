@@ -77,10 +77,18 @@ class SessionHelpers:
             return
         if not self.controller.engine.cfg.get("opt_save_logs", True):
             return
-        log_file = os.path.normpath(
-            self.controller.engine.cfg.get("log_file", "")
-        )
-        if log_file and not log_file.lower().endswith((".txt", ".log")):
+        raw_log_file = str(
+            self.controller.engine.cfg.get("log_file", "") or ""
+        ).strip()
+        if not raw_log_file:
+            # Blank path = file logging off.  The emptiness check must
+            # run BEFORE normpath: normpath("") returns "." (truthy),
+            # which used to slip past the guard, get ".txt" appended,
+            # and silently append every session log to a junk "..txt"
+            # in the process CWD.
+            return
+        log_file = os.path.normpath(raw_log_file)
+        if not log_file.lower().endswith((".txt", ".log")):
             log_file = log_file + ".txt"
         self.controller.engine.write_session_log(
             log_file, self.controller.start_time, self.controller.session_log, self.log

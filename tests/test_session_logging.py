@@ -74,3 +74,25 @@ def test_flush_log_skips_disk_write_when_log_saving_disabled() -> None:
     helpers.flush_log()
 
     assert engine.writes == []
+
+
+def test_flush_log_blank_path_means_logging_off() -> None:
+    """A blank ``log_file`` must mean "no file logging" — not a write.
+    ``normpath("")`` returns ``"."`` (truthy), which used to defeat the
+    emptiness guard, gain a ``.txt`` suffix, and silently append every
+    session's log to a junk ``..txt`` file in the process CWD."""
+    helpers, engine = _helpers({"opt_save_logs": True, "log_file": ""})
+
+    helpers.flush_log()
+
+    assert engine.writes == [], \
+        'blank log_file must not write (the old code wrote "..txt")'
+
+
+def test_flush_log_whitespace_path_means_logging_off() -> None:
+    """Whitespace-only paths are blank too."""
+    helpers, engine = _helpers({"opt_save_logs": True, "log_file": "   "})
+
+    helpers.flush_log()
+
+    assert engine.writes == []
