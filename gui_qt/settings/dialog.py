@@ -163,14 +163,23 @@ class SettingsDialog(QDialog):
         self.accept()
 
     def _on_cancel(self) -> None:
-        """Ask each tab to revert any preview-applied changes, then
-        close.  The themes tab uses this to restore the original
-        QSS if the user previewed but didn't commit."""
+        """Cancel-button handler — all dismissals funnel through
+        ``reject()`` so the revert can't be skipped."""
+        self.reject()
+
+    def reject(self) -> None:  # noqa: N802 (Qt convention)
+        """Revert + close for EVERY dismissal — the Cancel button,
+        Esc, and the title-bar ✕ (which Qt routes through reject()).
+        The ✕ used to skip the per-tab ``cancel()``, leaving preview-
+        applied changes (theme, tray, log colors) live at runtime
+        while cfg kept the old values — "my theme keeps resetting".
+        The themes tab uses this to restore the original QSS if the
+        user previewed but didn't commit."""
         for i in range(self._tabs.count()):
             tab = self._tabs.widget(i)
             if hasattr(tab, "cancel"):
                 tab.cancel()
-        self.reject()
+        super().reject()
 
     def keyPressEvent(self, event):  # noqa: N802 (Qt convention)
         if event.key() == Qt.Key.Key_Escape:

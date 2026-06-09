@@ -242,15 +242,21 @@ class PreviewDialog(QDialog):
         )
 
     def _on_close(self) -> None:
-        # Stop playback before rejecting so the file handle is
-        # released promptly (matters on Windows where the controller
-        # might want to delete the temp file right after).
+        self.reject()
+
+    def reject(self) -> None:  # noqa: N802 (Qt convention)
+        """Release the media handle on EVERY dismissal — the Close
+        button, Esc, and the title-bar ✕ (which Qt routes through
+        reject()).  The ✕ used to skip the release, keeping the MKV
+        open for the rest of the session — which blocks deleting the
+        temp file on Windows.  Stop playback before closing so the
+        handle is released promptly."""
         try:
             self._player.stop()
             self._player.setSource(QUrl())  # release handle
         except Exception:
             pass
-        self.reject()
+        super().reject()
 
     def keyPressEvent(self, event):  # noqa: N802 (Qt convention)
         if event.key() == Qt.Key.Key_Escape:
