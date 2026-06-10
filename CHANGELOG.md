@@ -2,6 +2,48 @@
 
 <!-- markdownlint-disable MD013 -->
 
+## [1.0.24] - 2026-06-09
+
+Large bug-fix + packaging release driven by a full-codebase review.
+
+### Added
+
+- **Disc auto-identification** on the drive-bar reload button: the disc
+  label is looked up on TMDB (and OMDb when both keys are set — OMDb
+  contributes the IMDb id only when both services agree on the title).
+  Results post to the chat and the Live Log.
+- **OMDb as an optional second lookup source** (free key, CC BY-NC
+  attribution shown in Settings -> AI).  TMDB lookups now run
+  automatically whenever a key is saved — independent of the Web toggle.
+- **Theme Maker** (live full-app preview, save/export/import) and 9 new
+  built-in themes alongside Basic Dark/Light.
+- **Chat model dropdown** listing the active provider's usable models
+  (embedding-only and signed-out cloud models filtered/disabled).
+
+### Changed
+
+- **One-DIR app format.**  The app ships as a folder (exe + `_internal\`)
+  instead of a single exe: instant launches, no %TEMP% extraction or
+  crash debris, FFmpeg ships once.  Portable download is now
+  `JellyRipAI-portable.zip`; the installer shrinks to ~150 MB and cleans
+  up the old staged FFmpeg on upgrade.  Unused `ffplay.exe` dropped.
+
+### Fixed
+
+- **AI Providers dialog Test/Save/Set-Active never completed** — the
+  worker result was marshaled with a timer that never fired, so keys
+  were never persisted from that dialog.  Re-enter any key that never
+  "took".
+- **Chat thread safety** — the worker no longer reads live widgets for
+  its UI snapshot (crash risk while chatting mid-rip).
+- Shared with MAIN v1.0.24: working Stop Session; dump-abort can no
+  longer delete a completed disc; Organize season/auto-delete/verdict
+  fixes; UTF-8 MakeMKV decoding; whole-rip progress math; staged-copy
+  validation before finalize + degraded-rip gate; labeled-disc
+  title-file mapping; X-close behaves like Cancel; crash.log; updater
+  signature + truncation fixes; transcode builder hardening; blank
+  log-path junk-file fix.
+
 ## [1.0.23] - 2026-05-29
 
 The AI assistant becomes genuinely hands-on: docked and usable while

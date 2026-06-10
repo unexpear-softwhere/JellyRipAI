@@ -10,8 +10,8 @@ should be treated as non-final.
 
 ## Project Status
 
-- Current unstable line: `ai-v1.0.23` (latest unstable AI pre-release)
-- AI release page: [ai-v1.0.23](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.23)
+- Current unstable line: `ai-v1.0.24` (latest unstable AI pre-release)
+- AI release page: [ai-v1.0.24](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.24)
 - MAIN release page: [v1.0.22](https://github.com/unexpear/JellyRip/releases/tag/v1.0.22) (non-AI baseline, separate repo)
 - Project site: [unexpear-softwhere.github.io/JellyRipAI](https://unexpear-softwhere.github.io/JellyRipAI/)
 - Platform target: Windows
@@ -53,10 +53,11 @@ Branch-specific documentation for the assist line:
 
 ### From GitHub release
 
-(recommended, currently `ai-v1.0.23` unstable AI pre-release)
+(recommended, currently `ai-v1.0.24` unstable AI pre-release)
 
-1. Go to the [current unstable AI release page](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.23).
-2. Download `JellyRipAIInstaller.exe` (installer) or `JellyRipAI.exe` (standalone).
+1. Go to the [current unstable AI release page](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.24).
+2. Download `JellyRipAIInstaller.exe` (installer) or `JellyRipAI-portable.zip`
+   (portable - unzip anywhere and run `JellyRipAI.exe` inside the folder).
 3. If SmartScreen/Defender flags the file, whitelist the download folder
   first (common PyInstaller false positive).
 4. Run and open **Settings** to confirm MakeMKV and ffprobe paths before first rip.
@@ -192,7 +193,7 @@ through GitHub Releases rather than committed to the repository.
 ### Full release pipeline
 
 ```bash
-release.bat 1.0.23
+release.bat 1.0.24
 ```
 
 This runs tests, checks version consistency, builds both executables,

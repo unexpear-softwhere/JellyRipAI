@@ -1,59 +1,80 @@
-# JellyRip AI v1.0.23 Release Notes
+# JellyRip AI v1.0.24 Release Notes
 
-JellyRip AI v1.0.23 — the AI assistant becomes genuinely hands-on:
-docked and usable while dialogs are open, able to look things up on
-the web and TMDB, and aware of the full per-title disc scan.  Plus two
-real scan-path bug fixes.
+JellyRip AI v1.0.24 — a large bug-fix + packaging release: a working
+Stop button, a data-loss fix, disc auto-identification via TMDB and
+OMDb, a Theme Maker with 9 new themes, and a new app format.
+
+## DOWNLOAD FORMAT CHANGED
+
+The standalone download is now **JellyRipAI-portable.zip** (a folder
+you unzip and run) instead of a single `JellyRipAI.exe`. The app now
+starts instantly — the old single-exe format unpacked ~600 MB to your
+temp folder on every launch. If you previously downloaded the bare
+exe, grab the portable zip or the installer this time.
 
 ## Download
 
-- Direct download: [JellyRipAI.exe](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.23/JellyRipAI.exe)
-- Installer: [JellyRipAIInstaller.exe](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.23/JellyRipAIInstaller.exe)
-- Release page: [ai-v1.0.23 release](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.23)
+- Portable: [JellyRipAI-portable.zip](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.24/JellyRipAI-portable.zip)
+- Installer: [JellyRipAIInstaller.exe](https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.24/JellyRipAIInstaller.exe)
+- Release page: [ai-v1.0.24 release](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.24)
 - Project site: [unexpear-softwhere.github.io/JellyRipAI](https://unexpear-softwhere.github.io/JellyRipAI/)
 
 ## Highlights
 
-### A real assistant
+### AI
 
-- **Docked chat panel, usable during dialogs.**  The chat reflows the
-  layout (no floating window) and stays interactive WHILE the
-  identity / duplicate / space-override dialogs are open — those
-  dialogs are non-modal now, with the workflow buttons soft-locked so
-  a running rip can't desync.
-- **Web lookup (Web toggle).**  The assistant searches DuckDuckGo
-  (keyless) and TMDB (your own free v3 API key) before answering, with
-  a model-formulated query from the disc context and cited source
-  links.  Works with the local Ollama model.
-- **Sees the disc scan in detail.**  The drive's disc label before a
-  full scan, and per-title duration / size / chapters / audio tracks /
-  subtitle languages / main-vs-extra after one.
+- **Disc auto-identification**: hit the reload button by the drive bar
+  and the assistant looks the disc label up on TMDB (and OMDb when
+  both keys are set — OMDb adds the IMDb id only when the two services
+  agree on the title). Results post to the chat and the Live Log.
+- **TMDB lookups run automatically** whenever a key is saved — no Web
+  toggle needed. Optional **OMDb key** field added in Settings → AI.
+- The chat's mode selector is now a **model dropdown** listing the
+  active provider's usable models.
+- **The AI Providers dialog's Test / Save / Set as Active actually
+  complete now** — results were silently lost, so keys never saved
+  from that dialog. If a key you saved before never "took", re-enter
+  it.
+- Chat no longer reads live UI state from a worker thread (crash risk
+  while chatting mid-rip).
 
-### Bug fixes
+### Themes
 
-- **Bundled FFmpeg / ffprobe is always used.**  A blank configured
-  path became `"."` via `os.path.normpath`, which the resolver
-  mis-read as a configured directory and then discarded the bundled
-  binary — surfacing as "tool not found" on a scan.
-- **Drive picker lists the real drive + disc again.**  It referenced a
-  removed `MakeMKVDriveInfo` type while the scanner returns
-  `MakeMKVDrive`, so the label formatter and the coercion crashed.
+- **Theme Maker** — live full-app preview, save, export to a shareable
+  `.json`, import themes others made.
+- **9 new built-in themes**: Monokai, Rosé Pine, Tokyo Night,
+  Catppuccin Mocha, Everforest Dark, Synthwave, Ayu Mirage, IBM
+  Carbon, Palenight (plus the Basic Dark/Light starting points).
 
-### TMDB compliance
+### Packaging
 
-- Required attribution notice + the TMDB logo are shown in
-  Settings -> AI -> Web lookup and in CREDITS.md.  The TMDB key is
-  per-user and never persisted to shipped config.
+- **One-DIR app format**: instant launches, nothing written to %TEMP%,
+  no leftover `_MEI` folders after crashes. FFmpeg ships once (inside
+  `_internal\`); the installer shrinks to ~150 MB and cleans up the old
+  staged FFmpeg on upgrade. Unused `ffplay.exe` dropped (~130 MB).
+
+### Critical fixes (shared with MAIN v1.0.24)
+
+- **Stop Session works**; stopping a multi-disc Dump All can no longer
+  delete the most recently completed disc's files.
+- **Organize Existing MKVs**: real season numbers, safe auto-delete,
+  honest verdict on failed moves.
+- MakeMKV output decoded as **UTF-8**; the **progress bar** tracks the
+  whole rip; moves **validate the staged copy before finalize**;
+  truncated "degraded" rips rejected; labeled-disc title-file mapping.
+- Title-bar ✕ behaves like Cancel; `crash.log`; updater signature +
+  truncation fixes; blank-log-path junk file fixed.
 
 ## What's NOT in this release
 
-The disc-ripping core is unchanged.  This release is the AI assistant
-plus two scan-path bug fixes.
+FFmpeg/HandBrake transcoding remains unwired in the UI (its builder
+got real fixes — AMD/Intel GPU support, correct GPU quality flags —
+ready for when it lands).
 
-## Companion fork: JellyRip MAIN
+## MAIN
 
-The non-AI baseline ships the same disc-ripping core without AI
-assistance.
+The non-AI app receives the same core fixes, the theme system, and
+the new packaging.
 
-- MAIN release page: [v1.0.22 release](https://github.com/unexpear/JellyRip/releases/tag/v1.0.22)
+- MAIN release page: [v1.0.24 release](https://github.com/unexpear/JellyRip/releases/tag/v1.0.24)
 - MAIN project site: [unexpear.github.io/JellyRip](https://unexpear.github.io/JellyRip/)

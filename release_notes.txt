@@ -1,50 +1,82 @@
-## JellyRip AI v1.0.23 Release Notes (UNSTABLE)
+## JellyRip AI v1.0.24 Release Notes (UNSTABLE)
 
-JellyRip AI v1.0.23 — the AI assistant becomes genuinely hands-on:
-docked and usable while dialogs are open, able to look things up on
-the web and TMDB, and aware of the full per-title disc scan.  Plus two
-real scan-path bug fixes.
+JellyRip AI v1.0.24 — a large bug-fix + packaging release: a working
+Stop button, a data-loss fix, disc auto-identification via TMDB and
+OMDb, a Theme Maker with 9 new themes, and a new app format.
 
-## Download
+## DOWNLOAD FORMAT CHANGED
 
-- Direct download: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.23/JellyRipAI.exe
-- Installer: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.23/JellyRipAIInstaller.exe
-- Release page: https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.23
+The standalone download is now **JellyRipAI-portable.zip** (a folder
+you unzip and run) instead of a single JellyRipAI.exe.  The app now
+starts instantly — the old single-exe format unpacked ~600 MB to your
+temp folder on every launch.  If you previously downloaded the bare
+exe, grab the portable zip or the installer this time.
+
+- Portable: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.24/JellyRipAI-portable.zip
+- Installer: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.24/JellyRipAIInstaller.exe
+- Release page: https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.24
 - Project site: https://unexpear-softwhere.github.io/JellyRipAI/
 
 ### Highlights
 
-A real assistant
-- Docked chat panel (reflows the layout) that stays usable WHILE the
-  identity / duplicate / space-override dialogs are open.  Those
-  dialogs are non-modal now, with the workflow buttons soft-locked so
-  a running rip can't desync.
-- Web toggle: the assistant searches DuckDuckGo (keyless) and TMDB
-  (your own free v3 key) before answering, with model-formulated
-  queries and cited source links.  Works with the local Ollama model.
-- Sees the disc scan in detail: the drive's disc label before a full
-  scan, and per-title duration / size / chapters / audio tracks /
-  subtitle languages / main-vs-extra after one.
+AI
+- Disc auto-identification: hit the reload button by the drive bar
+  and the assistant looks the disc label up on TMDB (and OMDb when
+  both keys are set — OMDb adds the IMDb id, only when the two
+  services agree on the title).  Results post to the chat and the
+  Live Log.
+- TMDB lookups run automatically whenever a key is saved — no Web
+  toggle needed.  Optional OMDb key field added in Settings -> AI.
+- The chat's mode selector is now a model dropdown listing the active
+  provider's usable models (embedding-only and unsigned-in cloud
+  models are filtered/disabled).
+- The AI Providers dialog's Test / Save / Set as Active actually
+  complete now (results were silently lost — keys never saved from
+  that dialog).  If a key you saved before never "took", re-enter it.
+- Chat no longer reads live UI state from a worker thread (rare
+  crash risk while chatting mid-rip).
 
-Bug fixes
-- Bundled FFmpeg / ffprobe is always used now.  A normpath("") -> "."
-  bug made the app report "tool not found" on a scan.
-- Drive picker lists the real drive + disc again (it referenced a
-  removed type and crashed).
+Themes
+- Theme Maker: pick a color for everything the theme touches with a
+  live full-app preview, save, export to a shareable .json, and
+  import themes others made.
+- 9 new built-in themes: Monokai, Rosé Pine, Tokyo Night, Catppuccin
+  Mocha, Everforest Dark, Synthwave, Ayu Mirage, IBM Carbon,
+  Palenight (plus the Basic Dark/Light starting points).
 
-TMDB compliance
-- Required attribution notice + the TMDB logo are shown in Settings
-  and CREDITS.  Your TMDB key stays local and is never shipped — each
-  user supplies their own.
+Packaging
+- One-DIR app format: instant launches, nothing written to %TEMP%,
+  no leftover _MEI folders after crashes.  FFmpeg ships once (inside
+  _internal\); the installer shrinks to ~150 MB.  Upgrading cleans up
+  the old staged FFmpeg automatically.
+- Unused ffplay.exe dropped from all artifacts (~130 MB saved).
+
+Critical fixes (shared with MAIN v1.0.24)
+- Stop Session works — it was never enabled, so a 90-minute rip had
+  no abort.  Stopping a multi-disc Dump All no longer deletes the
+  most recently COMPLETED disc's files.
+- Organize Existing MKVs: real season numbers (was hardcoded S00),
+  safe auto-delete (no more sibling-folder hazard), honest verdict on
+  failed moves.
+- MakeMKV output decoded as UTF-8 (non-ASCII disc titles no longer
+  mojibake or kill the reader); progress bar tracks the whole rip.
+- Moves validate the staged copy BEFORE it takes the final library
+  name; truncated "degraded" rips are rejected; title-file mapping
+  works for labeled discs.
+- Title-bar X on Settings / MKV preview behaves like Cancel; crashes
+  write crash.log next to config.json; updater signature check and
+  truncation detection fixed; blank-log-path junk file fixed.
 
 ### What's NOT in this release
 
-The disc-ripping core is unchanged.  This release is the AI assistant
-plus two scan-path bug fixes.
+FFmpeg/HandBrake transcoding remains unwired in the UI (its builder
+got real fixes — AMD/Intel GPU support, correct GPU quality flags —
+ready for when it lands).
 
-### Companion fork: JellyRip MAIN
+### MAIN
 
-The non-AI baseline ships the same disc-ripping core without AI.
+The non-AI app receives the same core fixes, the theme system, and
+the new packaging.
 
-- MAIN release page: https://github.com/unexpear/JellyRip/releases/tag/v1.0.22
+- MAIN release page: https://github.com/unexpear/JellyRip/releases/tag/v1.0.24
 - MAIN project site: https://unexpear.github.io/JellyRip/

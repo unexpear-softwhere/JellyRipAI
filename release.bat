@@ -3,14 +3,14 @@ REM ============================================================
 REM  JellyRip AI release pipeline — enforces correct order:
 REM    git-check -> tests -> build -> verify -> push -> publish
 REM
-REM  Usage:  release.bat 1.0.23
+REM  Usage:  release.bat 1.0.24
 REM ============================================================
 setlocal enabledelayedexpansion
 
 set VERSION=%~1
 if "%VERSION%"=="" (
     echo Usage: release.bat ^<version^>
-    echo Example: release.bat 1.0.23
+    echo Example: release.bat 1.0.24
     exit /b 1
 )
 REM AI fork lives at unexpear-softwhere/JellyRipAI on the `main` branch.
