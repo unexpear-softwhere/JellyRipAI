@@ -29,6 +29,33 @@ QFrame#sectionDivider {
     border: none;
 }
 
+/* ---- Settings dialog tab bar --------------------------------------- */
+/* Qt's default styled-tab rendering leaves unselected tabs without
+ * contrast on light surfaces (they vanish white-on-white).  Theme the
+ * tabs explicitly: muted unselected labels, full-strength selected
+ * label with an accent underline.  Reads correctly in light and dark. */
+
+QTabWidget#settingsTabs::pane {
+    border: none;
+}
+
+QTabBar::tab {
+    background: transparent;
+    color: #a596c8;
+    padding: 8px 16px;
+    border: none;
+    border-bottom: 2px solid transparent;
+}
+
+QTabBar::tab:hover {
+    color: #f0e6ff;
+}
+
+QTabBar::tab:selected {
+    color: #f0e6ff;
+    border-bottom: 2px solid #ff5dc8;
+}
+
 /* ---- Headers + section labels --------------------------------------- */
 
 QLabel#stepHeader {
@@ -347,13 +374,18 @@ QScrollBar::sub-line:horizontal {
     background: none;
 }
 
-/* ---- Main window shell (Phase 3c-i) -------------------------------- */
-/* Layout chrome introduced by ``gui_qt/main_window.py``.  Each rule
- * targets the objectName the shell sets so per-theme coloring
- * happens entirely in QSS.  No colors hard-coded in Python. */
+/* ---- Themed window surfaces (Phase 3c-i) --------------------------- */
+/* Layout chrome introduced by ``gui_qt/main_window.py`` and the
+ * settings dialog.  Each rule targets the objectName the shell sets so
+ * per-theme coloring happens entirely in QSS.  No colors hard-coded in
+ * Python.  ``settingsDialogBody`` is the dialog's content container: a
+ * top-level ``QDialog`` background isn't reliably painted over the
+ * native window surface, so the dialog wraps its content in this named
+ * child the same way the main window uses ``mainCentral``. */
 
 QMainWindow#mainWindow,
-QWidget#mainCentral {
+QWidget#mainCentral,
+QWidget#settingsDialogBody {
     background-color: #1a132f;
 }
 

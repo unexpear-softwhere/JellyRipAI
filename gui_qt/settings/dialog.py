@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
 
 from gui_qt.settings.tab_ai import AITab
@@ -58,7 +59,22 @@ class SettingsDialog(QDialog):
         self.setModal(True)
         self.resize(560, 620)
 
-        outer = QVBoxLayout(self)
+        # All content lives in a named child container, not directly on
+        # the QDialog.  A top-level QDialog's QSS ``background`` isn't
+        # reliably painted over the native window surface (on Windows the
+        # dialog kept a dark background under light themes, fresh *and*
+        # live), so the theme's ``QWidget#settingsDialogBody`` rule paints
+        # the surface here instead — the same pattern the main window uses
+        # with ``mainCentral``.  This is what lets a theme change restyle
+        # the open dialog, not just the controls inside it.
+        body_layout = QVBoxLayout(self)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+        body = QWidget()
+        body.setObjectName("settingsDialogBody")
+        body_layout.addWidget(body)
+
+        outer = QVBoxLayout(body)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
