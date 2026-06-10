@@ -263,7 +263,9 @@ def test_ffmpeg_engine_stages_temp_copy_and_leaves_original_untouched(tmp_path, 
     class _Proc:
         def __init__(self, cmd):
             captured["cmd"] = cmd
-            staged_input = cmd[2]
+            # Input path located via -i (the builder now prefixes
+            # -nostdin and the overwrite flag, so positions shift).
+            staged_input = cmd[cmd.index("-i") + 1]
             captured["staged_input"] = staged_input
             assert staged_input != str(input_path)
             assert os.path.exists(staged_input)
@@ -336,7 +338,8 @@ def test_ffmpeg_engine_fast_mode_reads_original_directly(tmp_path, monkeypatch):
     ret, log_path = engine.run_job(job)
 
     assert ret == 0
-    assert captured["cmd"][2] == str(input_path)
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("-i") + 1] == str(input_path)
     log_text = (tmp_path / "logs" / os.path.basename(log_path)).read_text(encoding="utf-8")
     assert "FFMPEG_SOURCE_MODE: fast_direct" in log_text
     assert f"INPUT: {input_path}" in log_text

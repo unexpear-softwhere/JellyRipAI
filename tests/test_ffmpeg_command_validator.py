@@ -422,3 +422,76 @@ def test_encoder_check_skipped_when_no_ffmpeg_exe():
     ]
     result = validate_ffmpeg_command(cmd)
     assert result.ok, result.errors
+
+
+# ── auto_prefer resolution + GPU quality flags + stdin discipline ────────────
+
+
+def test_auto_prefer_falls_back_to_cpu_when_no_gpu_encoder(monkeypatch):
+    """auto_prefer used to hardcode NVENC, so the shipped default
+    profile failed at launch ("Unknown encoder") on every non-NVIDIA
+    machine — and encoder launch failures never reach the
+    encoder_unavailable fallback rule."""
+    monkeypatch.setattr(
+        "transcode.encoder_probe.available_encoders",
+        lambda exe="ffmpeg": frozenset({"libx265", "libx264", "aac"}),
+    )
+    cmd = _build_cmd(video={"codec": "h265", "hw_accel": "auto_prefer"})
+    assert "libx265" in cmd
+    assert not any(str(c).endswith("_nvenc") for c in cmd)
+
+
+def test_auto_prefer_picks_available_gpu_encoder(monkeypatch):
+    monkeypatch.setattr(
+        "transcode.encoder_probe.available_encoders",
+        lambda exe="ffmpeg": frozenset({"hevc_qsv", "libx265"}),
+    )
+    cmd = _build_cmd(video={"codec": "h265", "hw_accel": "auto_prefer"})
+    assert "hevc_qsv" in cmd
+
+
+def test_gpu_encoder_gets_cq_not_crf():
+    """``-crf`` is a libx264/libx265 private option; GPU encoders
+    silently discard it and encode at their defaults (NVENC ≈ 2 Mbps
+    mush with no error).  The quality number must map to the GPU
+    encoder's own constant-quality knob."""
+    cmd = _build_cmd(video={
+        "codec": "h265", "hw_accel": "nvenc", "mode": "crf", "crf": 20,
+    })
+    assert "-crf" not in cmd
+    assert "-cq" in cmd
+    assert cmd[cmd.index("-cq") + 1] == "20"
+
+
+def test_qsv_encoder_gets_global_quality():
+    cmd = _build_cmd(video={
+        "codec": "h265", "hw_accel": "qsv", "mode": "crf", "crf": 22,
+    })
+    assert "-crf" not in cmd
+    assert "-global_quality" in cmd
+
+
+def test_cpu_encoder_still_gets_crf():
+    cmd = _build_cmd(video={
+        "codec": "h265", "hw_accel": "cpu", "mode": "crf", "crf": 20,
+    })
+    assert "-crf" in cmd
+
+
+def test_every_command_has_nostdin_and_overwrite_discipline(monkeypatch):
+    """ffmpeg reads the console without -nostdin (a stray keypress can
+    pause the encode; an exists-prompt blocks forever), and without an
+    explicit -y/-n a runtime collision hangs at "Overwrite? [y/N]"."""
+    monkeypatch.setattr(
+        "transcode.encoder_probe.available_encoders",
+        lambda exe="ffmpeg": frozenset({"libx265"}),
+    )
+    cmd = _build_cmd()
+    assert "-nostdin" in cmd
+    assert ("-n" in cmd) or ("-y" in cmd)
+
+    copy_cmd = _build_cmd(
+        video={"codec": "copy"}, audio={"mode": "copy"},
+    )
+    assert "-nostdin" in copy_cmd
+    assert ("-n" in copy_cmd) or ("-y" in copy_cmd)

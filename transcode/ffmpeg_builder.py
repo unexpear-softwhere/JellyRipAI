@@ -40,6 +40,27 @@ def _color_flags_for_gpu(x265_params: str) -> List[str]:
     return flags
 
 
+def _resolve_auto_prefer(video: str, ffmpeg_exe: str) -> str:
+    """Resolve ``hw_accel="auto_prefer"`` to a real encoder name.
+
+    Probes this FFmpeg build (cached) and picks the best AVAILABLE GPU
+    encoder for the codec, else the CPU encoder.  The old behavior
+    hardcoded NVENC, so the shipped default profile failed at launch on
+    every non-NVIDIA machine ("Unknown encoder") — and the
+    encoder_unavailable fallback rule never fires for launch failures,
+    so there was no recovery.  CPU is also the answer when the probe
+    fails entirely: libx26x exists in every build.
+    """
+    from .encoder_probe import available_encoders
+
+    prefix = "hevc" if video == "h265" else "h264"
+    known = available_encoders(ffmpeg_exe)
+    for gpu in (f"{prefix}_nvenc", f"{prefix}_qsv", f"{prefix}_amf"):
+        if gpu in known:
+            return gpu
+    return "libx265" if video == "h265" else "libx264"
+
+
 class FFmpegBuilder:
     def __init__(
         self,
@@ -92,14 +113,27 @@ class FFmpegBuilder:
 
         # ── Output ────────────────────────────────────────────────────────────
         container = self.profile.get("output", "container")
+        overwrite = bool(self.profile.get("output", "overwrite", False))
+
+        # -nostdin: ffmpeg otherwise reads the console — a stray
+        # keypress can pause/quit the encode, and the exists-prompt
+        # ("File ... already exists. Overwrite? [y/N]") blocks forever.
+        # The explicit overwrite flag makes collisions deterministic:
+        # -y honors the profile's output.overwrite, -n errors out
+        # immediately instead of prompting.
+        base = [
+            self.executable_path,
+            "-nostdin",
+            "-y" if overwrite else "-n",
+            "-i", self.input_path,
+        ]
 
         # ── Advanced ──────────────────────────────────────────────────────────
         extra_output_args = self.profile.get("advanced", "extra_output_args")
 
         # ── Remux / copy fast-path ─────────────────────────────────────────────
         if video == "copy" and audio_mode == "copy" and not sub_burn:
-            cmd = [
-                self.executable_path, "-i", self.input_path,
+            cmd = base + [
                 "-map", "0",
                 "-c", "copy",
                 "-map_metadata", "0",
@@ -110,7 +144,7 @@ class FFmpegBuilder:
             return cmd
 
         # ── Transcode mode ─────────────────────────────────────────────────────
-        cmd = [self.executable_path, "-i", self.input_path]
+        cmd = list(base)
 
         # Resolve video codec name from hw_accel + codec choice
         if hw_accel and hw_accel.startswith("nvenc"):
@@ -120,7 +154,7 @@ class FFmpegBuilder:
         elif hw_accel and hw_accel.startswith("amf"):
             vcodec = "h264_amf" if video == "h264" else "hevc_amf"
         elif hw_accel and hw_accel == "auto_prefer":
-            vcodec = "hevc_nvenc" if video == "h265" else "h264_nvenc"
+            vcodec = _resolve_auto_prefer(video, self.executable_path)
         elif video == "h264":
             vcodec = "libx264"
         elif video == "h265":
@@ -179,7 +213,24 @@ class FFmpegBuilder:
         cmd += ["-c:v", vcodec]
 
         if mode == "crf" and crf is not None:
-            cmd += ["-crf", str(crf)]
+            # -crf is a libx264/libx265 private option; GPU encoders
+            # silently DISCARD it and fall back to their defaults
+            # (NVENC ≈ 2 Mbps — 4K HDR mush with no error).  Map the
+            # quality number onto each encoder's own constant-quality
+            # knob instead.
+            if vcodec.endswith("_nvenc"):
+                cmd += ["-rc", "vbr", "-cq", str(crf), "-b:v", "0"]
+            elif vcodec.endswith("_qsv"):
+                cmd += ["-global_quality", str(crf)]
+            elif vcodec.endswith("_amf"):
+                cmd += [
+                    "-rc", "cqp",
+                    "-qp_i", str(crf),
+                    "-qp_p", str(crf),
+                    "-qp_b", str(crf),
+                ]
+            else:
+                cmd += ["-crf", str(crf)]
 
         if preset:
             cmd += ["-preset", preset]
