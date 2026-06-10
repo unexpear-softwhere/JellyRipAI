@@ -12,11 +12,11 @@ should be treated as non-final.
 
 - Current unstable line: `ai-v1.0.24` (latest unstable AI pre-release)
 - AI release page: [ai-v1.0.24](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.24)
-- MAIN release page: [v1.0.22](https://github.com/unexpear/JellyRip/releases/tag/v1.0.22) (non-AI baseline, separate repo)
+- MAIN release page: [v1.0.24](https://github.com/unexpear/JellyRip/releases/tag/v1.0.24) (non-AI baseline, separate repo)
 - Project site: [unexpear-softwhere.github.io/JellyRipAI](https://unexpear-softwhere.github.io/JellyRipAI/)
 - Platform target: Windows
 - Runtime target: Python 3.13+
-- Distribution target: standalone `JellyRipAI.exe` and optional installer
+- Distribution target: portable app folder (`JellyRipAI-portable.zip`) and optional installer
 - Quality target: practical and safe for testing,
   not yet stable enough to treat as finished software
 
@@ -129,7 +129,8 @@ App-directory `.env` files are no longer loaded at startup.
 - [main.py](main.py) - primary entrypoint
 - [JellyRip.py](JellyRip.py) - compatibility entrypoint and project map
 - [gui_qt](gui_qt) - PySide6 (Qt) UI layer (themes, dialogs, preview, AI chat sidebar)
-- [gui_qt/qss](gui_qt/qss) - generated theme stylesheets (six themes)
+- [gui_qt/qss](gui_qt/qss) - generated theme stylesheet snapshots
+  (dev reference; at runtime themes render live from token palettes)
 - [controller](controller) - workflow orchestration
 - [engine](engine) - MakeMKV, ffprobe, and file operations
 - [utils](utils) - helper modules
@@ -157,20 +158,20 @@ Contribution and security guidance:
 
 ## Building Releases
 
-### Standalone executable
+### Portable app folder
 
 ```bash
 build.bat
 ```
 
-The AI build scripts place standalone build artifacts under `dist\ai`.
+The AI build scripts place the app folder under `dist\ai\JellyRipAI`.
 `build.bat` wraps `pyinstaller JellyRip.spec` with the AI artifact and
 work directories preconfigured.
-The spec bundles the Gyan FFmpeg full build (`ffmpeg.exe`, `ffprobe.exe`,
-and `ffplay.exe`). Put the extracted build under
-`%USERPROFILE%\Desktop\ffmpeg`, `.\ffmpeg\`, or `..\ffmpeg\`, or set
-`JELLYRIP_FFMPEG_DIR` before building. Release builds must also ship
-`FFmpeg-LICENSE.txt` and `FFmpeg-README.txt`.
+The spec bundles the Gyan FFmpeg full build (`ffmpeg.exe` and
+`ffprobe.exe`) into the app's `_internal\` folder, along with the FFmpeg
+license and README under `_internal\licenses\ffmpeg\`. Put the extracted
+FFmpeg build under `%USERPROFILE%\Desktop\ffmpeg`, `.\ffmpeg\`, or
+`..\ffmpeg\`, or set `JELLYRIP_FFMPEG_DIR` before building.
 
 ### Executable plus installer
 
@@ -182,10 +183,12 @@ Commercial installer builds require an appropriate Inno Setup license.
 
 Expected outputs:
 
-- `dist/ai/JellyRipAI.exe`
+- `dist/ai/JellyRipAI/JellyRipAI.exe` - the app folder; `_internal\`
+  carries the Python runtime, `ffmpeg.exe`, `ffprobe.exe`, and the
+  FFmpeg notices under `_internal\licenses\ffmpeg\`
 - `dist/ai/JellyRipAIInstaller.exe`
-- `dist\ai\ffmpeg.exe`, `dist\ai\ffprobe.exe`, and `dist\ai\ffplay.exe`
-- `dist\ai\FFmpeg-LICENSE.txt` and `dist\ai\FFmpeg-README.txt`
+- `dist\ai\JellyRipAI-portable.zip` - zip of the app folder, created
+  by `release.bat` (this is the release's portable download)
 
 Build output is intentionally git-ignored and should be published
 through GitHub Releases rather than committed to the repository.

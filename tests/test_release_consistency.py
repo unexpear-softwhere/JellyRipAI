@@ -55,8 +55,15 @@ def test_readme_points_to_spec_build_and_release_notes_txt():
     assert "unexpear-softwhere/JellyRipAI" in readme
     assert "JellyRipAI.exe" in readme
     assert "JellyRipAIInstaller.exe" in readme
-    assert "dist/ai/JellyRipAI.exe" in readme
-    assert "dist\\ai\\FFmpeg-LICENSE.txt" in readme
+    # One-DIR bundle (2026-06-09): the build output is an app folder
+    # (exe + _internal\), the portable download is a zip of it, and
+    # the FFmpeg notices ship inside _internal\licenses\ffmpeg\ —
+    # there are no staged FFmpeg-LICENSE.txt copies anymore.
+    assert "dist/ai/JellyRipAI/JellyRipAI.exe" in readme
+    assert "JellyRipAI-portable.zip" in readme
+    assert "_internal\\licenses\\ffmpeg\\" in readme
+    assert "FFmpeg-LICENSE.txt" not in readme
+    assert "ffplay" not in readme
     assert "%USERPROFILE%\\Desktop\\ffmpeg" in readme
 
 
