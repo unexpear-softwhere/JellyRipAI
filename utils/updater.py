@@ -85,19 +85,23 @@ def fetch_latest_release(
         return tag_name.startswith(expected_tag_prefix)
 
     if isinstance(payload, list):
-        release = next(
-            (
-                item
-                for item in payload
-                if _matches_expected_channel(item)
-            ),
-            {},
+        candidates = [item for item in payload if _matches_expected_channel(item)]
+        # Newest by parsed version, not list position — robust against
+        # GitHub's created-date ordering when a release is re-published.
+        release = max(
+            candidates,
+            key=lambda item: _normalize_version(item.get("tag_name")),
+            default={},
         )
     else:
         release = payload if _matches_expected_channel(payload) else {}
 
     assets = release.get("assets") or []
-    preferred = list(preferred_assets or ["JellyRipInstaller.exe", "JellyRip.exe"])
+    # Installer first, then the portable zip (the one-DIR replacement
+    # for the old bare exe — there is no JellyRipAI.exe asset anymore).
+    preferred = list(
+        preferred_assets or ["JellyRipAIInstaller.exe", "JellyRipAI-portable.zip"]
+    )
     chosen_asset = None
     for name in preferred:
         chosen_asset = next((a for a in assets if a.get("name") == name), None)

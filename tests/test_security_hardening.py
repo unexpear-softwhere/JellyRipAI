@@ -13,8 +13,8 @@ Migration map for the retired tests:
 
 | Pre-Phase-3h test                                        | New home                                                                          |
 |----------------------------------------------------------|-----------------------------------------------------------------------------------|
-| ``test_launch_downloaded_update_cleanup_*``              | ``tools/update_check.py`` is a deferred-port stub — see ``handle_utilUpdates``.   |
-| ``test_check_for_updates_blocks_cleanly_*``              | Same — Qt-native rewrite is polish-tier follow-up.                                |
+| ``test_launch_downloaded_update_cleanup_*``              | Qt-native check opens the releases page; no launch-downloaded-update path exists. |
+| ``test_check_for_updates_blocks_cleanly_*``              | ``test_update_check_does_not_shell_out`` + ``tests/test_update_check.py``.        |
 | ``test_open_path_in_explorer_uses_trusted_explorer``     | No PySide6 equivalent yet; QFileDialog handles browse via the OS file manager.    |
 | ``test_reveal_path_in_explorer_uses_trusted_explorer``   | Same — no Qt-side reveal-in-explorer surface today.                               |
 | ``test_notify_complete_uses_trusted_powershell``         | Replaced by ``JellyRipTray.notify_complete`` (Qt-native, no subprocess).          |
@@ -104,25 +104,16 @@ def test_updater_signature_check_uses_trusted_powershell(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_update_check_stub_does_not_shell_out(monkeypatch):
-    """The Qt-side ``tools.update_check.check_for_updates`` is a
-    "feature deferred" stub.  As long as it stays a stub, it must
-    never grow subprocess / shell-out surface area accidentally —
-    that's how the prior tkinter implementation became a
-    trusted-binary attack target in the first place.
-
-    Pins three negative properties:
-      * ``subprocess.run`` / ``Popen`` / ``call`` not invoked
-      * ``os.system`` not invoked
-      * no ``shutil.copy*`` (would suggest the launch-downloaded-
-        update path is being reintroduced without re-enabling the
-        signature verification tests #3-#4 above)
-
-    Reconstructed 2026-05-08 from the prior skip reason that
-    pointed at "trusted-powershell property".  When the Qt-native
-    update flow lands and brings back the launch path, this test
-    should be replaced with the original positive-property test
-    (signed-binary launch via trusted PowerShell).
+def test_update_check_does_not_shell_out(monkeypatch):
+    """The Qt-native ``tools.update_check`` flow (real since
+    2026-06-10) must stay pure Python: no subprocess, no
+    ``os.system`` — that's how the prior tkinter implementation
+    became a trusted-binary attack target.  The check talks to
+    GitHub via urllib inside ``utils.updater.fetch_latest_release``
+    (monkeypatched here) and to the user via the window's
+    thread-safe methods only.  There is deliberately no
+    launch-downloaded-update path: an available update opens the
+    releases page in the browser instead.
     """
     import subprocess as _sp
     from unittest.mock import MagicMock
@@ -136,41 +127,59 @@ def test_update_check_stub_does_not_shell_out(monkeypatch):
     import os as _os
     monkeypatch.setattr(_os, "system", lambda *_a, **_kw: shells.append("system") or 0)
 
+    # An old version exercises the up-to-date path: no prompt, no
+    # browser, just status + log + info dialog.
+    monkeypatch.setattr(
+        uc,
+        "fetch_latest_release",
+        lambda **_kw: {
+            "tag": f"{uc.TAG_PREFIX}0.0.1",
+            "version": "0.0.1",
+            "html_url": uc.RELEASES_URL,
+            "asset_name": "",
+            "asset_url": "",
+            "prerelease": True,
+        },
+    )
+
     fake_window = MagicMock()
-    uc.check_for_updates(fake_window)
+    uc._run_check(fake_window)  # synchronous worker body
 
     assert shells == [], (
-        "Update stub must remain pure-Python — any shell-out is a "
+        "Update check must remain pure-Python — any shell-out is a "
         "regression toward the retired tkinter trusted-binary surface."
     )
     # And: it must talk to its window via the documented hooks only.
     fake_window.set_status.assert_called_once()
     fake_window.append_log.assert_called()
+    fake_window.ask_yesno.assert_not_called()
 
 
-def test_update_check_stub_logs_releases_url_to_match_fork(monkeypatch):
-    """The AI fork's stub directs users to the AI fork's GitHub
+def test_update_check_targets_this_forks_releases(monkeypatch):
+    """The AI fork's check directs users to the AI fork's GitHub
     Releases page (unexpear-softwhere/JellyRipAI), not MAIN's.
-    Pinned because the AI fork copy of this file is the MAIN
-    stub with a single URL diff — confirming the diff stayed
-    correct.
+    Pinned because this file is the MAIN copy with a single URL
+    diff — confirming the diff stayed correct.
     """
     from unittest.mock import MagicMock
     import tools.update_check as uc
 
-    fake_window = MagicMock()
-    uc.check_for_updates(fake_window)
+    assert uc.RELEASES_URL == (
+        "https://github.com/unexpear-softwhere/JellyRipAI/releases"
+    )
 
-    logged_lines = [
-        call.args[0]
-        for call in fake_window.append_log.call_args_list
-    ]
-    assert any(
-        "https://github.com/unexpear-softwhere/JellyRipAI/releases" in line
-        for line in logged_lines
-    ), (
-        "AI fork's stub must direct users to the AI fork's releases "
-        f"page, not MAIN's.  Logged lines: {logged_lines}"
+    # Even offline, the error dialog hands the user the manual URL.
+    def _offline(**_kw):
+        raise OSError("offline")
+
+    monkeypatch.setattr(uc, "fetch_latest_release", _offline)
+    fake_window = MagicMock()
+    uc._run_check(fake_window)
+
+    args = fake_window.show_error.call_args.args
+    assert "https://github.com/unexpear-softwhere/JellyRipAI/releases" in args[1], (
+        "AI fork's update check must direct users to the AI fork's "
+        f"releases page, not MAIN's.  Dialog text: {args[1]!r}"
     )
 
 

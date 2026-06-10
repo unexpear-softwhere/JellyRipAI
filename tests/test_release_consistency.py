@@ -67,6 +67,29 @@ def test_readme_points_to_spec_build_and_release_notes_txt():
     assert "%USERPROFILE%\\Desktop\\ffmpeg" in readme
 
 
+def test_update_check_contract_matches_release_pipeline():
+    """The in-app update check and release.bat must agree on where
+    releases live: same repo, same tag prefix (ai-v*, never MAIN's
+    v*), same artifact names, prereleases included (every release
+    publishes as a GitHub prerelease while the project is
+    pre-alpha).  If the publish target or artifact set ever
+    changes, the updater must change in the same commit — this is
+    what keeps the Check Updates chip always pointing at the
+    latest published build."""
+    src = _read("tools/update_check.py")
+    release_script = _read("release.bat")
+
+    assert 'REPO_SLUG = "unexpear-softwhere/JellyRipAI"' in src
+    assert 'TAG_PREFIX = "ai-v"' in src
+    assert "include_prereleases=True" in src
+    assert '"JellyRipAIInstaller.exe"' in src
+    assert '"JellyRipAI-portable.zip"' in src
+    assert "feature pending Qt port" not in src
+
+    assert 'set "RELEASE_TAG=ai-v%VERSION%"' in release_script
+    assert "--prerelease" in release_script
+
+
 def test_ai_branch_declares_claude_runtime_dependency():
     readme = _read("README.md")
     requirements = _read("requirements.txt")
