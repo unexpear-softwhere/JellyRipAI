@@ -44,13 +44,22 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 
 
 [Files]
-Source: "{#MyAppBuildOutputDir}\JellyRipAI.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MyAppBuildOutputDir}\ffmpeg.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MyAppBuildOutputDir}\ffprobe.exe"; DestDir: "{app}"; Flags: ignoreversion
+; One-DIR bundle: package the whole PyInstaller output folder.
+; ffmpeg/ffprobe + their notices live inside _internal\ now — no
+; separately staged copies.
+Source: "{#MyAppBuildOutputDir}\JellyRipAI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MyAppBuildOutputDir}\FFmpeg-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#MyAppBuildOutputDir}\FFmpeg-README.txt"; DestDir: "{app}"; Flags: ignoreversion
+
+[InstallDelete]
+; Pre-onedir installs staged FFmpeg next to the exe, and the app
+; prefers an exe-dir copy over the bundled one — without this an
+; upgraded install would keep using the stale staged FFmpeg forever.
+Type: files; Name: "{app}\ffmpeg.exe"
+Type: files; Name: "{app}\ffprobe.exe"
+Type: files; Name: "{app}\ffplay.exe"
+Type: files; Name: "{app}\FFmpeg-LICENSE.txt"
+Type: files; Name: "{app}\FFmpeg-README.txt"
 
 [Icons]
 Name: "{autoprograms}\JellyRip AI"; Filename: "{app}\{#MyAppExeName}"
@@ -104,6 +113,8 @@ var
   InstallDir: String;
 begin
   Result := False;
+  { One-DIR bundle ships ffprobe inside _internal\ }
+  if FileExists(ExpandConstant('{app}\_internal\ffprobe.exe')) then begin Result := True; Exit; end;
   if FileExists(ExpandConstant('{app}\ffprobe.exe')) then begin Result := True; Exit; end;
   { Registry checks — Chocolatey / winget (Gyan.FFmpeg) uninstall entries }
   if RegQueryStringValue(HKLM,

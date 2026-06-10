@@ -75,17 +75,24 @@ def test_release_script_checks_git_state_and_release_notes():
     assert "git status --porcelain" in release_script
     assert "git rev-parse --abbrev-ref HEAD" in release_script
     assert 'findstr /C:"v%VERSION%" release_notes.txt' in release_script
-    assert "tools\\stage_ffmpeg_bundle.ps1" in release_script
+    # One-DIR bundle (2026-06-09): the staging step is retired — FFmpeg
+    # ships inside the app folder's _internal\, and the portable
+    # artifact is a zip of the folder instead of a bare exe.
+    assert "stage_ffmpeg_bundle.ps1" not in release_script
     assert 'set "ARTIFACT_DIR=dist\\ai"' in release_script
     assert 'set "BUILD_DIR=build\\ai"' in release_script
     assert 'type nul > "%ARTIFACT_DIR%\\.gitkeep"' in release_script
-    assert 'LICENSE THIRD_PARTY_NOTICES.md "%ARTIFACT_DIR%\\FFmpeg-LICENSE.txt" "%ARTIFACT_DIR%\\FFmpeg-README.txt"' in release_script
-    assert '"%ARTIFACT_DIR%\\ffmpeg.exe" "%ARTIFACT_DIR%\\ffprobe.exe"' in release_script
+    assert "%ARTIFACT_DIR%\\JellyRipAI\\JellyRipAI.exe" in release_script
+    assert "_internal\\ffmpeg.exe" in release_script
+    assert "_internal\\ffprobe.exe" in release_script
+    assert "_internal\\licenses\\ffmpeg\\LICENSE" in release_script
+    assert "JellyRipAI-portable.zip" in release_script
+    assert "Compress-Archive" in release_script
+    assert 'LICENSE THIRD_PARTY_NOTICES.md --title' in release_script
     # ffplay was dropped 2026-06-09 (unused; ~130 MB per artifact).
     assert "ffplay" not in release_script.lower()
     assert 'set "RELEASE_BRANCH=main"' in release_script
     assert 'set "RELEASE_TAG=ai-v%VERSION%"' in release_script
-    assert "%ARTIFACT_DIR%\\JellyRipAI.exe" in release_script
     assert "%ARTIFACT_DIR%\\JellyRipAIInstaller.exe" in release_script
     assert "JellyRip AI releases intentionally bundle FFmpeg" in release_script
     assert f"REM  Usage:  release.bat {version}" in release_script
@@ -107,19 +114,28 @@ def test_release_metadata_tracks_license_notices():
     assert 'DefaultDirName={localappdata}\\Programs\\JellyRip AI' in installer
     assert 'OutputBaseFilename=JellyRipAIInstaller' in installer
     assert '#define MyAppBuildOutputDir "..\\dist\\ai"' in installer
-    assert 'Source: "{#MyAppBuildOutputDir}\\ffmpeg.exe"' in installer
-    assert 'Source: "{#MyAppBuildOutputDir}\\ffprobe.exe"' in installer
-    assert "ffplay" not in installer.lower()
-    assert 'Source: "{#MyAppBuildOutputDir}\\JellyRipAI.exe"' in installer
+    # One-DIR bundle: the installer packages the whole app folder; the
+    # old per-file FFmpeg sources are gone, and stale staged copies
+    # from pre-onedir installs are deleted on upgrade (the app prefers
+    # an exe-dir ffmpeg over the bundled one).
+    assert 'Source: "{#MyAppBuildOutputDir}\\JellyRipAI\\*"' in installer
+    assert "recursesubdirs" in installer
+    assert "[InstallDelete]" in installer
+    assert 'Name: "{app}\\ffmpeg.exe"' in installer
+    assert '_internal\\ffprobe.exe' in installer
     assert 'Source: "..\\LICENSE"' in installer
     assert 'Source: "..\\THIRD_PARTY_NOTICES.md"' in installer
-    assert 'Source: "{#MyAppBuildOutputDir}\\FFmpeg-LICENSE.txt"' in installer
-    assert 'Source: "{#MyAppBuildOutputDir}\\FFmpeg-README.txt"' in installer
 
 
 def test_spec_bundles_ffmpeg_intentionally():
     spec = _read("JellyRip.spec")
-    bundle_stager = _read("tools/stage_ffmpeg_bundle.ps1")
+
+    # One-DIR bundle: EXE excludes binaries; COLLECT assembles the
+    # app folder.  No runtime extraction (the onefile-only
+    # runtime_tmpdir knob must stay gone).
+    assert "exclude_binaries=True" in spec
+    assert "COLLECT(" in spec
+    assert "runtime_tmpdir" not in spec
 
     assert "TCL_LIBRARY" in spec
     assert "TK_LIBRARY" in spec
@@ -139,7 +155,6 @@ def test_spec_bundles_ffmpeg_intentionally():
     # ffplay is referenced only in the drop-note comment, never bundled.
     assert '"ffplay.exe"' not in spec
     assert 'PREFERRED_FFMPEG_ROOT = Path.home() / "Desktop" / "ffmpeg"' in spec
-    assert '$preferredDesktopRoot = Join-Path $HOME "Desktop\\ffmpeg"' in bundle_stager
     assert "C:/Users/" not in spec
     assert "Desktop/ffmpeg" not in spec
 

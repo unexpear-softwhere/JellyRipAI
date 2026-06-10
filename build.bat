@@ -33,18 +33,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\stage_ffmpeg_bundle.ps1 -DistDir "%ARTIFACT_DIR%"
-if errorlevel 1 (
-    echo FFmpeg bundle staging failed!
-    pause
-    exit /b 1
-)
-
 echo.
-echo Build complete! Output:
-echo   %ARTIFACT_DIR%\JellyRipAI.exe
-echo   %ARTIFACT_DIR%\ffmpeg.exe
-echo   %ARTIFACT_DIR%\ffprobe.exe
-echo   %ARTIFACT_DIR%\FFmpeg-LICENSE.txt
-echo   %ARTIFACT_DIR%\FFmpeg-README.txt
+echo Build complete! Output (one-DIR bundle):
+echo   %ARTIFACT_DIR%\JellyRipAI\JellyRipAI.exe
+echo   %ARTIFACT_DIR%\JellyRipAI\_internal\  (FFmpeg + notices inside)
 pause
