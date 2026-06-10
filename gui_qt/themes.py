@@ -417,6 +417,64 @@ THEMES: List[Theme] = [
             "shadow": "rgba(0, 0, 0, 0.45)",
         },
     ),
+
+    # ----------------------------------------------------------------
+    # Gruvbox Dark — warm retro dark, bright CTAs with dark labels
+    # ----------------------------------------------------------------
+    Theme(
+        id="gruvbox_dark",
+        name="Gruvbox Dark",
+        subtitle="Warm retro dark",
+        family="dark",
+        notes=(
+            "Gruvbox's warm brown-charcoal surface with bright retro CTAs — "
+            "green primary, blue secondary, mauve tertiary, orange caution, "
+            "red destructive. Dark labels on bright buttons, true to the "
+            "scheme; every CTA clears WCAG AA."
+        ),
+        tokens={
+            "bg": "#282828", "card": "#32302f",
+            "input": "#1d2021", "border": "#504945",
+            "fg": "#ebdbb2", "muted": "#a89984", "accent": "#fabd2f",
+            "go": "#b8bb26",     "goFg": "#1d2021",   # bright green
+            "info": "#83a598",   "infoFg": "#1d2021",   # bright blue
+            "alt": "#d3869b",    "altFg": "#1d2021",   # bright mauve
+            "warn": "#fe8019",   "warnFg": "#1d2021",   # bright orange
+            "danger": "#fb4934", "dangerFg": "#1d2021",   # bright red
+            "hover": "#3c3836", "selection": "#d79921", "selectionFg": "#1d2021",
+            "logBg": "#1d2021", "promptFg": "#fabd2f", "answerFg": "#b8bb26",
+            "shadow": "rgba(0, 0, 0, 0.45)",
+        },
+    ),
+
+    # ----------------------------------------------------------------
+    # Gruvbox Light — warm cream paper, deep faded CTAs
+    # ----------------------------------------------------------------
+    Theme(
+        id="gruvbox_light",
+        name="Gruvbox Light",
+        subtitle="Warm paper light",
+        family="light",
+        notes=(
+            "Gruvbox's cream-paper surface with deep faded CTAs — olive "
+            "primary, teal secondary, plum tertiary, burnt-orange caution, "
+            "dark-red destructive. Warm and easy on the eyes; every CTA "
+            "clears WCAG AA."
+        ),
+        tokens={
+            "bg": "#fbf1c7", "card": "#f2e5bc",
+            "input": "#f9f5d7", "border": "#bdae93",
+            "fg": "#3c3836", "muted": "#665c54", "accent": "#af3a03",
+            "go": "#79740e",     "goFg": "#ffffff",   # faded olive
+            "info": "#076678",   "infoFg": "#ffffff",   # faded teal
+            "alt": "#8f3f71",    "altFg": "#ffffff",   # faded plum
+            "warn": "#af3a03",   "warnFg": "#ffffff",   # burnt orange
+            "danger": "#9d0006", "dangerFg": "#ffffff",   # dark red
+            "hover": "#ebdbb2", "selection": "#076678", "selectionFg": "#ffffff",
+            "logBg": "#f2e5bc", "promptFg": "#8a5c0b", "answerFg": "#79740e",
+            "shadow": "rgba(60, 56, 54, 0.2)",
+        },
+    ),
 ]
 
 
