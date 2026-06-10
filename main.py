@@ -210,8 +210,68 @@ def _create_startup_window():
         return _NullStartupWindow()
 
 
+def _install_crash_logging() -> None:
+    """Persist unhandled exceptions + native faults to ``crash.log``.
+
+    The windowed exe has no console: ``sys.stderr`` is None, so
+    without this every post-startup exception — Qt slot exceptions
+    included; PySide6 routes them through ``sys.excepthook`` — used to
+    vanish silently, and a native fault (access violation, Qt plugin
+    abort) showed nothing at all.  The log lives in the profile's
+    config dir next to config.json.
+    """
+    import faulthandler
+    import traceback
+    from datetime import datetime
+
+    try:
+        crash_path = os.path.join(str(get_config_dir()), "crash.log")
+        # Size cap: roll the previous log aside at ~1 MB so a crash
+        # loop can't grow it without bound.
+        try:
+            if (
+                os.path.exists(crash_path)
+                and os.path.getsize(crash_path) > 1_000_000
+            ):
+                os.replace(crash_path, crash_path + ".1")
+        except OSError:
+            pass
+        crash_file = open(  # noqa: SIM115 — must outlive this function
+            crash_path, "a", encoding="utf-8", buffering=1,
+        )
+    except Exception:
+        return  # nowhere safe to write — never break startup over this
+
+    try:
+        # faulthandler needs a live fd at fault time; the handle stays
+        # open for the process lifetime on purpose.
+        faulthandler.enable(file=crash_file)
+    except Exception:
+        pass
+
+    previous_hook = sys.excepthook
+
+    def _hook(exc_type, exc, tb):
+        try:
+            crash_file.write(
+                f"\n=== Unhandled exception at "
+                f"{datetime.now():%Y-%m-%d %H:%M:%S} ===\n"
+            )
+            traceback.print_exception(exc_type, exc, tb, file=crash_file)
+            crash_file.flush()
+        except Exception:
+            pass
+        try:
+            previous_hook(exc_type, exc, tb)
+        except Exception:
+            pass
+
+    sys.excepthook = _hook
+
+
 def main() -> None:
     _prepare_startup_environment()
+    _install_crash_logging()
     _set_windows_app_user_model_id()
 
     startup_window = _create_startup_window()
