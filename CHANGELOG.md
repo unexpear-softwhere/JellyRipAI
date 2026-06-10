@@ -2,6 +2,23 @@
 
 <!-- markdownlint-disable MD013 -->
 
+## [1.0.25] - 2026-06-10
+
+Small fix release for the Settings dialog under light themes.
+
+### Fixed
+
+- Settings dialog now follows the theme under light themes.  A
+  top-level `QDialog`'s background isn't reliably painted over the
+  native window surface on Windows, so the dialog stayed dark under
+  light themes (fresh and on live theme switch) while its controls
+  restyled.  It now wraps content in a themed `#settingsDialogBody`
+  surface, the same pattern the main window uses with `#mainCentral`.
+- Settings tab bar is now themed.  It had no QSS rules, so unselected
+  tabs lost contrast (white-on-white) once the dialog correctly went
+  light.  Tabs now use muted labels with an accent underline on the
+  selected tab, readable in every theme.
+
 ## [1.0.24] - 2026-06-09
 
 Large bug-fix + packaging release driven by a full-codebase review.
