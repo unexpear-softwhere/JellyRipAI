@@ -570,6 +570,9 @@ class RipperEngine:
         self._last_scan_target = None
         self.last_disc_info = {}
         self.last_classification: list = []
+        # The controller sets this before a scan so the title classifier
+        # treats a TV disc as N episodes (no single "main feature").
+        self.content_is_tv: bool = False
         self.last_disc_memory: dict[str, Any] | None = None
         self.current_disc_memory: dict[str, Any] | None = None
 
@@ -1234,13 +1237,18 @@ class RipperEngine:
             projected_name = clean_name(raw_name) if raw_name else ""
             if not projected_name:
                 projected_name = f"Title_{safe_int(t.get('id', 0)) + 1:02d}"
+            # Show MakeMKV's real output filename (e.g. "B1_t10.mkv")
+            # alongside our "Title N" so the scan list lines up with
+            # the ripped files.
+            disc_name = str(t.get("output_name", "") or "").strip()
+            disc_part = f" disc='{disc_name}'" if disc_name else ""
             on_log(
                 f"  Title {t['id']+1}: score={score:.3f} | "
                 f"{t['duration']} {t['size']} | "
                 f"chap={safe_int(t.get('chapters', 0))} "
                 f"aud={len(t.get('audio_tracks', []))} "
                 f"sub={len(t.get('subtitle_tracks', []))} | "
-                f"projected='{projected_name}'"
+                f"projected='{projected_name}'{disc_part}"
             )
         if scored:
             best_title = scored[0][0]
@@ -1263,7 +1271,10 @@ class RipperEngine:
                     )
 
         # Classify titles into MAIN / DUPLICATE / EXTRA / UNKNOWN
-        self.last_classification = classify_titles(result)
+        # (EPISODE / EXTRA on a TV disc — the controller sets the flag).
+        self.last_classification = classify_titles(
+            result, is_tv=getattr(self, "content_is_tv", False)
+        )
         if self.last_classification:
             classification_log_cap = 20
             if len(self.last_classification) > classification_log_cap:
@@ -1958,7 +1969,12 @@ class RipperEngine:
         return rc == 0
 
     def _run_preview_process(self, cmd, preview_seconds, on_log):
-        """Run a disposable preview rip with a hard time limit and no retries."""
+        """Run a disposable preview rip with no retries.
+
+        ``preview_seconds`` > 0 stops the rip after that many seconds
+        (a quick sample); 0 / falsy means NO time cap — the full
+        title rips to completion (the watch-before-rip flow).
+        """
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -1996,7 +2012,11 @@ class RipperEngine:
                 self.current_process = None
                 return False
 
-            if time.time() - start >= preview_seconds and proc.poll() is None:
+            if (
+                preview_seconds
+                and time.time() - start >= preview_seconds
+                and proc.poll() is None
+            ):
                 timed_out = True
                 on_log(
                     f"Preview sample reached {preview_seconds}s; stopping rip."

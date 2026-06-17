@@ -538,7 +538,9 @@ class RipperController(LegacyControllerMixin):
         if classification_matches_titles(cached, disc_titles):
             return list(cached)
 
-        _fallback_main, classified = classify_and_pick_main(disc_titles)
+        _fallback_main, classified = classify_and_pick_main(
+            disc_titles, is_tv=getattr(self.engine, "content_is_tv", False)
+        )
         self.engine.last_classification = classified
         return classified
 
@@ -980,6 +982,26 @@ class RipperController(LegacyControllerMixin):
             is_tv,
             self.preview_title,
         )
+        # Capture the per-title episode names the user typed in the
+        # picker (TV only).  Stored keyed by title id; the move step
+        # uses them to pre-fill the episode-name filenames so naming
+        # happens once, in the picker, alongside selecting titles.
+        try:
+            self._picker_episode_names = dict(
+                self.gui.consume_episode_names() or {}
+            )
+        except Exception:
+            self._picker_episode_names = {}
+        # Same for the per-title episode NUMBERS typed in the picker —
+        # the move step uses them to pre-fill the Episode Numbers step,
+        # so numbering also happens once, in the picker, next to each
+        # title (instead of a blind comma list afterward).
+        try:
+            self._picker_episode_numbers = dict(
+                self.gui.consume_episode_numbers() or {}
+            )
+        except Exception:
+            self._picker_episode_numbers = {}
         if selected_ids_raw is None:
             self.log("Cancelled.")
             return None, None
@@ -2158,7 +2180,8 @@ class RipperController(LegacyControllerMixin):
 
             all_rip_ids = content.main_title_ids + content.extra_title_ids
             self.log(
-                f"Content mapping: {len(content.main_title_ids)} main, "
+                f"Content mapping: {len(content.main_title_ids)} "
+                f"{'episodes' if is_tv else 'main'}, "
                 f"{len(content.extra_title_ids)} extras, "
                 f"{len(content.skip_title_ids)} skipped."
             )
@@ -2600,6 +2623,8 @@ class RipperController(LegacyControllerMixin):
         status_msg = (
             "Ripping all titles..."
             if len(selected_ids) > 1 else
+            "Ripping episode..."
+            if getattr(self.engine, "content_is_tv", False) else
             "Ripping main feature..."
         )
         self.gui.set_status(status_msg)
@@ -4401,9 +4426,38 @@ class RipperController(LegacyControllerMixin):
             except Exception:
                 pass
 
+    def _prompt_next_disc_season(self, current_season: int) -> int:
+        """At a multi-disc continuation, let the user move the next disc
+        to a new season.  In setup-dialog mode the season is otherwise
+        fixed for the whole session, which used to force a brand-new run
+        to start the next season; this lets a box set flow S1 -> S2 in
+        place.  The destination Season folder auto-derives from the
+        returned number at the top of the disc loop.  Returns the season
+        to use next (unchanged if the user keeps the same one)."""
+        if self.gui.ask_yesno(
+            f"Is the next disc also Season {current_season:02d}?"
+        ):
+            return current_season
+        raw = self.gui.ask_input(
+            "Season",
+            "Season number for the next disc:",
+            default_value=str(current_season + 1),
+        )
+        text = str(raw or "").strip()
+        if text.isdigit():
+            self.log(f"Next disc: switching to Season {int(text):02d}.")
+            return int(text)
+        self.log(
+            f"No valid season entered — staying on Season {current_season:02d}."
+        )
+        return current_season
+
     def _run_disc_inner(self, is_tv: bool) -> None:
         cfg        = self.engine.cfg
         self.engine.reset_abort()
+        # Tell the title classifier whether this session is TV (N
+        # episodes, no single "main feature") or a movie.
+        self.engine.content_is_tv = bool(is_tv)
         path_fields = [
             ("tv_folder", "TV Folder"),
             ("temp_folder", "Temp Folder"),
@@ -4626,6 +4680,9 @@ class RipperController(LegacyControllerMixin):
 
             disc_number += 1
             self.log(f"--- Disc {disc_number} ---")
+            # New disc, new title numbering — watch rips kept from a
+            # previous disc must never be reused here.
+            self.discard_watched_rips()
 
             self.gui.show_info(
                 "Insert Disc",
@@ -5156,6 +5213,32 @@ class RipperController(LegacyControllerMixin):
             )
             manual_title_selection_used = False
 
+            # Watch-before-rip gate (TV only).  Offer to open the title
+            # picker — which has Preview-in-VLC buttons — so the user
+            # can play a short, disposable clip of any title before
+            # committing.  "Yes" routes through the manual picker even
+            # when Smart Rip is on; "No" keeps the normal run.  Toggle
+            # off via ``opt_offer_preview_before_rip``.
+            force_manual_pick = False
+            if (
+                is_tv
+                and disc_titles
+                and not restored_selected_ids
+                and cfg.get("opt_offer_preview_before_rip", True)
+            ):
+                if self.gui.ask_yesno(
+                    "Watch any titles before you start?\n\n"
+                    "Yes — open the title list and watch any title in "
+                    "VLC first (it rips to a temporary file that is "
+                    "deleted after) before you pick what to rip.\n"
+                    "No — continue the normal run."
+                ):
+                    force_manual_pick = True
+                    self.log(
+                        "Preview-before-rip: opening the picker with "
+                        "Preview buttons."
+                    )
+
             if restored_selected_ids:
                 selected_ids: list[int] = restored_selected_ids
                 selected_size = sum(
@@ -5168,7 +5251,11 @@ class RipperController(LegacyControllerMixin):
                 )
 
             # Smart Rip reads the shared ranked classification result.
-            if not restored_selected_ids and cfg.get("opt_smart_rip_mode", False):
+            if (
+                not restored_selected_ids
+                and cfg.get("opt_smart_rip_mode", False)
+                and not force_manual_pick
+            ):
                 all_classified = self._get_shared_classified_titles(disc_titles)
                 main_ct = self._get_recommended_classified_title(all_classified)
 
@@ -5367,6 +5454,57 @@ class RipperController(LegacyControllerMixin):
                     _retry_current_disc()
                     continue
                 manual_title_selection_used = True
+                if force_manual_pick and is_tv:
+                    # Watch-before-rip follow-up: now that the user has
+                    # seen (and maybe previewed) the titles, let them
+                    # set the real show name — the whole point of
+                    # watching first is discs whose setup title was a
+                    # placeholder.  A rename rebuilds the destination
+                    # folders; the temp rip folder keeps its original
+                    # name (it is deleted after a successful move).
+                    new_title = self.gui.ask_input(
+                        "Show Title",
+                        "Recognize the disc?  Set the show title used "
+                        "for naming and organizing:",
+                        title,
+                    )
+                    new_title = str(new_title or "").strip()
+                    if new_title and new_title != title:
+                        old_season_folder = season_folder
+                        old_extras_folder = extras_folder
+                        title = new_title
+                        self.log(f"Show title set to: {title}")
+                        if library_root:
+                            self.log(
+                                "Library folder mode — existing folder "
+                                "kept; the new title is used for naming."
+                            )
+                        else:
+                            season_folder = os.path.join(
+                                tv_root,
+                                build_tv_folder_name(
+                                    clean_name(title), metadata_id or ""
+                                ),
+                                f"Season {season:02d}",
+                            )
+                            extras_folder = os.path.join(
+                                season_folder, "Extras"
+                            )
+                            os.makedirs(season_folder, exist_ok=True)
+                            os.makedirs(extras_folder, exist_ok=True)
+                            dest_folder = season_folder
+                            self.log(f"Season folder: {season_folder}")
+                            # Drop the placeholder-named destination
+                            # folders if they are still empty.
+                            for stale in (
+                                old_extras_folder,
+                                old_season_folder,
+                                os.path.dirname(old_season_folder),
+                            ):
+                                try:
+                                    os.rmdir(stale)
+                                except OSError:
+                                    pass
 
             tv_review_confirmed = False
             if is_tv and use_tv_setup_dialog:
@@ -5462,14 +5600,33 @@ class RipperController(LegacyControllerMixin):
                 )
             )
             from engine.ripper_engine import Job
-            job = Job(
-                source=','.join(str(tid) for tid in selected_ids),
-                output=rip_path,
-                profile="default"
-            )
-            result = self.engine.run_job(job)
-            success = result.success
-            failed_titles = result.errors
+            # Reuse full-title watch rips: a title watched in the
+            # picker is already ripped, so move it into the session
+            # folder instead of ripping it twice.  Watched titles the
+            # user UNchecked are discarded inside the helper (their
+            # rule: keep only while still selected).  This runs after
+            # the pre-rip snapshot so the moved files count as new
+            # rip output downstream.
+            reused_ids = self._reuse_watched_rips(selected_ids, rip_path)
+            rip_ids = [
+                tid for tid in selected_ids if tid not in reused_ids
+            ]
+            if rip_ids:
+                job = Job(
+                    source=','.join(str(tid) for tid in rip_ids),
+                    output=rip_path,
+                    profile="default"
+                )
+                result = self.engine.run_job(job)
+                success = result.success
+                failed_titles = result.errors
+            else:
+                self.log(
+                    "All selected titles were already ripped while "
+                    "watching — skipping the disc rip."
+                )
+                success = True
+                failed_titles = []
             partial_rip = False
             completed_title_ids = list(selected_ids)
             self._warn_degraded_rips()
@@ -5775,6 +5932,17 @@ class RipperController(LegacyControllerMixin):
                 session_completed_cleanly = True
                 break
 
+            # In setup-dialog mode the season is fixed for the whole
+            # session — the disc loop won't re-ask it — so this
+            # continuation is the only place to advance to a new season.
+            # Offer it here so a box set flows S1 -> S2 in one session
+            # instead of forcing a brand-new run; the destination Season
+            # folder auto-derives from the season at the top of the loop.
+            # (In per-disc mode the loop already prompts the season each
+            # disc, so we don't double-ask.)
+            if is_tv and use_tv_setup_dialog:
+                season = self._prompt_next_disc_season(season)
+
         # Mark session as completed so write_session_summary uses the
         # correct code path (warnings list vs clean success).
         # Only a clean successful exit should force COMPLETED here.
@@ -5806,6 +5974,20 @@ class RipperController(LegacyControllerMixin):
         extras_selection_override: tuple[list[int] | None, list[int] | None] | None = None,
         mark_session_complete: bool = True,
     ) -> bool:
+        # TV: process episodes in title-number order (1, 2, 3 …) so the
+        # file list, the episode-number/name prompts, and the move all
+        # read naturally — not the scan's longest-first order, which
+        # scrambles a TV disc.  Movies keep longest-first (main feature
+        # leads).  Titles with no parseable ``_tNN`` sort to the end.
+        if is_tv:
+            titles_list = sorted(
+                titles_list,
+                key=lambda x: (
+                    self._title_id_from_filename(x[0]) is None,
+                    self._title_id_from_filename(x[0]) or 0,
+                ),
+            )
+
         options: list[str] = []
         replace_main_existing = bool(
             replace_existing or (session_meta or {}).get("replace_existing", False)
@@ -5815,8 +5997,12 @@ class RipperController(LegacyControllerMixin):
         ).strip()
         for i, (f, dur, mb) in enumerate(titles_list, 1):
             mins = int(dur // 60) if dur > 0 else "?"
+            # Show our "Title N" alongside MakeMKV's real filename so
+            # this list lines up with the scan list and the picker.
+            tid = self._title_id_from_filename(f)
+            title_part = f"Title {tid + 1} — " if tid is not None else ""
             options.append(
-                f"{i}: {os.path.basename(f)}  ~{mins} min  {mb} MB"
+                f"{i}: {title_part}{os.path.basename(f)}  ~{mins} min  {mb} MB"
             )
 
         restored_main_indices = self._map_title_ids_to_analyzed_indices(
@@ -5824,12 +6010,186 @@ class RipperController(LegacyControllerMixin):
             list(selected_title_ids or []),
         )
 
-        self.log("Files (longest first, unknowns at end):")
+        order_desc = "by title number" if is_tv else "longest first"
+        self.log(f"Files ({order_desc}, unknowns at end):")
         for opt in options:
             self.log(f"  {opt}")
 
         if is_tv:
-            if restored_main_indices:
+            # The picker's per-title Ep #/name fields are the numbering
+            # UI now (2026-06-13): for a fresh rip we build the whole
+            # episode plan straight from them and SKIP every post-rip
+            # prompt.  A numbered title is a main episode with that
+            # number+name; a ripped title left blank is an extra.  A
+            # resumed session (numbers already saved) and the
+            # nothing-numbered edge fall back to the legacy prompts.
+            picker_numbers = getattr(
+                self, "_picker_episode_numbers", None
+            ) or {}
+            picker_names = getattr(self, "_picker_episode_names", None) or {}
+            # One-shot: clear after reading so a later non-picker flow
+            # (Organize Existing MKVs, or a resume) in the same session
+            # can't inherit stale per-title numbers/names from this rip.
+            self._picker_episode_numbers = {}
+            self._picker_episode_names = {}
+            resume_numbers = (session_meta or {}).get("episode_numbers") or []
+            picker_driven = bool(picker_numbers) and not resume_numbers
+            episode_numbers = []
+            real_names = []
+            extra_indices = []
+            bonus_indices = None
+
+            # Organize / resume an already-ripped TV disc with no numbers
+            # yet (no pre-rip picker run AND no saved session numbers):
+            # show the SAME per-title picker on the ripped files, so you
+            # number/name each title here (blank = an extra) instead of
+            # the old comma-box prompts.  This makes resume and Organize
+            # Existing MKVs as friendly as a fresh rip — and handles gaps
+            # (a missing episode) and extras that the fixed-count comma
+            # box could not.
+            if (
+                not picker_driven
+                and not resume_numbers
+                and extras_selection_override is None
+                and titles_list
+            ):
+                organize_titles = []
+                for _of, _odur, _omb in titles_list:
+                    _otid = self._title_id_from_filename(_of)
+                    organize_titles.append({
+                        "id": (
+                            _otid if _otid is not None
+                            else len(organize_titles)
+                        ),
+                        "name": os.path.basename(_of),
+                        "output_name": os.path.basename(_of),
+                        "duration": (
+                            f"{int(_odur // 60)} min"
+                            if _odur and _odur > 0 else ""
+                        ),
+                        "size": f"{int(_omb)} MB" if _omb else "",
+                        "chapters": "",
+                        "recommended": True,
+                    })
+                self.log(
+                    "Organize: set each title's episode number + name in "
+                    "the picker (leave a title blank to file it as an "
+                    "extra)."
+                )
+                org_ids = self.gui.show_disc_tree(
+                    organize_titles, True, None,
+                    window_title="Organize — Number & Name Episodes",
+                    intro_text=(
+                        "These titles are already ripped — set each "
+                        "title's episode number and name."
+                    ),
+                )
+                if not org_ids:
+                    self.log("Cancelled.")
+                    return False
+                try:
+                    picker_names = dict(self.gui.consume_episode_names() or {})
+                except Exception:
+                    picker_names = {}
+                try:
+                    picker_numbers = dict(
+                        self.gui.consume_episode_numbers() or {}
+                    )
+                except Exception:
+                    picker_numbers = {}
+                picker_driven = bool(picker_numbers)
+                if not picker_driven:
+                    self.report("Organize picker: nothing numbered")
+                    self.gui.show_error(
+                        "No Episodes Numbered",
+                        "No title was given an episode number, so there's "
+                        "nothing to file as an episode.  Number each "
+                        "episode (leave extras blank) and try again."
+                    )
+                    return False
+
+            if picker_driven:
+                main_indices = []
+                for _pi, (_pf, _pdur, _pmb) in enumerate(titles_list):
+                    _ptid = self._title_id_from_filename(_pf)
+                    if _ptid is not None and int(_ptid) in picker_numbers:
+                        main_indices.append(_pi)
+                        episode_numbers.append(
+                            int(picker_numbers[int(_ptid)])
+                        )
+                        real_names.append(
+                            str(picker_names.get(int(_ptid), "") or "")
+                        )
+                    else:
+                        extra_indices.append(_pi)
+                self.log(
+                    f"Episode plan from the picker: {len(main_indices)} "
+                    f"episode(s), {len(extra_indices)} extra(s)."
+                )
+                if not main_indices:
+                    self.report("Picker plan had no numbered episodes")
+                    self.gui.show_error(
+                        "No Episodes Numbered",
+                        "No title was given an episode number in the "
+                        "picker, so there's nothing to file as an "
+                        "episode.  Re-open the disc and number each "
+                        "episode (leave extras blank)."
+                    )
+                    return False
+                _dupes = sorted(
+                    {n for n in episode_numbers
+                     if episode_numbers.count(n) > 1}
+                )
+                if _dupes:
+                    _dup_str = ", ".join(f"E{n:02d}" for n in _dupes)
+                    self.report("Duplicate episode numbers from picker")
+                    self.gui.show_error(
+                        "Duplicate Episode Numbers",
+                        f"More than one title is numbered {_dup_str}.  "
+                        "Re-open the disc and give each episode a unique "
+                        "number."
+                    )
+                    return False
+                if dest_folder:
+                    existing_eps = self._scan_episode_files(
+                        dest_folder, season
+                    )
+                    colliding = sorted(
+                        e for e in episode_numbers if e in existing_eps
+                    )
+                    if colliding:
+                        collision_str = ", ".join(
+                            f"E{e:02d}" for e in colliding
+                        )
+                        if replace_main_existing:
+                            self.log(
+                                f"WARNING: Episode(s) {collision_str} "
+                                f"already exist in Season {season:02d}. "
+                                f"Existing files will be replaced."
+                            )
+                            prompt = (
+                                f"Episode(s) {collision_str} already "
+                                f"exist in this season folder.\n\n"
+                                "Continue and replace the existing "
+                                "episode file(s)?"
+                            )
+                        else:
+                            self.log(
+                                f"WARNING: Episode(s) {collision_str} "
+                                f"already exist in Season {season:02d}. "
+                                f"Existing files will NOT be overwritten "
+                                f"(unique_path will rename)."
+                            )
+                            prompt = (
+                                f"Episode(s) {collision_str} already "
+                                f"exist in this season folder.\n\n"
+                                "Continue anyway? (Files will be renamed, "
+                                "not overwritten.)"
+                            )
+                        if not self.gui.ask_yesno(prompt):
+                            self.log("Cancelled by user.")
+                            return False
+            elif restored_main_indices:
                 main_indices = restored_main_indices
                 self.log(
                     "Restored episode file selection from session metadata."
@@ -5858,9 +6218,12 @@ class RipperController(LegacyControllerMixin):
             # destination season folder.  Uses gap-fill logic so a
             # missing disc (e.g. S01E03 absent) is suggested first
             # rather than simply appending after the highest number.
+            # (Legacy/resume path only — picker-driven rips never reach
+            # here.)
             if (
                 not default_episode_numbers
                 and dest_folder
+                and not picker_driven
             ):
                 existing_eps = self._scan_episode_files(dest_folder, season)
                 if existing_eps:
@@ -5877,11 +6240,24 @@ class RipperController(LegacyControllerMixin):
                         f"episode(s) {suggested[0]}-{suggested[-1]}."
                     )
 
+            # Fresh season (nothing to continue from): pre-fill 1..N
+            # over the selected episodes, which are now in title-number
+            # order — so you confirm "1, 2, 3, …" instead of hand-typing
+            # the whole list (and hitting count/duplicate errors).
+            if not default_episode_numbers and main_indices:
+                default_episode_numbers = list(
+                    range(1, len(main_indices) + 1)
+                )
+
             default_episode_input = ", ".join(
                 str(x) for x in default_episode_numbers
             )
 
-            while True:
+            # ``while not picker_driven`` skips the whole legacy prompt
+            # loop for a picker-driven rip (episode_numbers is already
+            # built from the picker above); otherwise it behaves like
+            # ``while True`` until a valid entry breaks out.
+            while not picker_driven:
                 ep_input = self.gui.ask_input(
                     "Episode Numbers",
                     f"Enter {len(main_indices)} episode number(s), "
@@ -5967,16 +6343,50 @@ class RipperController(LegacyControllerMixin):
 
                 break
 
-            name_input = self.gui.ask_input(
-                "Episode Names",
-                "Paste episode names comma separated "
-                "(or leave blank for defaults):",
-                default_value=", ".join(
-                    session_meta.get("episode_names", [])
-                ) if session_meta else ""
-            )
-            real_names    = parse_episode_names(name_input)
-            if extras_selection_override is not None:
+            # Legacy episode-name prompt — runs only when NOT
+            # picker-driven (a resumed session, or a fresh rip where
+            # nothing was numbered in the picker).  Picker-driven rips
+            # already have ``real_names`` from the per-title name cells.
+            # Defaults come from, in priority: a resumed session's saved
+            # names, then the picker names aligned to this file order by
+            # title id.
+            if not picker_driven:
+                session_names = (
+                    session_meta.get("episode_names", []) if session_meta else []
+                )
+                if session_names:
+                    default_name_value = ", ".join(session_names)
+                elif picker_names:
+                    aligned: list[str] = []
+                    for i in main_indices:
+                        tid = self._title_id_from_filename(titles_list[i][0])
+                        aligned.append(
+                            picker_names.get(int(tid), "") if tid is not None else ""
+                        )
+                    default_name_value = ", ".join(aligned)
+                    if any(aligned):
+                        self.log(
+                            "Episode names pre-filled from the picker — "
+                            "confirm or edit."
+                        )
+                else:
+                    default_name_value = ""
+
+                name_input = self.gui.ask_input(
+                    "Episode Names",
+                    "Episode names, comma separated "
+                    "(pre-filled from the picker — edit, or leave blank "
+                    "for defaults):",
+                    default_value=default_name_value,
+                )
+                real_names = parse_episode_names(name_input)
+
+            # Extras: picker-driven rips already have ``extra_indices``
+            # (a ripped title left un-numbered = an extra); otherwise
+            # honour an explicit override or ask.
+            if picker_driven:
+                pass
+            elif extras_selection_override is not None:
                 extra_indices, bonus_indices = extras_selection_override
             else:
                 extra_indices, bonus_indices = self._ask_extras_selection(

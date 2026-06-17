@@ -250,6 +250,7 @@ def scan_disc(engine, on_log, on_progress):
                             "size":             "",
                             "size_bytes":       0,
                             "chapters":         0,
+                            "output_name":      "",
                             "_invalid":         False,
                             "streams":          {},
                         }
@@ -277,6 +278,16 @@ def scan_disc(engine, on_log, on_progress):
                             titles[tid]["size"] = f"{gb:.2f} GB"
                         else:
                             titles[tid]["size"] = val
+                    elif attr == 27:
+                        # MakeMKV's own output filename for this title
+                        # (e.g. "B1_t10.mkv").  We capture it so the
+                        # picker + logs can show the REAL disc name next
+                        # to the "Title N" number we assign — they
+                        # differ (and the A1_/B1_ prefix isn't
+                        # predictable), so users need both to correlate
+                        # the scan list with the ripped files.
+                        if val:
+                            titles[tid]["output_name"] = val
                 elif line.startswith("MSG:"):
                     parts = line[4:].split(",", 4)
                     if len(parts) >= 5:

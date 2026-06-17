@@ -1,34 +1,45 @@
-## JellyRip AI v1.0.25 Release Notes (UNSTABLE)
+## JellyRip AI v1.0.26 Release Notes (UNSTABLE)
 
-JellyRip AI v1.0.25 — a small fix release.  The Settings dialog now
-follows your theme correctly under light themes, and its tab bar stays
-readable on every theme.
+JellyRip AI v1.0.26 — a workflow + UI pass on the TV ripping flow, plus
+more TV disc-identification providers.  Watch a title before you rip it,
+name and number episodes right in the disc picker (the old post-rip
+prompts are gone), and a tactile polish pass across the UI.
 
-- Portable: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.25/JellyRipAI-portable.zip
-- Installer: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.25/JellyRipAIInstaller.exe
-- Release page: https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.25
+- Portable: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.26/JellyRipAI-portable.zip
+- Installer: https://github.com/unexpear-softwhere/JellyRipAI/releases/download/ai-v1.0.26/JellyRipAIInstaller.exe
+- Release page: https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.26
 - Project site: https://unexpear-softwhere.github.io/JellyRipAI/
 
-### Fixed
+### Added
 
-- Settings dialog now follows the theme under light themes.  A
-  top-level dialog's background isn't reliably painted over the native
-  window surface on Windows, so the Settings dialog stayed dark under
-  light themes — both when freshly opened and when you switched themes
-  live — while its controls restyled around it.  The dialog now wraps
-  its content in a themed surface (the same approach the main window
-  uses), so it follows the theme instantly.
-- Settings tab bar stays readable on every theme.  The tab bar was
-  unstyled, so once the dialog correctly went light the unselected tabs
-  (Everyday / Paths / Reliability / AI) vanished white-on-white.  Tabs
-  are now themed: muted labels with an accent underline on the selected
-  tab.
+- Watch a title before ripping — "Watch in VLC" in the disc picker rips
+  the selected title to a temporary file and plays it.
+- Name and number episodes in the picker: editable Ep # and Episode name
+  columns, each title shown with its length and size.  No number = extra.
+- Cut / Copy / Paste in the picker's editable cells (right-click menu;
+  Ctrl+C / V / X also work).
+- TVmaze (keyless) and TheTVDB (API key + PIN) TV disc identification,
+  alongside the existing TMDB / OMDb lookups.
+
+### Changed
+
+- The post-rip Episode Numbers / Episode Names prompts are gone — a TV
+  rip builds its plan from the picker.  Duplicate-number and
+  existing-file checks still run, ending in a move preview.
+- TV picker and file lists sort by title number, and titles show both
+  "Title N" and MakeMKV's real output filename.
+
+### Polish
+
+- Tactile UI pass: press and focus states on buttons, pointing-hand
+  cursors on clickable controls, hover/selected states on inputs and
+  rows — derived per-theme, so every theme gets it.
 
 ### Baseline: JellyRip (non-AI)
 
-JellyRip AI tracks the non-AI JellyRip line and ships the same fixes
-plus its assistant layer (chat sidebar + AI provider integrations +
-TMDB/OMDb disc auto-identification).
+JellyRip AI tracks the non-AI JellyRip line and ships the same workflow
++ UI changes plus its assistant layer (chat sidebar, AI providers, and
+disc auto-identification).
 
-- MAIN release page: https://github.com/unexpear/JellyRip/releases/tag/v1.0.25
+- MAIN release page: https://github.com/unexpear/JellyRip/releases/tag/v1.0.26
 - MAIN project site: https://unexpear.github.io/JellyRip/

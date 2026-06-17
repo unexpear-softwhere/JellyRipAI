@@ -138,6 +138,11 @@ class SettingsDialog(QDialog):
         self._cancel_btn = cancel
         self._ok_btn = ok
 
+        # Pointing-hand cursor on the dialog's buttons and checkboxes
+        # (QSS can't set the cursor in Qt).
+        from gui_qt.ui_polish import apply_pointing_cursors
+        apply_pointing_cursors(self)
+
     @property
     def appearance_tab(self) -> AppearanceTab:
         return self._appearance_tab

@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys as _sys
+import tempfile
 import threading
 import time
 from datetime import datetime
@@ -47,6 +48,34 @@ from utils.helpers import clean_name, make_temp_title
 from utils.media import select_largest_file
 from utils.state_machine import SessionState, SessionStateMachine
 from utils.scoring import choose_best_title
+
+
+# Local-temp home for disposable watch/preview clips.  One source of
+# truth so ``preview_title`` and the startup purge agree on the path.
+_PREVIEW_TEMP_SUBDIR = "JellyRipAI"
+
+
+def _preview_root() -> str:
+    """Local-temp root for disposable watch/preview clips."""
+    return os.path.join(tempfile.gettempdir(), _PREVIEW_TEMP_SUBDIR, "preview")
+
+
+def purge_preview_temp() -> None:
+    """Best-effort sweep of leftover preview clips from a prior run.
+
+    Called once at startup.  Sample clips delete when the player
+    closes and kept full-title watches are moved/discarded on
+    continue — but a full-title watch the user never continued past
+    (the app was closed first) or a failed/0-byte preview would
+    otherwise linger in local temp.  Clearing the whole preview root
+    at launch guarantees nothing accumulates across runs.
+    """
+    try:
+        root = _preview_root()
+        if os.path.isdir(root):
+            shutil.rmtree(root, ignore_errors=True)
+    except Exception:
+        pass
 
 
 DiscTitle = dict[str, Any]
@@ -884,16 +913,130 @@ class LegacyControllerMixin:
             return []
         return matches
 
-    def preview_title(self, title_id: int) -> None:
-        """Rip a short preview clip for one title and open it in VLC."""
-        temp_root = (
-            self.get_path("temp")
-            if self.session_paths and "temp" in self.session_paths
-            else self.engine.cfg["temp_folder"]
-        )
-        preview_dir = os.path.join(
-            temp_root, "preview"
-        )
+    # ------------------------------------------------------------------
+    # Watched-rip registry — full-title watch rips kept for reuse.
+    # Watching a title rips ALL of it, which is exactly what the real
+    # rip would produce — so a watched title that stays checked is
+    # moved into the session instead of ripping twice; uncheck it and
+    # it's deleted when the run continues (user rule, 2026-06-12).
+    # ------------------------------------------------------------------
+
+    def _watched_rip_lock(self) -> threading.Lock:
+        lock = getattr(self, "_watched_rips_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._watched_rips_lock = lock
+        return lock
+
+    def _register_watched_rip(self, title_id: int, path: str) -> None:
+        """Remember a completed full-title watch rip for reuse."""
+        with self._watched_rip_lock():
+            registry = getattr(self, "_watched_rips", None)
+            if registry is None:
+                registry = {}
+                self._watched_rips = registry
+            registry[int(title_id)] = str(path)
+
+    def discard_watched_rips(self, keep_ids: Sequence[int] = ()) -> None:
+        """Delete watched-rip files (except ``keep_ids``) and forget
+        them.  Called when the user continues with a title unchecked
+        and when a new disc starts (title numbers restart per disc,
+        so stale entries must never be reused)."""
+        keep = {int(k) for k in keep_ids}
+        with self._watched_rip_lock():
+            registry = getattr(self, "_watched_rips", None) or {}
+            for tid in list(registry):
+                if tid in keep:
+                    continue
+                path = registry.pop(tid)
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                try:
+                    os.rmdir(os.path.dirname(path))
+                except OSError:
+                    pass
+
+    def _reuse_watched_rips(
+        self, selected_ids: Sequence[int], rip_path: str,
+    ) -> set[int]:
+        """Move watched full-title rips for still-selected titles into
+        the session rip folder so they are not ripped a second time;
+        discard the rest.  Returns the reused title ids."""
+        # Never run two MakeMKV processes against the drive at once —
+        # wait out an in-flight watch rip before the real rip starts.
+        lock = getattr(self, "_preview_lock", None)
+        if lock is not None:
+            if not lock.acquire(blocking=False):
+                self.log(
+                    "Waiting for the in-progress watch rip to finish "
+                    "before starting the disc rip..."
+                )
+                lock.acquire()
+            lock.release()
+
+        reused: set[int] = set()
+        for tid in selected_ids:
+            with self._watched_rip_lock():
+                registry = getattr(self, "_watched_rips", None) or {}
+                src = registry.pop(int(tid), None)
+            if not src or not os.path.isfile(src):
+                continue
+            dst = os.path.join(rip_path, os.path.basename(src))
+            try:
+                shutil.move(src, dst)
+            except Exception as e:
+                self.log(
+                    f"Title {int(tid) + 1}: could not reuse the "
+                    f"watched rip ({e}); it will rip normally."
+                )
+                continue
+            try:
+                os.rmdir(os.path.dirname(src))
+            except OSError:
+                pass
+            reused.add(int(tid))
+            self.log(
+                f"Title {int(tid) + 1}: reusing the watched rip — "
+                "no second rip needed."
+            )
+        # Anything still registered was watched but left unchecked.
+        self.discard_watched_rips()
+        return reused
+
+    def preview_title(
+        self, title_id: int, preview_seconds: int | None = None
+    ) -> None:
+        """Rip a short preview clip for one title and open it in VLC.
+
+        ``preview_seconds`` controls the sample length: 0 (the
+        default) rips the FULL title — the watch-before-rip flow —
+        and a positive value rips a quick sample, clamped to a sane
+        5–600 s range.  ``None`` falls back to the configured
+        ``opt_preview_seconds``.
+        """
+        try:
+            if preview_seconds is None:
+                seconds = int(
+                    self.engine.cfg.get("opt_preview_seconds", 0) or 0
+                )
+            else:
+                seconds = int(preview_seconds)
+        except (TypeError, ValueError):
+            seconds = 0
+        seconds = 0 if seconds <= 0 else max(5, min(seconds, 600))
+        # Preview clips are disposable, so rip them to LOCAL temp —
+        # never the configured temp root.  The temp root may be a
+        # network share (UNC path), and VLC refuses ``file://`` MRLs
+        # that carry a remote host (field failure 2026-06-12: "VLC is
+        # unable to open the MRL 'file://DESKTOP-…/MediaHub/…'").
+        # Local previews also skip the network round-trip while
+        # MakeMKV writes, so samples start faster.
+        # Each title gets its own subfolder so a KEPT watch rip of one
+        # title survives watching another — the per-run cleanup below
+        # and MakeMKV's pre-rip purge stay scoped to this title only.
+        preview_dir = os.path.join(_preview_root(), f"t{title_id:02d}")
 
         try:
             shutil.rmtree(preview_dir, ignore_errors=True)
@@ -913,12 +1056,24 @@ class LegacyControllerMixin:
                 if self.engine.abort_event.is_set():
                     self.log("Preview skipped: abort requested.")
                     return
-                self.log(f"Preview: starting Title {title_id + 1} for 40s...")
+                length_text = (
+                    "full title" if seconds == 0 else f"{seconds}s sample"
+                )
+                self.log(
+                    f"Preview: starting Title {title_id + 1} "
+                    f"({length_text})..."
+                )
+                if seconds == 0:
+                    self.log(
+                        "Watching the full title — it rips to local "
+                        "temp first, so this can take a few minutes."
+                    )
                 self.gui.set_status(
-                    f"Previewing Title {title_id + 1}... (40s sample)"
+                    f"Ripping Title {title_id + 1} to watch... "
+                    f"({length_text})"
                 )
                 preview_ok = self.engine.rip_preview_title(
-                    preview_dir, title_id, 40, self.log
+                    preview_dir, title_id, seconds, self.log
                 )
 
                 # MakeMKV may create output in nested paths and can finish
@@ -956,6 +1111,17 @@ class LegacyControllerMixin:
                     f"Preview candidate: {os.path.basename(latest)} | "
                     f"{size_mb:.0f} MB | {mm:02d}:{ss:02d}"
                 )
+                if seconds == 0:
+                    # A full-title watch IS a real rip — keep it.
+                    # Still checked when the run continues → moved
+                    # into the session, no second rip; unchecked →
+                    # deleted then.
+                    self._register_watched_rip(title_id, latest)
+                    self.log(
+                        "Watched rip kept for reuse — leave the title "
+                        "checked and it won't rip twice; uncheck it "
+                        "and it's deleted when you continue."
+                    )
                 vlc_result = resolve_vlc(
                     allow_path_lookup=bool(
                         self.engine.cfg.get(
@@ -966,7 +1132,7 @@ class LegacyControllerMixin:
                 )
                 if vlc_result.path:
                     if _sys.platform == "win32":
-                        subprocess.Popen(
+                        player_proc = subprocess.Popen(
                             [vlc_result.path, latest],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
@@ -974,7 +1140,7 @@ class LegacyControllerMixin:
                             shell=False,
                         )
                     else:
-                        subprocess.Popen(
+                        player_proc = subprocess.Popen(
                             [vlc_result.path, latest],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
@@ -987,11 +1153,50 @@ class LegacyControllerMixin:
                     self.log(
                         f"Preview opened in VLC: {os.path.basename(latest)}"
                     )
+
+                    if seconds > 0:
+                        # Sample clips are useless afterward — delete
+                        # once the player exits.  Full-title watches
+                        # are KEPT (registered above) for reuse.
+                        def _delete_clip_after_player(
+                            proc=player_proc, clip=latest,
+                        ):
+                            # Windows locks the clip while the player
+                            # has it open, so wait for the player to
+                            # exit and only then remove it.
+                            try:
+                                proc.wait()
+                            except Exception:
+                                pass
+                            try:
+                                os.remove(clip)
+                            except OSError:
+                                pass
+                            try:
+                                os.rmdir(os.path.dirname(clip))
+                            except OSError:
+                                pass
+
+                        threading.Thread(
+                            target=_delete_clip_after_player,
+                            daemon=True,
+                        ).start()
+                        self.log(
+                            "Preview clip is temporary — it is "
+                            "deleted when the player closes."
+                        )
                 else:
                     self.log(
                         f"VLC not found; opening in default player: {os.path.basename(latest)}"
                     )
                     os.startfile(latest)
+                    if seconds > 0:
+                        self.log(
+                            "Preview clip stays in local temp until "
+                            "the next preview replaces it (the "
+                            "default player does not report when it "
+                            "closes)."
+                        )
             except Exception as e:
                 self.log(f"Preview open failed: {e}")
             finally:

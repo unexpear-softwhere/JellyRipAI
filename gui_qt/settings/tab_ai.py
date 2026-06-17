@@ -204,6 +204,14 @@ class AITab(QWidget):
         self._add_lineedit(
             web_form, "opt_omdb_api_key", "OMDb API key (optional)", default="",
         )
+        self._add_lineedit(
+            web_form, "opt_tvdb_api_key",
+            "TheTVDB API key (optional, paid)", default="",
+        )
+        self._add_lineedit(
+            web_form, "opt_tvdb_pin",
+            "TheTVDB subscriber PIN", default="",
+        )
         outer.addWidget(web_host)
 
         # OMDb (omdbapi.com) is an optional second source — a free key
@@ -220,6 +228,21 @@ class AITab(QWidget):
         omdb_hint.setObjectName("settingsAIOmdbHint")
         omdb_hint.setWordWrap(True)
         outer.addWidget(omdb_hint)
+
+        # TV-specialized sources.  TVmaze is free + keyless (always on);
+        # TheTVDB is the optional paid one (key + PIN above).
+        tv_hint = QLabel(
+            "TV shows: TVmaze (free, no key — always on) is used as a "
+            "TV-specialized backup, so series identify even with no keys "
+            "set.  TheTVDB is an optional extra TV source, but its API is "
+            "paid: it needs a key plus, for user-supported keys, a "
+            "subscriber PIN (thetvdb.com — $11.99/yr).  Leave both blank "
+            "to skip TheTVDB and rely on the free sources.\n"
+            "JellyRip is not affiliated with TVmaze or TheTVDB."
+        )
+        tv_hint.setObjectName("settingsAITvHint")
+        tv_hint.setWordWrap(True)
+        outer.addWidget(tv_hint)
 
         outer.addStretch(1)
 

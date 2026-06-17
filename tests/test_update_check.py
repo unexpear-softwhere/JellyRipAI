@@ -82,29 +82,82 @@ def test_up_to_date_shows_info(monkeypatch):
     assert any("up to date" in s.lower() for s in win.statuses)
 
 
-def test_newer_release_offers_release_page_and_opens_on_yes(monkeypatch):
+def test_newer_installer_downloads_verifies_and_launches_on_yes(monkeypatch):
+    rel = _release("999.0.0")  # PREFERRED_ASSETS[0] is the .exe installer
+    monkeypatch.setattr(uc, "fetch_latest_release", lambda **_kw: rel)
+    dl: dict = {}
+    verified: list[str] = []
+    launched: list[str] = []
+    opened: list[str] = []
+    monkeypatch.setattr(
+        uc, "download_asset",
+        lambda url, dest, **kw: dl.update(url=url, dest=dest),
+    )
+    monkeypatch.setattr(
+        uc, "verify_downloaded_update",
+        lambda path, **kw: (verified.append(path), (True, "ok"))[1],
+    )
+    monkeypatch.setattr(uc, "_launch_installer", lambda p: launched.append(p))
+    monkeypatch.setattr(uc.webbrowser, "open", lambda url: opened.append(url))
+    win = FakeWindow(yes=True)
+    uc._run_check(win)
+    # Downloaded the installer asset, verified the downloaded file, then
+    # launched it — and never bounced to the browser.
+    assert dl["url"] == rel["asset_url"]
+    assert dl["dest"].endswith(uc.PREFERRED_ASSETS[0])
+    assert verified == [dl["dest"]]
+    assert launched == [dl["dest"]]
+    assert opened == []
+    assert win.prompts and rel["tag"] in win.prompts[0]
+    assert any(rel["tag"] in s for s in win.statuses)
+
+
+def test_declining_install_downloads_nothing(monkeypatch):
     rel = _release("999.0.0")
     monkeypatch.setattr(uc, "fetch_latest_release", lambda **_kw: rel)
+    acted: list[str] = []
+    monkeypatch.setattr(uc, "download_asset", lambda *a, **kw: acted.append("dl"))
+    monkeypatch.setattr(uc, "_launch_installer", lambda p: acted.append("launch"))
+    monkeypatch.setattr(uc.webbrowser, "open", lambda url: acted.append("open"))
+    win = FakeWindow(yes=False)
+    uc._run_check(win)
+    assert acted == []  # declined: nothing downloaded, launched, or opened
+    assert any(rel["html_url"] in line for line in win.logs)
+
+
+def test_download_failure_falls_back_to_browser(monkeypatch):
+    rel = _release("999.0.0")
+    monkeypatch.setattr(uc, "fetch_latest_release", lambda **_kw: rel)
+
+    def _boom(url, dest, **kw):
+        raise OSError("connection reset")
+
+    monkeypatch.setattr(uc, "download_asset", _boom)
+    launched: list[str] = []
+    opened: list[str] = []
+    monkeypatch.setattr(uc, "_launch_installer", lambda p: launched.append(p))
+    monkeypatch.setattr(uc.webbrowser, "open", lambda url: opened.append(url))
+    win = FakeWindow(yes=True)
+    uc._run_check(win)
+    assert launched == []
+    assert opened == [rel["html_url"]]  # falls back to the release page
+    assert win.errors and win.errors[0][0] == "Download Failed"
+
+
+def test_non_installer_asset_uses_browser(monkeypatch):
+    # When the top asset isn't an .exe (e.g. the portable zip), never
+    # auto-launch it — fall back to the manual browser download.
+    rel = _release("999.0.0", asset_name=uc.PREFERRED_ASSETS[1])
+    monkeypatch.setattr(uc, "fetch_latest_release", lambda **_kw: rel)
+    acted: list[str] = []
+    monkeypatch.setattr(uc, "download_asset", lambda *a, **kw: acted.append("dl"))
+    monkeypatch.setattr(uc, "_launch_installer", lambda p: acted.append("launch"))
     opened: list[str] = []
     monkeypatch.setattr(uc.webbrowser, "open", lambda url: opened.append(url))
     win = FakeWindow(yes=True)
     uc._run_check(win)
-    assert win.prompts and rel["tag"] in win.prompts[0]
+    assert acted == []  # no download, no launch
     assert opened == [rel["html_url"]]
-    assert any(rel["tag"] in s for s in win.statuses)
-    # The chosen asset is named in the log so users know what to grab.
-    assert any(uc.PREFERRED_ASSETS[0] in line for line in win.logs)
-
-
-def test_newer_release_declined_logs_url_without_opening(monkeypatch):
-    rel = _release("999.0.0")
-    monkeypatch.setattr(uc, "fetch_latest_release", lambda **_kw: rel)
-    opened: list[str] = []
-    monkeypatch.setattr(uc.webbrowser, "open", lambda url: opened.append(url))
-    win = FakeWindow(yes=False)
-    uc._run_check(win)
-    assert opened == []
-    assert any(rel["html_url"] in line for line in win.logs)
 
 
 def test_network_failure_reports_error_with_manual_url(monkeypatch):

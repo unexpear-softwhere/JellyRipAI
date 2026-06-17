@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -979,6 +980,15 @@ def test_clean_disc_label_makes_volume_labels_searchable():
     assert ChatController._clean_disc_label("toy-story.2") == "toy story 2"
 
 
+def _stub_tvmaze(monkeypatch, result=None):
+    """Stub the keyless TVmaze source so identify tests stay offline.
+    TVmaze runs on every identify now (no key needed), so tests that
+    aren't exercising it must pin it to a known empty/fixed result."""
+    import shared.ai.tvmaze_lookup as tvm
+    payload = ([result], "") if result is not None else ([], "no results")
+    monkeypatch.setattr(tvm, "search_tvmaze", lambda q, **kw: payload)
+
+
 def test_identify_disc_worker_emits_real_tmdb_id(sidebar, cfg, monkeypatch):
     """Auto-identify posts a chat note with the real TMDB id (movie/808),
     NOT an IMDb tt-id, when TMDB matches the disc label — plus a concise
@@ -991,6 +1001,7 @@ def test_identify_disc_worker_emits_real_tmdb_id(sidebar, cfg, monkeypatch):
         tl, "search_tmdb",
         lambda q, k, **kw: ([TMDBResult("movie", 808, "Shrek", "2001", "")], ""),
     )
+    _stub_tvmaze(monkeypatch)
 
     posted: list = []
     controller.disc_identified.connect(lambda md, log: posted.append((md, log)))
@@ -1013,6 +1024,7 @@ def test_identify_disc_worker_miss_is_log_only(sidebar, cfg, monkeypatch):
     monkeypatch.setattr(
         tl, "search_tmdb", lambda q, k, **kw: ([], "no results"),
     )
+    _stub_tvmaze(monkeypatch)  # TVmaze also misses → true no-match
 
     posted: list = []
     controller.disc_identified.connect(lambda md, log: posted.append((md, log)))
@@ -1034,6 +1046,7 @@ def test_identify_disc_worker_omdb_only(sidebar, cfg, monkeypatch):
         ol, "search_omdb",
         lambda q, k, **kw: ([OMDbResult("movie", "tt0126029", "Shrek", "2001")], ""),
     )
+    _stub_tvmaze(monkeypatch)  # OMDb is the only hit
     posted: list = []
     controller.disc_identified.connect(lambda md, log: posted.append((md, log)))
     controller._identify_disc_worker("SHREK", "", "omdbkey")
@@ -1061,6 +1074,7 @@ def test_identify_disc_worker_both_enriches_with_imdb(sidebar, cfg, monkeypatch)
         ol, "search_omdb",
         lambda q, k, **kw: ([OMDbResult("movie", "tt0126029", "Shrek", "2001")], ""),
     )
+    _stub_tvmaze(monkeypatch)  # isolate the TMDB+OMDb agreement path
     posted: list = []
     controller.disc_identified.connect(lambda md, log: posted.append((md, log)))
     controller._identify_disc_worker("SHREK", "tmdbkey", "omdbkey")
@@ -1091,6 +1105,7 @@ def test_identify_disc_worker_disagreeing_omdb_hit_is_dropped(
         ol, "search_omdb",
         lambda q, k, **kw: ([OMDbResult("movie", "tt0117756", "Spirit", "1996")], ""),
     )
+    _stub_tvmaze(monkeypatch)  # no TV hit to muddy the disagreement test
     posted: list = []
     controller.disc_identified.connect(lambda md, log: posted.append((md, log)))
     controller._identify_disc_worker("SPIRIT", "tmdbkey", "omdbkey")
@@ -1102,20 +1117,111 @@ def test_identify_disc_worker_disagreeing_omdb_hit_is_dropped(
     assert "TMDB + OMDb" not in log_line    # source line says TMDB only
 
 
-def test_identify_disc_async_skips_without_key(sidebar, cfg, monkeypatch):
-    """No TMDB key → no lookup and dedup stays unset (returned early)."""
-    cfg.pop("opt_tmdb_api_key", None)
+def test_identify_disc_worker_tvmaze_canonical_when_no_keys(
+    sidebar, cfg, monkeypatch,
+):
+    """With NO keys, the keyless TVmaze source still identifies a TV
+    show (the 3rd-Rock case) — title, TVmaze id, and the IMDb id TVmaze
+    carries in externals all land on the card."""
     controller = ChatController(sidebar=sidebar, cfg=cfg)
+    from shared.ai.tvmaze_lookup import TVmazeResult
+    _stub_tvmaze(monkeypatch, TVmazeResult(
+        "tv", 1, "3rd Rock from the Sun", "1996", "tt0115082",
+    ))
 
+    posted: list = []
+    controller.disc_identified.connect(lambda md, log: posted.append((md, log)))
+    controller._identify_disc_worker("3RD_ROCK_FROM_THE_SUN", "")
+
+    assert len(posted) == 1
+    chat_md, log_line = posted[0]
+    assert "3rd Rock from the Sun" in chat_md
+    assert "TVmaze ID: 1" in chat_md
+    assert "tt0115082" in chat_md          # IMDb id from TVmaze externals
+    assert "TVmaze" in log_line
+
+
+def test_identify_disc_worker_tmdb_canonical_tvmaze_adds_imdb(
+    sidebar, cfg, monkeypatch,
+):
+    """TMDB stays canonical (its id on the card), and when TVmaze agrees
+    it both supplies the IMDb id TMDB lacks and is named as a
+    cross-check in the log."""
+    controller = ChatController(sidebar=sidebar, cfg=cfg)
     import shared.ai.tmdb_lookup as tl
+    from shared.ai.tmdb_lookup import TMDBResult
+    from shared.ai.tvmaze_lookup import TVmazeResult
     monkeypatch.setattr(
         tl, "search_tmdb",
-        lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError("must not look up without a key")
+        lambda q, k, **kw: (
+            [TMDBResult("tv", 4609, "3rd Rock from the Sun", "1996", "")], "",
         ),
     )
-    controller.identify_disc_async("SHREK")
-    assert controller._last_identified_disc == ""
+    _stub_tvmaze(monkeypatch, TVmazeResult(
+        "tv", 1, "3rd Rock from the Sun", "1996", "tt0115082",
+    ))
+
+    posted: list = []
+    controller.disc_identified.connect(lambda md, log: posted.append((md, log)))
+    controller._identify_disc_worker("3RD ROCK", "tmdbkey")
+
+    chat_md, log_line = posted[0]
+    assert "tv/4609" in chat_md                 # TMDB canonical id
+    assert "tt0115082 (via TVmaze)" in chat_md  # IMDb borrowed from TVmaze
+    assert "TMDB + TVmaze" in log_line          # cross-check noted
+
+
+def test_identify_disc_worker_tvdb_used_when_keyed(sidebar, cfg, monkeypatch):
+    """A configured TheTVDB key/PIN feeds the worker; with no TMDB hit,
+    TheTVDB is canonical (ranks above keyless TVmaze)."""
+    cfg["opt_tvdb_api_key"] = "tvdbkey"
+    cfg["opt_tvdb_pin"] = "pin"
+    controller = ChatController(sidebar=sidebar, cfg=cfg)
+    import shared.ai.tvdb_lookup as td
+    from shared.ai.tvdb_lookup import TVDBResult
+    monkeypatch.setattr(
+        td, "search_tvdb",
+        lambda q, k, p="", **kw: (
+            [TVDBResult("tv", "71663", "3rd Rock from the Sun", "1996",
+                        "tt0115082")], "",
+        ),
+    )
+    _stub_tvmaze(monkeypatch)  # TVmaze misses; TheTVDB carries it
+
+    posted: list = []
+    controller.disc_identified.connect(lambda md, log: posted.append((md, log)))
+    controller._identify_disc_worker("3RD ROCK", "", "", "tvdbkey", "pin")
+
+    chat_md, log_line = posted[0]
+    assert "TheTVDB ID: 71663" in chat_md
+    assert "tt0115082" in chat_md
+    assert "TheTVDB" in log_line
+
+
+def test_identify_disc_async_runs_keyless_via_tvmaze(sidebar, cfg, monkeypatch):
+    """With no keys at all, identify no longer early-outs — TVmaze is
+    keyless, so the lookup proceeds (dedup gets set and the worker is
+    invoked).  This is the behavior change that makes 3rd Rock identify
+    out of the box."""
+    cfg.pop("opt_tmdb_api_key", None)
+    cfg.pop("opt_omdb_api_key", None)
+    cfg.pop("opt_tvdb_api_key", None)
+    controller = ChatController(sidebar=sidebar, cfg=cfg)
+
+    seen: list = []
+    monkeypatch.setattr(
+        controller, "_identify_disc_worker",
+        lambda *a, **k: seen.append(a),
+    )
+    controller.identify_disc_async("3RD ROCK")
+
+    # Joined so the daemon worker thread finishes before we assert.
+    for t in threading.enumerate():
+        if t.name == "disc-identify":
+            t.join(2)
+
+    assert controller._last_identified_disc == "3RD ROCK"  # did NOT skip
+    assert seen and seen[0][0] == "3RD ROCK"
 
 
 def test_main_window_get_chat_ui_snapshot_returns_dict(qtbot):

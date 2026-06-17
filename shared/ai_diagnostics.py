@@ -278,6 +278,11 @@ class DiagnosticsManager:
         )
         self._ai_disabled_reason: str = ""
         self._ai_quota_disabled_until: float = 0.0  # timestamp for temp disable
+        # Single-flight guard: at most one diagnosis thread at a time, so
+        # a disc that fails every title can't pile up dozens of threads
+        # faster than the consecutive-failure cap can react (the cap only
+        # rises as threads finish).  See _trigger_ai_diagnosis.
+        self._ai_diagnosis_inflight: bool = False
 
         # Backend routing mode: "off" | "cloud" | "local"
         self._ai_mode = str(self._config.get("opt_ai_mode", "cloud"))
@@ -645,12 +650,28 @@ class DiagnosticsManager:
             )
             return
 
-        # Run in background to avoid blocking the rip pipeline
-        thread = threading.Thread(
-            target=self._do_ai_diagnosis,
-            args=(event, process_capture),
-            daemon=True,
-        )
+        # Single-flight: never let diagnosis threads pile up.  A disc
+        # that fails every title fires failure events far faster than a
+        # diagnosis (LOCAL + CLOUD, each with a timeout) can complete.
+        # Because _ai_consecutive_failures only rises as threads FINISH,
+        # the cap above can't keep pace if we spawn one per event —
+        # dozens queue up and you get "All backends failed (19/3)" long
+        # after the session already failed.  One at a time keeps the cap
+        # honest: three sequential failures now reliably trips disable.
+        if self._ai_diagnosis_inflight:
+            return
+        self._ai_diagnosis_inflight = True
+
+        # Run in background to avoid blocking the rip pipeline.  The
+        # wrapper clears the in-flight flag no matter how the diagnosis
+        # exits (success, all-backends-failed, or exception).
+        def _runner() -> None:
+            try:
+                self._do_ai_diagnosis(event, process_capture)
+            finally:
+                self._ai_diagnosis_inflight = False
+
+        thread = threading.Thread(target=_runner, daemon=True)
         thread.start()
 
     def _force_disable_ai(self, reason: str) -> None:

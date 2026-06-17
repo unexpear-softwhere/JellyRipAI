@@ -202,6 +202,12 @@ QTreeWidget::item:hover {{
     background-color: {tokens[hover]};
 }}
 
+QTreeView::item:selected,
+QTreeWidget::item:selected {{
+    background-color: {tokens[selection]};
+    color: {tokens[selectionFg]};
+}}
+
 /* ---- Form controls -------------------------------------------------- */
 
 QLineEdit,
@@ -210,10 +216,16 @@ QTextEdit {{
     background-color: {tokens[input]};
     color: {tokens[fg]};
     border: 1px solid {tokens[border]};
-    border-radius: 5px;
+    border-radius: 6px;
     padding: 6px 10px;
     selection-background-color: {tokens[selection]};
     selection-color: {tokens[selectionFg]};
+}}
+
+QLineEdit:hover,
+QPlainTextEdit:hover,
+QTextEdit:hover {{
+    border-color: {tokens[muted]};
 }}
 
 QLineEdit:focus,
@@ -226,12 +238,16 @@ QComboBox {{
     background-color: {tokens[input]};
     color: {tokens[fg]};
     border: 1px solid {tokens[border]};
-    border-radius: 5px;
+    border-radius: 6px;
     padding: 5px 10px;
     min-height: 20px;
 }}
 
 QComboBox:hover {{
+    border-color: {tokens[accent]};
+}}
+
+QComboBox:focus {{
     border-color: {tokens[accent]};
 }}
 
@@ -290,13 +306,18 @@ QPushButton {{
     background-color: {tokens[card]};
     color: {tokens[fg]};
     border: 1px solid {tokens[border]};
-    border-radius: 5px;
+    border-radius: 6px;
     padding: 7px 14px;
     font-weight: 500;
 }}
 
 QPushButton:hover {{
     background-color: {tokens[hover]};
+    border-color: {tokens[accent]};
+}}
+
+QPushButton:pressed {{
+    background-color: {tokens[hoverPressed]};
     border-color: {tokens[accent]};
 }}
 
@@ -323,6 +344,10 @@ QPushButton#confirmButton:hover {{
     background-color: {tokens[go]};
     border-color: {tokens[goFg]};
 }}
+QPushButton#confirmButton:pressed {{
+    background-color: {tokens[goPressed]};
+    border-color: {tokens[goFg]};
+}}
 QPushButton#confirmButton:disabled {{
     background-color: {tokens[card]};
     color: {tokens[muted]};
@@ -341,6 +366,10 @@ QPushButton#primaryButton:hover {{
     background-color: {tokens[info]};
     border-color: {tokens[infoFg]};
 }}
+QPushButton#primaryButton:pressed {{
+    background-color: {tokens[infoPressed]};
+    border-color: {tokens[infoFg]};
+}}
 
 /* Workflow alt button — "Standard".
  * Maps to the ``alt`` role. */
@@ -352,6 +381,10 @@ QPushButton#secondaryButton {{
 }}
 QPushButton#secondaryButton:hover {{
     background-color: {tokens[alt]};
+    border-color: {tokens[altFg]};
+}}
+QPushButton#secondaryButton:pressed {{
+    background-color: {tokens[altPressed]};
     border-color: {tokens[altFg]};
 }}
 
@@ -366,6 +399,11 @@ QPushButton#cancelButton:hover {{
     color: {tokens[fg]};
     background-color: {tokens[hover]};
     border-color: {tokens[border]};
+}}
+QPushButton#cancelButton:pressed {{
+    color: {tokens[fg]};
+    background-color: {tokens[hoverPressed]};
+    border-color: {tokens[accent]};
 }}
 
 /* ---- Progress / scrollbars ----------------------------------------- */
@@ -477,6 +515,9 @@ QComboBox#driveCombo {{
 QComboBox#driveCombo:hover {{
     border-color: {tokens[accent]};
 }}
+QComboBox#driveCombo:focus {{
+    border-color: {tokens[accent]};
+}}
 QPushButton#driveRefresh {{
     background-color: {tokens[input]};
     color: {tokens[muted]};
@@ -487,6 +528,11 @@ QPushButton#driveRefresh {{
 }}
 QPushButton#driveRefresh:hover {{
     background-color: {tokens[hover]};
+    color: {tokens[accent]};
+    border-color: {tokens[accent]};
+}}
+QPushButton#driveRefresh:pressed {{
+    background-color: {tokens[hoverPressed]};
     color: {tokens[accent]};
     border-color: {tokens[accent]};
 }}
@@ -529,6 +575,13 @@ QToolButton#utilUpdates:pressed,
 QToolButton#utilCopyLog:pressed,
 QToolButton#utilBrowse:pressed {{
     background-color: {tokens[selection]};
+    color: {tokens[fg]};
+}}
+QToolButton#utilSettings:focus,
+QToolButton#utilUpdates:focus,
+QToolButton#utilCopyLog:focus,
+QToolButton#utilBrowse:focus {{
+    border-color: {tokens[accent]};
     color: {tokens[fg]};
 }}
 /* Legacy QPushButton#utilXxx selectors kept while build_qss.py
@@ -578,6 +631,13 @@ QPushButton[objectName^="modeGo"] {{
 QPushButton[objectName^="modeGo"]:hover {{
     border-color: {tokens[goFg]};
 }}
+QPushButton[objectName^="modeGo"]:focus {{
+    border-color: {tokens[goFg]};
+}}
+QPushButton[objectName^="modeGo"]:pressed {{
+    background-color: {tokens[goPressed]};
+    border-color: {tokens[goFg]};
+}}
 QPushButton[objectName^="modeInfo"] {{
     background-color: {tokens[info]};
     color: {tokens[infoFg]};
@@ -587,6 +647,13 @@ QPushButton[objectName^="modeInfo"] {{
     font-weight: 700;
 }}
 QPushButton[objectName^="modeInfo"]:hover {{
+    border-color: {tokens[infoFg]};
+}}
+QPushButton[objectName^="modeInfo"]:focus {{
+    border-color: {tokens[infoFg]};
+}}
+QPushButton[objectName^="modeInfo"]:pressed {{
+    background-color: {tokens[infoPressed]};
     border-color: {tokens[infoFg]};
 }}
 QPushButton[objectName^="modeAlt"] {{
@@ -600,6 +667,13 @@ QPushButton[objectName^="modeAlt"] {{
 QPushButton[objectName^="modeAlt"]:hover {{
     border-color: {tokens[altFg]};
 }}
+QPushButton[objectName^="modeAlt"]:focus {{
+    border-color: {tokens[altFg]};
+}}
+QPushButton[objectName^="modeAlt"]:pressed {{
+    background-color: {tokens[altPressed]};
+    border-color: {tokens[altFg]};
+}}
 QPushButton[objectName^="modeWarn"] {{
     background-color: {tokens[warn]};
     color: {tokens[warnFg]};
@@ -609,6 +683,13 @@ QPushButton[objectName^="modeWarn"] {{
     font-weight: 700;
 }}
 QPushButton[objectName^="modeWarn"]:hover {{
+    border-color: {tokens[warnFg]};
+}}
+QPushButton[objectName^="modeWarn"]:focus {{
+    border-color: {tokens[warnFg]};
+}}
+QPushButton[objectName^="modeWarn"]:pressed {{
+    background-color: {tokens[warnPressed]};
     border-color: {tokens[warnFg]};
 }}
 
@@ -629,6 +710,11 @@ QPushButton#stopButton {{
 QPushButton#stopButton:hover {{
     background-color: {tokens[danger]};
     color: {tokens[dangerFg]};
+}}
+QPushButton#stopButton:pressed {{
+    background-color: {tokens[dangerPressed]};
+    color: {tokens[dangerFg]};
+    border-color: {tokens[dangerPressed]};
 }}
 QPushButton#stopButton:disabled {{
     color: {tokens[muted]};
@@ -721,6 +807,52 @@ QToolTip {{
 # ---------------------------------------------------------------------------
 
 
+def _mix(hex_color: str, factor: float) -> str:
+    """Darken (``factor`` < 1) or lighten (``factor`` > 1) a ``#RRGGBB``
+    color by scaling each channel toward black or white.
+
+    Used to derive ``:pressed`` shades from a theme's own role colors so
+    every theme — built-in or custom — gets correct press feedback with
+    no extra tokens to hand-author.  Passes through anything that isn't a
+    6-digit hex (e.g. ``transparent``)."""
+    s = (hex_color or "").strip()
+    if not (s.startswith("#") and len(s) == 7):
+        return hex_color
+    try:
+        r, g, b = int(s[1:3], 16), int(s[3:5], 16), int(s[5:7], 16)
+    except ValueError:
+        return hex_color
+    if factor <= 1.0:
+        r, g, b = int(r * factor), int(g * factor), int(b * factor)
+    else:
+        f = factor - 1.0
+        r = int(r + (255 - r) * f)
+        g = int(g + (255 - g) * f)
+        b = int(b + (255 - b) * f)
+
+    def _c(v: int) -> int:
+        return max(0, min(255, v))
+
+    return f"#{_c(r):02x}{_c(g):02x}{_c(b):02x}"
+
+
+# Press darkens the surface: roles ~18%, neutral surfaces ~10%.
+_PRESS_FACTOR = 0.82
+_PRESS_FACTOR_NEUTRAL = 0.90
+
+
+def _derive_interaction_tokens(tokens: Mapping[str, str]) -> dict[str, str]:
+    """Pressed-state shades derived from a theme's existing colors.
+
+    Added to the token map only at render time, so themes never need to
+    define them (and the up-front coverage check stays unchanged)."""
+    out: dict[str, str] = {}
+    for role in ("go", "info", "alt", "warn", "danger"):
+        out[f"{role}Pressed"] = _mix(tokens[role], _PRESS_FACTOR)
+    out["hoverPressed"] = _mix(tokens["hover"], _PRESS_FACTOR_NEUTRAL)
+    return out
+
+
 def render_qss(theme: Theme) -> str:
     """Produce the QSS string for one built-in :class:`Theme`."""
     return render_qss_from_tokens(
@@ -750,6 +882,10 @@ def render_qss_from_tokens(
     missing = [k for k in TOKEN_KEYS if k not in tokens]
     if missing:
         raise ValueError(f"theme {id!r} missing tokens: {missing}")
+    # Augment with derived interaction shades (pressed states).  The
+    # theme only supplies the base TOKEN_KEYS; the extras live in this
+    # render-time copy so the template can reference them.
+    render_tokens = {**tokens, **_derive_interaction_tokens(tokens)}
     return _QSS_TEMPLATE.format(
-        id=id, name=name, family=family, notes=notes, tokens=tokens,
+        id=id, name=name, family=family, notes=notes, tokens=render_tokens,
     )

@@ -23,7 +23,7 @@ caller must marshal via the shell's signals or
 """
 
 from gui_qt.dialogs.ask import ask_input, ask_yesno
-from gui_qt.dialogs.disc_tree import show_disc_tree
+from gui_qt.dialogs.disc_tree import run_disc_tree, show_disc_tree
 from gui_qt.dialogs.duplicate_resolution import (
     DuplicateResolutionChoice,
     ask_duplicate_resolution,
@@ -49,6 +49,7 @@ __all__ = [
     "ask_space_override",
     "ask_tv_setup",
     "ask_yesno",
+    "run_disc_tree",
     "show_disc_tree",
     "show_error",
     "show_extras_picker",

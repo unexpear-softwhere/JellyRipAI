@@ -105,15 +105,20 @@ def test_updater_signature_check_uses_trusted_powershell(monkeypatch):
 
 
 def test_update_check_does_not_shell_out(monkeypatch):
-    """The Qt-native ``tools.update_check`` flow (real since
-    2026-06-10) must stay pure Python: no subprocess, no
-    ``os.system`` — that's how the prior tkinter implementation
-    became a trusted-binary attack target.  The check talks to
-    GitHub via urllib inside ``utils.updater.fetch_latest_release``
-    (monkeypatched here) and to the user via the window's
-    thread-safe methods only.  There is deliberately no
-    launch-downloaded-update path: an available update opens the
-    releases page in the browser instead.
+    """The ``tools.update_check`` check + up-to-date paths must stay
+    pure Python: no ``subprocess``, no ``os.system`` — that's how the
+    prior tkinter implementation became a trusted-binary attack
+    target.  This test drives the *up-to-date* path (an older
+    "latest" release): the worker only talks to GitHub via urllib
+    inside ``fetch_latest_release`` (monkeypatched) and to the user
+    via the window's thread-safe methods — so no shell-out, no prompt.
+
+    The install path (when a newer build exists) does launch the
+    downloaded installer, but via ``os.startfile`` / ShellExecute on a
+    controlled temp path — not a shell command string — after a
+    truncation-safe download from the pinned ``REPO_SLUG`` over HTTPS.
+    See ``_launch_installer`` and ``tests/test_update_check.py`` for
+    that flow.
     """
     import subprocess as _sp
     from unittest.mock import MagicMock

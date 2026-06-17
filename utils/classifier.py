@@ -59,6 +59,8 @@ class ClassifiedTitle:
 
     @property
     def status_text(self) -> str:
+        if self.label == "EPISODE":
+            return "Episode"
         if self.recommended:
             return "Recommended"
         if not self.valid:
@@ -147,11 +149,17 @@ def _build_reasons(
     elif label == "UNKNOWN":
         reasons.append("ambiguous signals")
 
+    elif label == "EPISODE":
+        reasons.append("full-length title")
+
     return reasons
 
 
 def _compute_confidence(best_score: float, second_score: float, label: str) -> float:
     """Derive confidence from the gap between top candidates."""
+    if label == "EPISODE":
+        return 0.95
+
     if label == "EXTRA":
         return 0.95
 
@@ -215,11 +223,18 @@ def _title_key(title: Title) -> tuple[int, int, int]:
     )
 
 
-def classify_titles(disc_titles: Sequence[Title]) -> list[ClassifiedTitle]:
+def classify_titles(
+    disc_titles: Sequence[Title], is_tv: bool = False,
+) -> list[ClassifiedTitle]:
     """Classify all titles into MAIN / DUPLICATE / EXTRA / UNKNOWN.
 
     The returned list is sorted by score. The `recommended` flag marks the
     highest-ranked valid title, while `rank` always reflects score order.
+
+    On a TV disc (``is_tv=True``) there is no single "main feature" — a
+    disc is N episodes.  So every valid full-length title is labelled
+    EPISODE and pre-recommended (the picker checks them all), and only
+    the short titles fall out as EXTRA.  The movie path is unchanged.
     """
     if not disc_titles:
         return []
@@ -239,7 +254,15 @@ def classify_titles(disc_titles: Sequence[Title]) -> list[ClassifiedTitle]:
     for rank, (title, score) in enumerate(scored, start=1):
         valid, rejection_reason = _validate_title(title)
 
-        if title is reference_title:
+        if is_tv:
+            # TV: a disc is N episodes, not one main feature.  Every
+            # valid full-length title is an EPISODE (all pre-checked);
+            # only short titles fall out as extras.
+            if valid and _numeric_field(title, "duration_seconds") >= 1200:
+                label = "EPISODE"
+            else:
+                label = "EXTRA"
+        elif title is reference_title:
             label = "MAIN"
         elif _is_duplicate(title, reference_title):
             label = "DUPLICATE"
@@ -247,6 +270,11 @@ def classify_titles(disc_titles: Sequence[Title]) -> list[ClassifiedTitle]:
             label = "EXTRA"
         else:
             label = "UNKNOWN"
+
+        if is_tv:
+            recommended = valid and label == "EPISODE"
+        else:
+            recommended = valid and title is reference_title
 
         results.append(
             ClassifiedTitle(
@@ -258,7 +286,7 @@ def classify_titles(disc_titles: Sequence[Title]) -> list[ClassifiedTitle]:
                 valid=valid,
                 rejection_reason=rejection_reason,
                 rank=rank,
-                recommended=valid and title is reference_title,
+                recommended=recommended,
             )
         )
 
@@ -275,10 +303,10 @@ def get_recommended_title(
 
 
 def classify_and_pick_main(
-    disc_titles: Sequence[Title],
+    disc_titles: Sequence[Title], is_tv: bool = False,
 ) -> tuple[ClassifiedTitle | None, list[ClassifiedTitle]]:
     """Convenience wrapper returning (recommended, all_classified)."""
-    classified = classify_titles(disc_titles)
+    classified = classify_titles(disc_titles, is_tv=is_tv)
     if not classified:
         return None, []
     return get_recommended_title(classified), classified

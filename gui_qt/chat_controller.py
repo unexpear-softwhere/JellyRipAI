@@ -719,9 +719,15 @@ class ChatController(QObject):
             web_on = bool(self._cfg.get("opt_ai_web_search", False))
             tmdb_key = str(self._cfg.get("opt_tmdb_api_key", "") or "").strip()
             omdb_key = str(self._cfg.get("opt_omdb_api_key", "") or "").strip()
+            tvdb_key = str(self._cfg.get("opt_tvdb_api_key", "") or "").strip()
+            tvdb_pin = str(self._cfg.get("opt_tvdb_pin", "") or "").strip()
         except Exception:
             return messages
-        if not web_on and not tmdb_key and not omdb_key:
+        # Look things up only when the user opted in — a key set, or the
+        # Web toggle on.  TVmaze is keyless but must NOT fire on every
+        # idle chat turn, so it rides along only once we've decided to
+        # look up (it never flips the gate on by itself).
+        if not web_on and not tmdb_key and not omdb_key and not tvdb_key:
             return messages
 
         user_text = ""
@@ -783,6 +789,35 @@ class ChatController(QObject):
                     tmdb_answered = True
             except Exception:
                 pass
+        # TheTVDB — optional paid TV source (key + PIN).  TV-curated, so
+        # it helps most on series; counts as "answered" like the others.
+        if tvdb_key and tmdb_query:
+            try:
+                from shared.ai.tvdb_lookup import (
+                    search_tvdb,
+                    format_for_context as _tvdb_fmt,
+                )
+                tvdb_results, _ = search_tvdb(tmdb_query, tvdb_key, tvdb_pin)
+                if tvdb_results:
+                    blocks.append(_tvdb_fmt(tmdb_query, tvdb_results))
+                    tmdb_answered = True
+            except Exception:
+                pass
+        # TVmaze — free, keyless TV source.  Rides along on any lookup
+        # turn (we're past the opt-in gate above), catching TV shows the
+        # movie-centric sources miss and often supplying an IMDb id.
+        if tmdb_query:
+            try:
+                from shared.ai.tvmaze_lookup import (
+                    search_tvmaze,
+                    format_for_context as _tvmaze_fmt,
+                )
+                tvmaze_results, _ = search_tvmaze(tmdb_query)
+                if tvmaze_results:
+                    blocks.append(_tvmaze_fmt(tmdb_query, tvmaze_results))
+                    tmdb_answered = True
+            except Exception:
+                pass
         # Keyless web search: the BACKUP, and only when the Web toggle is
         # on.  Uses the model-formulated query so conversational messages
         # aren't searched verbatim.
@@ -800,7 +835,8 @@ class ChatController(QObject):
         system = {
             "role": "system",
             "content": (
-                f'I looked up "{searched_for}" for the user (TMDB / OMDb / web).  '
+                f'I looked up "{searched_for}" for the user '
+                "(TMDB / OMDb / TheTVDB / TVmaze / web).  "
                 "Live results are below - use them to answer; if they don't "
                 "cover it, say so rather than guessing.  You DO have these "
                 "results, so never claim you can't access an API.\n"
@@ -1271,12 +1307,16 @@ class ChatController(QObject):
             pass
 
     def identify_disc_async(self, disc_name: str) -> None:
-        """Auto-identify a freshly-loaded disc via TMDB and post the
-        result to the chat.  Called by the drive handler when the drive
-        reloads.  No-op without a TMDB key or disc name; deduped so the
-        same disc isn't re-identified on every refresh.  The network call
-        runs on a worker thread and the post lands on the GUI thread via
-        ``disc_identified`` — it never touches the user-turn busy flag or
+        """Auto-identify a freshly-loaded disc and post the result to the
+        chat.  Called by the drive handler when the drive reloads.
+
+        Queries up to four sources: TMDB and OMDb (each needs the user's
+        free key), TheTVDB (optional, paid key + PIN), and **TVmaze**,
+        which is free and keyless — so identification runs even when the
+        user has configured nothing at all.  Deduped so the same disc
+        isn't re-identified on every refresh.  The network calls run on a
+        worker thread and the post lands on the GUI thread via
+        ``disc_identified`` — never touching the user-turn busy flag or
         history.
         """
         name = str(disc_name or "").strip()
@@ -1288,17 +1328,23 @@ class ChatController(QObject):
             return
         tmdb_key = str(self._cfg.get("opt_tmdb_api_key", "") or "").strip()
         omdb_key = str(self._cfg.get("opt_omdb_api_key", "") or "").strip()
-        if not tmdb_key and not omdb_key:
-            self._log_disc("skip: no TMDB or OMDb key configured")
-            return
+        tvdb_key = str(self._cfg.get("opt_tvdb_api_key", "") or "").strip()
+        tvdb_pin = str(self._cfg.get("opt_tvdb_pin", "") or "").strip()
+        # TVmaze is keyless, so there's always at least one source — no
+        # "no key" early-out anymore.
         self._last_identified_disc = name
         providers = " + ".join(
-            p for p, k in (("TMDB", tmdb_key), ("OMDb", omdb_key)) if k
+            p for p, on in (
+                ("TMDB", tmdb_key),
+                ("OMDb", omdb_key),
+                ("TheTVDB", tvdb_key),
+                ("TVmaze", True),  # always
+            ) if on
         )
         self._log_disc(f"looking up {name!r} via {providers}...")
         threading.Thread(
             target=self._identify_disc_worker,
-            args=(name, tmdb_key, omdb_key),
+            args=(name, tmdb_key, omdb_key, tvdb_key, tvdb_pin),
             daemon=True,
             name="disc-identify",
         ).start()
@@ -1331,31 +1377,71 @@ class ChatController(QObject):
             s = s.replace(ch, " ")
         return " ".join(s.split()).strip()
 
+    @staticmethod
+    def _native_id_line(source: str, r: Any) -> str:
+        """The provider-native ID line for the identification card.
+        OMDb's native id is the IMDb id, handled separately below."""
+        if source == "TMDB":
+            return f"- TMDB ID: {r.media_type}/{r.tmdb_id}"
+        if source == "TheTVDB":
+            return f"- TheTVDB ID: {r.tvdb_id}"
+        if source == "TVmaze":
+            return f"- TVmaze ID: {r.tvmaze_id}"
+        return ""
+
     def _identify_disc_worker(
-        self, disc_name: str, tmdb_key: str, omdb_key: str = "",
+        self,
+        disc_name: str,
+        tmdb_key: str,
+        omdb_key: str = "",
+        tvdb_key: str = "",
+        tvdb_pin: str = "",
     ) -> None:
         query = self._clean_disc_label(disc_name) or disc_name
 
-        # Query whichever providers have a key.  Per-provider failures are
-        # swallowed so one bad/absent source never blocks the other.
-        tmdb_r = None
-        if tmdb_key:
+        # Query each available source.  Per-provider failures are
+        # swallowed so one bad/absent source never blocks the others.
+        # TVmaze is keyless and always runs; the others need their key.
+        def _top(import_call):
             try:
-                from shared.ai.tmdb_lookup import search_tmdb
-                res, _ = search_tmdb(query, tmdb_key)
-                tmdb_r = res[0] if res else None
+                res, _ = import_call()
+                return res[0] if res else None
             except Exception:
-                tmdb_r = None
-        omdb_r = None
-        if omdb_key:
-            try:
-                from shared.ai.omdb_lookup import search_omdb
-                res, _ = search_omdb(query, omdb_key)
-                omdb_r = res[0] if res else None
-            except Exception:
-                omdb_r = None
+                return None
 
-        if tmdb_r is None and omdb_r is None:
+        tmdb_r = omdb_r = tvdb_r = tvmaze_r = None
+        if tmdb_key:
+            def _tmdb():
+                from shared.ai.tmdb_lookup import search_tmdb
+                return search_tmdb(query, tmdb_key)
+            tmdb_r = _top(_tmdb)
+        if omdb_key:
+            def _omdb():
+                from shared.ai.omdb_lookup import search_omdb
+                return search_omdb(query, omdb_key)
+            omdb_r = _top(_omdb)
+        if tvdb_key:
+            def _tvdb():
+                from shared.ai.tvdb_lookup import search_tvdb
+                return search_tvdb(query, tvdb_key, tvdb_pin)
+            tvdb_r = _top(_tvdb)
+
+        def _tvmaze():
+            from shared.ai.tvmaze_lookup import search_tvmaze
+            return search_tvmaze(query)
+        tvmaze_r = _top(_tvmaze)
+
+        # Canonical priority: TMDB (richest, movies+TV) → TheTVDB
+        # (paid, curated TV) → TVmaze (free TV) → OMDb (IMDb only).
+        ordered = [
+            ("TMDB", tmdb_r),
+            ("TheTVDB", tvdb_r),
+            ("TVmaze", tvmaze_r),
+            ("OMDb", omdb_r),
+        ]
+        present = [(name, r) for name, r in ordered if r is not None]
+
+        if not present:
             # Miss/error -> Live Log only (chat_md="") so an unmatchable
             # disc doesn't spam the transcript on every reload.
             self.disc_identified.emit(
@@ -1365,39 +1451,49 @@ class ChatController(QObject):
             )
             return
 
-        if tmdb_r is not None:
-            # TMDB is canonical for the title; enrich with OMDb's IMDb
-            # id ONLY when the two services agree they found the same
-            # thing — both independently rank a fuzzy volume-label
-            # query, and on a generic label their #1 hits can be
-            # different movies entirely (wrong IMDb id on the card).
-            kind = "Movie" if tmdb_r.media_type == "movie" else "TV"
-            year = f" ({tmdb_r.year})" if tmdb_r.year else ""
-            lines = [
-                f'**Auto-identified the inserted disc** ("{disc_name}"):',
-                f"- Title: {tmdb_r.title}{year}",
-                f"- Type: {kind}",
-                f"- TMDB ID: {tmdb_r.media_type}/{tmdb_r.tmdb_id}",
-            ]
-            agreed = (
-                omdb_r is not None and omdb_r.imdb_id
-                and self._results_agree(tmdb_r, omdb_r)
+        canon_name, canon = present[0]
+        others = present[1:]
+        # Sources whose top hit independently agrees with the canonical
+        # one (same normalized title + year) — shown as a cross-check so
+        # the user can trust a multi-source match over a lone fuzzy hit.
+        agreeing = [n for n, r in others if self._results_agree(canon, r)]
+
+        # IMDb id: the canonical result's own if it carries one (TVmaze,
+        # TheTVDB, and OMDb do; TMDB does not), else borrow it from an
+        # AGREEING source — never from a disagreeing one, or the card
+        # would pair this title with a different film's IMDb id.
+        imdb_id = str(getattr(canon, "imdb_id", "") or "")
+        imdb_src = canon_name if imdb_id else ""
+        if not imdb_id:
+            for n, r in others:
+                rid = str(getattr(r, "imdb_id", "") or "")
+                if rid and self._results_agree(canon, r):
+                    imdb_id, imdb_src = rid, n
+                    break
+
+        kind = "Movie" if getattr(canon, "media_type", "tv") == "movie" else "TV"
+        year = f" ({canon.year})" if canon.year else ""
+        lines = [
+            f'**Auto-identified the inserted disc** ("{disc_name}"):',
+            f"- Title: {canon.title}{year}",
+            f"- Type: {kind}",
+        ]
+        native = self._native_id_line(canon_name, canon)
+        if native:
+            lines.append(native)
+        if imdb_id:
+            via = (
+                f" (via {imdb_src})"
+                if imdb_src and imdb_src != canon_name
+                else ""
             )
-            if agreed:
-                lines.append(f"- IMDb ID: {omdb_r.imdb_id} (via OMDb)")
-            chat_md = "\n".join(lines)
-            src = "TMDB + OMDb" if agreed else "TMDB"
-            log_line = f"Disc identified via {src}: {tmdb_r.title}{year}"
-        else:
-            # OMDb only (no TMDB key, or TMDB had no match).
-            kind = "Movie" if omdb_r.media_type == "movie" else "TV"
-            year = f" ({omdb_r.year})" if omdb_r.year else ""
-            chat_md = (
-                f'**Auto-identified the inserted disc** ("{disc_name}") via '
-                f"OMDb:\n- Title: {omdb_r.title}{year}\n- Type: {kind}\n"
-                f"- IMDb ID: {omdb_r.imdb_id}"
-            )
-            log_line = f"Disc identified via OMDb: {omdb_r.title}{year}"
+            lines.append(f"- IMDb ID: {imdb_id}{via}")
+        chat_md = "\n".join(lines)
+
+        srcs = canon_name + (
+            " + " + " + ".join(agreeing) if agreeing else ""
+        )
+        log_line = f"Disc identified via {srcs}: {canon.title}{year}"
         self.disc_identified.emit(chat_md, log_line)
 
     @Slot(str, str)

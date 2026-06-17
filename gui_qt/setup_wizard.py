@@ -161,6 +161,7 @@ def _summary_text_for(classified: list) -> str:
     Pure function — no Qt dependency.  Pinned by tests so the line
     shape matches the tkinter implementation exactly."""
     main_count = sum(1 for ct in classified if ct.label == "MAIN")
+    episode_count = sum(1 for ct in classified if ct.label == "EPISODE")
     extra_count = sum(1 for ct in classified if ct.label == "EXTRA")
     dup_count = sum(1 for ct in classified if ct.label == "DUPLICATE")
     unknown_count = sum(1 for ct in classified if ct.label == "UNKNOWN")
@@ -168,6 +169,8 @@ def _summary_text_for(classified: list) -> str:
     parts = [f"{len(classified)} titles"]
     if main_count:
         parts.append(f"{main_count} main")
+    if episode_count:
+        parts.append(f"{episode_count} episodes")
     if extra_count:
         parts.append(f"{extra_count} extras")
     if dup_count:
@@ -470,7 +473,7 @@ def _build_content_selection(classified, checked_ids) -> ContentSelection:
         tid = ct.title_id
         if tid not in checked_set:
             skip_ids.append(tid)
-        elif ct.label == "MAIN":
+        elif ct.label in ("MAIN", "EPISODE"):
             main_ids.append(tid)
         else:
             # EXTRA, UNKNOWN, DUPLICATE all land here when checked.

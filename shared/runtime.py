@@ -28,7 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-__version__ = "1.0.25"
+__version__ = "1.0.26"
 APP_VARIANT = "ai"
 APP_DISPLAY_NAME = "JellyRip AI"
 APP_EXE_BASENAME = "JellyRipAI"
@@ -216,6 +216,15 @@ DEFAULTS: dict[str, ConfigScalar] = {
     "opt_log_trim_lines": 200000,
     "opt_smart_rip_mode": False,
     "opt_smart_min_minutes": 20,
+    # Watch-before-rip: offer a TV-disc gate that opens the title
+    # picker with a Watch-in-VLC button — the full title rips to a
+    # disposable local-temp file, plays, and is deleted after.
+    # ``opt_preview_seconds`` is a config-only escape hatch: 0 (the
+    # default) = full title; a positive value rips an N-second sample
+    # instead, but partial-title rips are unreliable on protected
+    # discs, so the UI deliberately does not expose it.
+    "opt_offer_preview_before_rip": True,
+    "opt_preview_seconds": 0,
     "opt_naming_mode": "timestamp",
     "opt_extras_folder_mode": "single",
     "opt_bonus_folder_name": "featurettes",
@@ -275,6 +284,11 @@ DEFAULTS: dict[str, ConfigScalar] = {
     "opt_ai_web_search": False,
     "opt_tmdb_api_key": "",  # free key from themoviedb.org enables TMDB lookup
     "opt_omdb_api_key": "",  # free key from omdbapi.com enables OMDb lookup
+    # TVmaze (TV-only) is the free, KEYLESS backup — always on, no
+    # setting.  TheTVDB v4 is the optional paid TV source: a key (and a
+    # subscriber PIN for user-supported keys) turns it on.
+    "opt_tvdb_api_key": "",  # paid key from thetvdb.com (v4) enables TheTVDB
+    "opt_tvdb_pin": "",      # subscriber PIN for user-supported TheTVDB keys
     "opt_theme_overrides": {},
 }
 

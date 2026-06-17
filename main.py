@@ -162,6 +162,14 @@ def _set_windows_app_user_model_id() -> None:
 def _prepare_startup_environment() -> None:
     _bootstrap_tk_paths()
     get_config_dir()
+    # Sweep any leftover watch/preview clips from a prior run (a
+    # full-title watch the user never continued past, or a failed
+    # preview) so disposable clips never pile up in local temp.
+    try:
+        from controller.legacy_compat import purge_preview_temp
+        purge_preview_temp()
+    except Exception:
+        pass
 
 
 def _read_show_splash_pref() -> bool:

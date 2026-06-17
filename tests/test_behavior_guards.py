@@ -3833,6 +3833,11 @@ def test_run_tv_disc_tv_setup_skips_raw_season_prompt_on_later_discs(
         if prompt == "Another disc in this set?":
             another_disc_prompts["count"] += 1
             return another_disc_prompts["count"] == 1
+        if prompt.startswith("Is the next disc also Season"):
+            # New (v1.0.26): the continuation may offer a season change.
+            # Saying "yes, same season" must NOT fall back to the raw
+            # per-disc season prompt that the setup dialog replaced.
+            return True
         return False
 
     controller.gui.ask_yesno = ask_yesno
@@ -4060,6 +4065,123 @@ def test_run_tv_disc_tv_setup_preserves_season_zero_without_raw_reprompt(
     assert writes[0][2] == 1
     assert writes[0][3]["season"] == 0
     assert "Season 00" in writes[0][0]
+
+
+def test_watch_gate_rename_updates_show_title_and_folders(
+    tmp_path, monkeypatch
+):
+    """Watch-before-rip follow-up (2026-06-12): when the user takes
+    the watch gate and recognizes the disc, the show-title prompt
+    must rename the run — the output plan and season folder pick up
+    the new name, and the placeholder-named destination folders are
+    removed while still empty."""
+    controller, engine = _controller_with_engine()
+
+    temp_root = tmp_path / "temp"
+    tv_root = tmp_path / "tv"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    tv_root.mkdir(parents=True, exist_ok=True)
+
+    engine.cfg["opt_show_temp_manager"] = False
+    engine.cfg["opt_scan_disc_size"] = False
+    engine.cfg["opt_smart_rip_mode"] = False
+    engine.cfg["opt_offer_preview_before_rip"] = True
+    engine.cfg["temp_folder"] = str(temp_root)
+    engine.cfg["tv_folder"] = str(tv_root)
+
+    controller.gui.show_info = lambda *_args, **_kwargs: None
+    # YES to the watch gate only; NO to everything else (custom
+    # folders, retries, rip confirm).
+    controller.gui.ask_yesno = (
+        lambda prompt: "Watch any titles" in str(prompt)
+    )
+
+    rename_prompts = []
+
+    def fake_ask_input(label, prompt, default="", *args, **kwargs):
+        rename_prompts.append((str(label), str(default)))
+        if label == "Show Title":
+            return "Planet Earth"
+        return ""
+
+    controller.gui.ask_input = fake_ask_input
+    controller.gui.ask_tv_setup = lambda **_kwargs: TVSessionSetup(
+        title="auto temp test",  # placeholder typed before watching
+        year="2006",
+        season=1,
+        starting_disc=1,
+        episode_mapping="manual",
+        metadata_provider="TMDB",
+        metadata_id="",
+        multi_episode="merge",
+        specials="season0",
+        replace_existing=True,
+        keep_raw=True,
+    )
+
+    output_plan_calls = []
+
+    def fake_show_output_plan_step(
+        base_folder,
+        main_label,
+        extras_map,
+        *,
+        detail_lines=None,
+        header_text="",
+        subtitle_text="",
+        confirm_text="",
+        suggested_folder=None,
+    ):
+        output_plan_calls.append((base_folder, main_label))
+        return False  # stop before the rip
+
+    controller.gui.show_output_plan_step = fake_show_output_plan_step
+
+    disc_titles = [
+        {
+            "id": 0,
+            "name": "Episode 1",
+            "duration": "24:00",
+            "size": "1.0 GB",
+            "duration_seconds": 1440,
+            "size_bytes": 1_000_000_000,
+        },
+    ]
+    monkeypatch.setattr(engine, "cleanup_partial_files", lambda *_a, **_k: None)
+    monkeypatch.setattr(engine, "write_temp_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(engine, "update_temp_metadata", lambda *_a, **_k: None)
+    monkeypatch.setattr(controller, "_log_drive_compatibility", lambda: True)
+    monkeypatch.setattr(controller, "scan_with_retry", lambda: disc_titles)
+    monkeypatch.setattr(
+        controller,
+        "_open_manual_disc_picker",
+        lambda *_args, **_kwargs: ([0], 1_000_000_000),
+    )
+    monkeypatch.setattr(
+        engine,
+        "run_job",
+        lambda _job, **_kw: pytest.fail(
+            "rip should not start after cancelling review"
+        ),
+    )
+
+    controller.run_tv_disc()
+
+    show_title_prompts = [
+        d for label, d in rename_prompts if label == "Show Title"
+    ]
+    assert show_title_prompts, "the show-title prompt never appeared"
+    # The prompt pre-fills the placeholder so it's editable in place.
+    assert show_title_prompts[0] == "auto temp test"
+    assert output_plan_calls, "flow never reached the output plan"
+    base_folder, main_label = output_plan_calls[0]
+    assert "Planet Earth" in base_folder
+    assert main_label.startswith("Planet Earth - Season 01")
+    # The placeholder-named destination folder was cleaned up.
+    leftovers = [p.name for p in tv_root.iterdir()]
+    assert leftovers and all(
+        "Planet Earth" in name for name in leftovers
+    ), leftovers
 
 
 def test_run_tv_disc_uses_review_output_plan_before_generic_confirm(tmp_path, monkeypatch):
@@ -4367,7 +4489,7 @@ def test_select_and_move_tv_passes_replace_existing_to_move_files(
 ):
     controller, engine = _controller_with_engine()
 
-    src_episode = tmp_path / "raw_episode.mkv"
+    src_episode = tmp_path / "A1_t00.mkv"
     src_episode.write_text("new", encoding="utf-8")
 
     dest_folder = tmp_path / "TV" / "Chosen Show" / "Season 01"
@@ -4423,6 +4545,11 @@ def test_select_and_move_tv_passes_replace_existing_to_move_files(
 
     monkeypatch.setattr(engine, "move_files", fake_move_files)
 
+    # Number the title in the picker so the move is picker-driven
+    # (A1_t00.mkv -> title id 0 -> episode 1).  The organize picker only
+    # appears when nothing is numbered, which other tests cover.
+    controller._picker_episode_numbers = {0: 1}
+
     ok = controller._select_and_move(
         titles_list=[(str(src_episode), 1440.0, 1000.0)],
         is_tv=True,
@@ -4440,6 +4567,200 @@ def test_select_and_move_tv_passes_replace_existing_to_move_files(
     assert captured["replace_main_existing"] is True
     assert any("replace the existing episode file(s)" in prompt for prompt in prompts)
     assert any("Existing files will be replaced." in line for line in controller.gui.messages)
+
+
+def test_organize_resume_shows_picker_for_numbering(
+    tmp_path, monkeypatch
+):
+    """Organizing/resuming an already-ripped TV disc with no numbers yet
+    (no pre-rip picker, no saved session numbers) shows the SAME per-title
+    picker on the ripped files — not the old comma box.  The numbers/names
+    it returns drive the move, and a title left un-numbered is filed as an
+    extra, so a missing-episode gap or an extra is handled per title."""
+    controller, engine = _controller_with_engine()
+
+    f2 = tmp_path / "A1_t02.mkv"   # title id 2 -> episode
+    f5 = tmp_path / "A1_t05.mkv"   # title id 5 -> episode
+    fx = tmp_path / "B2_t09.mkv"   # title id 9 -> extra (left blank)
+    for f in (f2, f5, fx):
+        f.write_text("x", encoding="utf-8")
+
+    dest_folder = tmp_path / "TV" / "3rd Rock" / "Season 01"
+    extras_folder = dest_folder / "Extras"
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    extras_folder.mkdir(parents=True, exist_ok=True)
+
+    captured: dict[str, object] = {}
+
+    def fake_show_disc_tree(disc_titles, is_tv, preview=None, *_a, **_k):
+        captured["picker_is_tv"] = is_tv
+        captured["picker_ids"] = [t.get("id") for t in disc_titles]
+        return ["2", "5", "9"]  # OK with all rows checked
+
+    controller.gui.show_disc_tree = fake_show_disc_tree
+    # Picker result: ids 2 & 5 numbered (episodes 11, 12); id 9 left blank.
+    controller.gui.consume_episode_numbers = lambda: {2: 11, 5: 12}
+    controller.gui.consume_episode_names = lambda: {
+        2: "The Art of Dick", 5: "Frozen Dick",
+    }
+    controller.gui.ask_yesno = lambda *_a, **_k: True
+    monkeypatch.setattr(
+        controller, "_verify_container_integrity", lambda *_a, **_k: True
+    )
+
+    def fake_move_files(
+        titles_list, main_indices, episode_numbers, real_names,
+        extra_indices, *_a, **_k,
+    ):
+        captured["main_indices"] = list(main_indices)
+        captured["episode_numbers"] = list(episode_numbers)
+        captured["real_names"] = list(real_names)
+        captured["extra_indices"] = list(extra_indices)
+        return True, 0, []
+
+    monkeypatch.setattr(engine, "move_files", fake_move_files)
+
+    ok = controller._select_and_move(
+        titles_list=[
+            (str(f2), 1320.0, 600.0),
+            (str(f5), 1320.0, 600.0),
+            (str(fx), 360.0, 150.0),
+        ],
+        is_tv=True,
+        title="3rd Rock",
+        dest_folder=str(dest_folder),
+        extras_folder=str(extras_folder),
+        season=1,
+        year="0000",
+    )
+
+    assert ok is True
+    assert captured["picker_is_tv"] is True
+    assert captured["picker_ids"] == [2, 5, 9]
+    # ids 2,5 numbered -> episodes (indices 0,1); id 9 blank -> extra (idx 2)
+    assert captured["main_indices"] == [0, 1]
+    assert captured["episode_numbers"] == [11, 12]
+    assert captured["real_names"] == ["The Art of Dick", "Frozen Dick"]
+    assert captured["extra_indices"] == [2]
+
+
+def test_picker_driven_move_uses_picker_numbers_no_prompt(
+    tmp_path, monkeypatch
+):
+    """Picker-driven move (2026-06-13): the per-title Ep #/name fields
+    ARE the numbering UI, so a fresh TV rip builds its plan straight
+    from them and shows NO post-rip Episode Numbers / Names prompt.
+    Title 2 → ep 4, title 5 → ep 3 (scrambled vs disc order) flows
+    directly into move_files; ask_input is never called."""
+    controller, engine = _controller_with_engine()
+
+    f2 = tmp_path / "A1_t02.mkv"
+    f5 = tmp_path / "A1_t05.mkv"
+    f2.write_text("x", encoding="utf-8")
+    f5.write_text("x", encoding="utf-8")
+
+    dest_folder = tmp_path / "TV" / "3rd Rock" / "Season 01"
+    extras_folder = dest_folder / "Extras"
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    extras_folder.mkdir(parents=True, exist_ok=True)
+
+    controller._picker_episode_numbers = {2: 4, 5: 3}
+    controller._picker_episode_names = {2: "Pilot", 5: "The Other One"}
+
+    asked: list[str] = []
+    controller.gui.ask_input = (
+        lambda label, *a, **k: asked.append(label) or ""
+    )
+    controller.gui.ask_yesno = lambda *_a, **_k: True
+    monkeypatch.setattr(
+        controller, "_verify_container_integrity", lambda *_a, **_k: True
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_move_files(
+        titles_list, main_indices, episode_numbers, real_names,
+        extra_indices, *_a, **_k,
+    ):
+        captured["main_indices"] = list(main_indices)
+        captured["episode_numbers"] = list(episode_numbers)
+        captured["real_names"] = list(real_names)
+        captured["extra_indices"] = list(extra_indices)
+        return True, 0, []
+
+    monkeypatch.setattr(engine, "move_files", fake_move_files)
+
+    ok = controller._select_and_move(
+        titles_list=[(str(f2), 1320.0, 600.0), (str(f5), 1320.0, 600.0)],
+        is_tv=True,
+        title="3rd Rock",
+        dest_folder=str(dest_folder),
+        extras_folder=str(extras_folder),
+        season=1,
+        year="0000",
+        selected_title_ids=[2, 5],
+    )
+
+    assert ok is True
+    assert asked == []  # no post-rip prompts at all
+    # titles_list is title-id sorted (2 then 5) → numbers [4, 3].
+    assert captured["episode_numbers"] == [4, 3]
+    assert captured["real_names"] == ["Pilot", "The Other One"]
+    assert captured["main_indices"] == [0, 1]
+    assert captured["extra_indices"] == []
+
+
+def test_picker_driven_blank_number_is_extra(tmp_path, monkeypatch):
+    """A ripped title left un-numbered in the picker is filed as an
+    extra, not an episode ('blank = extra')."""
+    controller, engine = _controller_with_engine()
+
+    f0 = tmp_path / "A1_t00.mkv"  # episode (numbered)
+    f1 = tmp_path / "A1_t01.mkv"  # extra (no number)
+    f0.write_text("x", encoding="utf-8")
+    f1.write_text("x", encoding="utf-8")
+
+    dest_folder = tmp_path / "TV" / "Show" / "Season 01"
+    extras_folder = dest_folder / "Extras"
+    dest_folder.mkdir(parents=True, exist_ok=True)
+    extras_folder.mkdir(parents=True, exist_ok=True)
+
+    controller._picker_episode_numbers = {0: 1}  # only title 0 numbered
+
+    controller.gui.ask_input = lambda *a, **k: ""
+    controller.gui.ask_yesno = lambda *_a, **_k: True
+    monkeypatch.setattr(
+        controller, "_verify_container_integrity", lambda *_a, **_k: True
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_move_files(
+        titles_list, main_indices, episode_numbers, real_names,
+        extra_indices, *_a, **_k,
+    ):
+        captured["main_indices"] = list(main_indices)
+        captured["extra_indices"] = list(extra_indices)
+        captured["episode_numbers"] = list(episode_numbers)
+        return True, 0, []
+
+    monkeypatch.setattr(engine, "move_files", fake_move_files)
+
+    ok = controller._select_and_move(
+        titles_list=[(str(f0), 1320.0, 600.0), (str(f1), 600.0, 200.0)],
+        is_tv=True,
+        title="Show",
+        dest_folder=str(dest_folder),
+        extras_folder=str(extras_folder),
+        season=1,
+        year="0000",
+        selected_title_ids=[0, 1],
+    )
+
+    assert ok is True
+    assert captured["main_indices"] == [0]   # title 0 = episode
+    assert captured["extra_indices"] == [1]  # title 1 = extra
+    assert captured["episode_numbers"] == [1]
 
 
 def test_movie_run_custom_folder_overrides_continue_past_path_selection(tmp_path, monkeypatch):
@@ -4718,7 +5039,7 @@ def test_movie_run_manual_selection_preserves_main_movie_picker(tmp_path, monkey
     controller.gui.show_info = lambda *_args, **_kwargs: None
     disc_tree_args = {}
 
-    def show_disc_tree(_disc_titles, _is_tv, _preview):
+    def show_disc_tree(_disc_titles, _is_tv, _preview, **_kwargs):
         disc_tree_args["preview"] = _preview
         return ["0", "1"]
 

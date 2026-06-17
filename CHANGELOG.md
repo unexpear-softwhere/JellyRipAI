@@ -2,6 +2,64 @@
 
 <!-- markdownlint-disable MD013 -->
 
+## [1.0.26] - 2026-06-14
+
+Unstable pre-release — a workflow + UI pass on the TV ripping flow, plus
+more TV disc-identification providers.
+
+### Added
+
+- **Watch a title before you rip it.**  "Watch in VLC" in the disc
+  picker rips the selected title to a temporary file and plays it, so
+  you can confirm what a title is before committing to a full rip.
+- **Name and number episodes right in the disc picker.**  Editable
+  **Ep #** and **Episode name** columns, with each title's length and
+  size beside it.  A title left without a number is filed as an extra.
+- **Cut / Copy / Paste in the picker's editable cells** (right-click
+  menu; Ctrl+C / V / X also work).
+- **TVmaze and TheTVDB TV disc identification.**  The assistant can
+  identify TV discs via TVmaze (keyless) and TheTVDB (API key + PIN),
+  alongside the existing TMDB / OMDb lookups.
+- **Type with a single click, plus Select All / Select None.**  The Ep #
+  and Episode name cells open for editing on a single click and show a
+  faint hint so it's obvious you can type in them, and two buttons check
+  or uncheck every title at once.
+- **Organize & resume use the picker too.**  Numbering already-ripped
+  episodes (Organize Existing MKVs, or resuming a disc) now uses the same
+  per-title picker — handling a missing episode or an extra the same
+  friendly way as a fresh rip, instead of comma-separated lists.
+
+### Changed
+
+- **The post-rip "Episode Numbers" and "Episode Names" prompts are
+  gone.**  A TV rip builds its plan straight from the picker (blank
+  Ep # = extra), keeping the duplicate-number and existing-file checks
+  and a final move preview.
+- **TV picker and file lists sort by title number**, and each title
+  shows both its "Title N" label and MakeMKV's real output filename.
+- **TV discs are treated as episodes, not one "main feature."**  The scan
+  labels full-length titles as Episodes and pre-checks them all, instead
+  of picking a single "MAIN" and rejecting the equal-length episodes as
+  duplicates; the rip logs read in episode terms.
+- **Continue a box set across seasons.**  When there's another disc in
+  the set, the app asks whether it's the same season or a new one (and
+  which number), so Season 1 → Season 2 flows in one session.
+
+### Polish
+
+- **Tactile UI pass.**  Buttons darken on press and show a focus ring;
+  clickable controls take a pointing-hand cursor; inputs and list rows
+  gained hover/selected states.  Derived per-theme, so every built-in
+  and custom theme gets it.
+
+### Fixed
+
+- **AI diagnostics no longer runs away on an unreadable disc.**  When a
+  disc failed every title, failure events outran the diagnosis threads
+  and the "consecutive failures" cap couldn't keep up — logs filled with
+  "All backends failed (19/3)".  Diagnoses are now single-flight (one at
+  a time), so the cap trips cleanly and AI backs off.
+
 ## [1.0.25] - 2026-06-10
 
 Small fix release for the Settings dialog under light themes.
