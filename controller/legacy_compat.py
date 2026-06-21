@@ -958,12 +958,31 @@ class LegacyControllerMixin:
                 except OSError:
                     pass
 
+    def _watched_reuse_ids(self, selected_ids: Sequence[int]) -> set[int]:
+        """Which of ``selected_ids`` have a kept watched rip ready to
+        reuse — read WITHOUT moving or popping.  The caller drops these
+        from the rip job up front, then calls ``_reuse_watched_rips`` to
+        actually move the files in AFTER the rip's pre-rip purge runs
+        (moving them before the purge would delete them — the 2026-06-21
+        data-loss bug)."""
+        out: set[int] = set()
+        with self._watched_rip_lock():
+            registry = getattr(self, "_watched_rips", None) or {}
+            for tid in selected_ids:
+                src = registry.get(int(tid))
+                if src and os.path.isfile(src):
+                    out.add(int(tid))
+        return out
+
     def _reuse_watched_rips(
         self, selected_ids: Sequence[int], rip_path: str,
     ) -> set[int]:
         """Move watched full-title rips for still-selected titles into
         the session rip folder so they are not ripped a second time;
-        discard the rest.  Returns the reused title ids."""
+        discard the rest.  Returns the reused title ids.
+
+        MUST be called AFTER the rip job (which purges the rip target
+        dir) — otherwise the moved files are wiped by that purge."""
         # Never run two MakeMKV processes against the drive at once —
         # wait out an in-flight watch rip before the real rip starts.
         lock = getattr(self, "_preview_lock", None)
@@ -976,6 +995,10 @@ class LegacyControllerMixin:
                 lock.acquire()
             lock.release()
 
+        # rip_path may not exist yet if EVERY selected title was reused
+        # (the rip job that creates it was skipped) — make sure it's
+        # there before moving the watched rips in.
+        os.makedirs(rip_path, exist_ok=True)
         reused: set[int] = set()
         for tid in selected_ids:
             with self._watched_rip_lock():

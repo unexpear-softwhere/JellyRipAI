@@ -5600,14 +5600,16 @@ class RipperController(LegacyControllerMixin):
                 )
             )
             from engine.ripper_engine import Job
-            # Reuse full-title watch rips: a title watched in the
-            # picker is already ripped, so move it into the session
-            # folder instead of ripping it twice.  Watched titles the
-            # user UNchecked are discarded inside the helper (their
-            # rule: keep only while still selected).  This runs after
-            # the pre-rip snapshot so the moved files count as new
-            # rip output downstream.
-            reused_ids = self._reuse_watched_rips(selected_ids, rip_path)
+            # Reuse full-title watch rips: a title watched in the picker
+            # is already ripped, so it doesn't need a second rip.  Decide
+            # WHICH titles will be reused now (to drop them from the rip
+            # job), but MOVE their files into the session folder only
+            # AFTER the rip runs.  rip_selected_titles purges the target
+            # dir first (_purge_rip_target_files), so a reused file moved
+            # in beforehand would be deleted — then missing from the
+            # output + move, and its only copy wiped on cleanup.  (Data-
+            # loss bug fixed 2026-06-21.)
+            reused_ids = self._watched_reuse_ids(selected_ids)
             rip_ids = [
                 tid for tid in selected_ids if tid not in reused_ids
             ]
@@ -5627,6 +5629,11 @@ class RipperController(LegacyControllerMixin):
                 )
                 success = True
                 failed_titles = []
+            # The pre-rip purge has run; NOW move the watched rips into
+            # the session folder so they survive and count as new output
+            # (their picker Ep#/name then apply by title id, same as any
+            # ripped file).  Unchecked watched rips are discarded inside.
+            self._reuse_watched_rips(selected_ids, rip_path)
             partial_rip = False
             completed_title_ids = list(selected_ids)
             self._warn_degraded_rips()

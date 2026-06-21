@@ -406,3 +406,70 @@ def test_reuse_watched_rips_moves_selected_and_discards_unchecked(
         "the unchecked watched rip must be deleted"
     )
     assert getattr(controller, "_watched_rips", {}) == {}
+
+
+def test_watched_reuse_survives_pre_rip_purge(tmp_path):
+    """Regression (2026-06-21 data loss): a watched rip the user KEPT must
+    survive the rip's pre-rip purge of the session folder.
+
+    The old flow moved reused files into the session folder BEFORE the
+    rip, and ``rip_selected_titles`` purges that folder first
+    (``_purge_rip_target_files`` deletes every ``*.mkv``) — so the kept
+    title was wiped, dropped from the output and the move, and its only
+    copy deleted on cleanup.  The fix peeks which titles are reusable up
+    front (``_watched_reuse_ids``, no move) and moves them in only AFTER
+    the rip.  This pins both halves: the peek must not move, and a move
+    after the purge must land the file alongside the freshly ripped one.
+    """
+    import os as _os
+    import glob as _glob
+    import threading as _threading
+
+    from controller.controller import RipperController
+
+    class _GUI:
+        def __init__(self):
+            self.logs = []
+
+        def append_log(self, message):
+            self.logs.append(str(message))
+
+        def set_status(self, message):
+            pass
+
+    class _Engine:
+        def __init__(self):
+            self.cfg = {"opt_debug_state": False}
+            self.abort_event = _threading.Event()
+
+    watched = tmp_path / "watch" / "t00" / "show_t00.mkv"
+    watched.parent.mkdir(parents=True, exist_ok=True)
+    watched.write_bytes(b"x" * 2048)
+
+    rip_path = tmp_path / "rip"
+    rip_path.mkdir()
+
+    controller = RipperController(_Engine(), _GUI())
+    controller._watched_rips = {0: str(watched)}
+
+    # 1) Pre-rip PEEK reports title 0 as reusable WITHOUT moving it.
+    assert controller._watched_reuse_ids([0]) == {0}
+    assert watched.exists(), "peek must not move the watched rip"
+    assert not list(rip_path.glob("*.mkv")), "peek must not stage anything"
+
+    # 2) The rip purges the session folder (mimics
+    #    engine._purge_rip_target_files), then writes the OTHER titles.
+    for f in _glob.glob(str(rip_path / "**" / "*.mkv"), recursive=True):
+        _os.remove(f)
+    (rip_path / "show_t01.mkv").write_bytes(b"y" * 2048)  # a ripped title
+
+    # 3) The reuse-move runs AFTER the purge; the kept rip survives
+    #    alongside the freshly ripped title.
+    reused = controller._reuse_watched_rips([0], str(rip_path))
+    assert reused == {0}
+    outputs = sorted(p.name for p in rip_path.glob("*.mkv"))
+    assert outputs == ["show_t00.mkv", "show_t01.mkv"], (
+        "the kept watched rip (t00) must survive the purge and land next "
+        f"to the ripped title (t01); got {outputs}"
+    )
+    assert not watched.exists(), "it should have moved out of preview temp"
