@@ -687,8 +687,11 @@ def test_prep_mvp_runs_real_transcode_flow(qtbot, monkeypatch, tmp_path):
 
     # Drive the dialogs: pick the folder, choose tier 2 (balanced), confirm.
     monkeypatch.setattr(window, "ask_directory", lambda *a, **k: str(src))
-    monkeypatch.setattr(window, "ask_input", lambda *a, **k: "2")
-    monkeypatch.setattr(window, "ask_yesno", lambda *a, **k: True)
+    monkeypatch.setattr(
+        window, "ask_transcode_options",
+        lambda **k: {"quality": "balanced", "codec": "h265",
+                     "hw_accel": "cpu", "audio": "copy"},
+    )
     infos: list = []
     monkeypatch.setattr(window, "show_info", lambda title, msg: infos.append((title, msg)))
     monkeypatch.setattr(window, "show_error", lambda *a, **k: None)
@@ -704,6 +707,9 @@ def test_prep_mvp_runs_real_transcode_flow(qtbot, monkeypatch, tmp_path):
     monkeypatch.setattr(_config, "resolve_ffmpeg", lambda *a, **k: _Tool("ffmpeg"))
     monkeypatch.setattr(_config, "resolve_ffprobe", lambda *a, **k: _Tool("ffprobe"))
     monkeypatch.setattr(_config, "resolve_handbrake", lambda *a, **k: _Tool("", "n/a"))
+
+    import transcode.encoder_probe as _ep
+    monkeypatch.setattr(_ep, "available_encoders", lambda exe: frozenset())
 
     monkeypatch.setattr(
         _recs, "probe_media_for_recommendation",
@@ -725,6 +731,10 @@ def test_prep_mvp_runs_real_transcode_flow(qtbot, monkeypatch, tmp_path):
 
     def _fake_build_rec_job(*, plan, analysis, recommendation, ffmpeg_source_mode, ffmpeg_exe):
         chosen["rec_id"] = recommendation["id"]
+        pdata = recommendation.get("profile_data") or {}
+        chosen["codec"] = (pdata.get("video") or {}).get("codec")
+        chosen["hw_accel"] = (pdata.get("video") or {}).get("hw_accel")
+        chosen["audio"] = (pdata.get("audio") or {}).get("mode")
         return QueueBuildResult(jobs=[_Job(plan["input_path"])], queue_detail="x")
 
     monkeypatch.setattr(_qb, "build_recommendation_job", _fake_build_rec_job)
@@ -760,7 +770,10 @@ def test_prep_mvp_runs_real_transcode_flow(qtbot, monkeypatch, tmp_path):
     # Run the worker body directly (synchronously).
     launcher._run_prep_mvp()
 
-    assert chosen.get("rec_id") == "balanced", "tier '2' must map to the balanced profile"
+    assert chosen.get("rec_id") == "balanced", "dialog quality must pick that profile"
+    assert chosen.get("codec") == "h265", "chosen codec must reach the profile"
+    assert chosen.get("hw_accel") == "cpu", "chosen encoder must reach the profile"
+    assert chosen.get("audio") == "copy", "chosen audio mode must reach the profile"
     assert len(captured.get("jobs", [])) == 1, "one job per scanned MKV"
     assert fake_queue.ran_with is not None, "the queue must actually be run"
     assert infos and infos[0][0] == "Transcode Complete"

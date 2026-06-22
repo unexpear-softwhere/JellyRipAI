@@ -286,38 +286,38 @@ class WorkflowLauncher(QObject):
             )
             return
 
-        # 3) Quality preset.
-        tiers = {
-            "1": ("smaller_file", "Save Space"),
-            "2": ("balanced", "Best Overall"),
-            "3": ("higher_quality", "Keep More Quality"),
-        }
-        choice = win.ask_input(
-            "Transcode Quality",
-            "Re-encode to H.265.  Choose a quality preset:\n\n"
-            "  1 = Save Space (smallest file, most quality risk)\n"
-            "  2 = Best Overall (recommended)\n"
-            "  3 = Keep More Quality (safest, least shrink)",
-            "2",
-        )
-        if choice is None:
-            win.append_log("Prep cancelled.")
-            return
-        tier_id, tier_label = tiers.get(str(choice).strip(), tiers["2"])
+        # 3) Detect the GPU encoders this FFmpeg build actually exposes,
+        #    then collect every encode option in one dialog.
+        from transcode.encoder_probe import available_encoders
+        encoders = available_encoders(ffmpeg.path)
+        gpu_options: list = []
+        if {"hevc_nvenc", "h264_nvenc"} & encoders:
+            gpu_options.append(("nvenc", "NVIDIA GPU (NVENC) — much faster"))
+        if {"hevc_qsv", "h264_qsv"} & encoders:
+            gpu_options.append(("qsv", "Intel GPU (Quick Sync) — much faster"))
+        if {"hevc_amf", "h264_amf"} & encoders:
+            gpu_options.append(("amf", "AMD GPU (AMF) — much faster"))
 
-        # 4) Output location + confirm.
         output_root = suggest_transcode_output_root(folder, "ffmpeg")
         source_mode = normalize_ffmpeg_source_mode(
             cfg.get("opt_ffmpeg_source_mode", "safe_copy")
         )
-        if not win.ask_yesno(
-            f"Transcode {len(mkvs)} MKV(s) to H.265 — {tier_label}?\n\n"
-            f"Output folder:\n{output_root}\n\n"
-            "Your original files are kept untouched.  Re-encoding is "
-            "slow — this can take a long time.  Proceed?"
-        ):
+        opts = win.ask_transcode_options(
+            file_count=len(mkvs),
+            output_root=output_root,
+            gpu_options=gpu_options,
+        )
+        if not opts:
             win.append_log("Prep cancelled.")
             return
+        tier_id = str(opts.get("quality") or "balanced")
+        codec = str(opts.get("codec") or "h265")
+        hw_accel = str(opts.get("hw_accel") or "cpu")
+        audio_mode = str(opts.get("audio") or "copy")
+        win.append_log(
+            f"Transcode options: quality={tier_id} codec={codec} "
+            f"encoder={hw_accel} audio={audio_mode}"
+        )
 
         # 5) Probe each file + build a per-file recommendation job.
         plans = build_transcode_plan(folder, mkvs, output_root)
@@ -341,6 +341,14 @@ class WorkflowLauncher(QObject):
                 )
                 if rec is None:
                     raise RuntimeError("no recommendation produced")
+                # Apply the user's encode choices onto this file's
+                # recommended profile before the job is built.
+                profile_data = rec.get("profile_data") or {}
+                video_section = profile_data.setdefault("video", {})
+                video_section["codec"] = codec
+                video_section["hw_accel"] = hw_accel
+                profile_data.setdefault("audio", {})["mode"] = audio_mode
+                rec["profile_data"] = profile_data
                 result = build_recommendation_job(
                     plan=plan,
                     analysis=analysis,
@@ -385,8 +393,7 @@ class WorkflowLauncher(QObject):
 
         # 7) Run the queue with live progress.
         win.append_log(
-            f"Transcoding {len(jobs)} file(s) to H.265 ({tier_label}) → "
-            f"{output_root}"
+            f"Transcoding {len(jobs)} file(s) → {output_root}"
         )
 
         def _feedback(message: object) -> None:

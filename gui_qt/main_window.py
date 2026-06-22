@@ -963,6 +963,29 @@ class MainWindow(QMainWindow):
             )
         return run_on_main(self._invoker, _call)
 
+    def ask_transcode_options(
+        self,
+        *,
+        file_count: int,
+        output_root: str,
+        gpu_options: "Sequence[tuple[str, str]]",
+    ) -> "dict | None":
+        """FFmpeg transcode options chooser — quality / codec / encoder /
+        audio.  Returns the chosen values as a dict, or ``None`` on
+        cancel.  Thread-safe."""
+        from gui_qt.dialogs.transcode_options import (
+            ask_transcode_options as _ask_transcode_options,
+        )
+
+        def _call() -> "dict | None":
+            return _ask_transcode_options(
+                self,
+                file_count=file_count,
+                output_root=output_root,
+                gpu_options=gpu_options,
+            )
+        return run_on_main(self._invoker, _call)
+
     def ask_tv_setup(
         self,
         default_title: str = "",
