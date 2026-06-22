@@ -13,10 +13,9 @@ worker thread, mirroring tkinter's ``start_task`` pattern at
 * ``modeGoMovie``    → ``controller.run_movie_disc``
 * ``modeInfoDump``   → ``controller.run_dump_all``
 * ``modeAltOrganize`` → ``controller.run_organize``
-* ``modeWarnPrep``   → not yet wired — the tkinter "Prep MKVs"
-  workflow uses an inline transcode-queue helper, not a top-level
-  ``run_*`` controller method.  Wiring it requires porting
-  ``_run_transcode_queue`` first; deferred to 3c-iii.
+* ``modeWarnPrep``   → ``_run_prep_mvp`` — Prep MKVs runs a full
+  FFmpeg H.265 transcode (folder scan → per-file recommendation →
+  queue → live progress → summary), not a ``run_*`` controller method.
 * ``stopSession``    → sets the engine's abort_event
 
 **Worker lifecycle (mirrors tkinter):**
@@ -218,63 +217,217 @@ class WorkflowLauncher(QObject):
     # ------------------------------------------------------------------
 
     def _run_prep_mvp(self) -> None:
-        """Minimum-viable Prep workflow.
+        """Prep MKVs → FFmpeg H.265 transcode (end-to-end).
 
-        Runs on a worker thread (via ``start_task``).  Calls
-        thread-safe shell methods to:
-
-        1. Open a folder picker (``ask_directory``).
-        2. Walk for ``.mkv`` files via ``find_mkv_files``.
-        3. Show a summary via ``show_info``.
-        4. Log the count + an explicit pointer to the brief for the
-           full transcode-queue UI port.
-
-        The folder-scanner / queue-builder / progress-display
-        subwindows are deferred to a follow-up — see
-        ``docs/handoffs/phase-3c-iii-prep-workflow.md``.
+        Runs on a worker thread (via ``start_task``).  Picks a folder,
+        scans for MKVs, lets the user choose a quality preset, probes
+        each file for a per-file H.265 recommendation, then builds and
+        runs the transcode queue with live progress + a result summary.
+        Originals are never modified (safe-copy source mode); output
+        lands in a sibling ``"<folder> - FFmpeg Output"`` tree.
         """
-        folder = self._window.ask_directory(
-            "Prep MKVs",
-            "Choose a folder containing MKVs to prep",
+        import os
+        from config import resolve_ffmpeg, resolve_ffprobe, resolve_handbrake
+        from transcode.engine import normalize_ffmpeg_source_mode
+        from transcode.planner import (
+            build_transcode_plan,
+            suggest_transcode_output_root,
+        )
+        from transcode.queue_builder import (
+            build_recommendation_job,
+            build_transcode_queue,
+            required_output_directories,
+        )
+        from transcode.recommendations import (
+            build_ffmpeg_recommendations,
+            probe_media_for_recommendation,
+        )
+
+        win = self._window
+        cfg = getattr(self._engine, "cfg", {}) or {}
+        abort = getattr(self._engine, "abort_event", None)
+
+        # 1) Folder + scan.
+        folder = win.ask_directory(
+            "Prep MKVs", "Choose a folder of MKVs to transcode",
         )
         if not folder:
-            self._window.append_log("Prep cancelled — no folder selected.")
+            win.append_log("Prep cancelled — no folder selected.")
             return
-
-        self._window.append_log(f"Scanning {folder} for MKVs...")
+        win.append_log(f"Scanning {folder} for MKVs...")
         try:
             mkvs = find_mkv_files(folder)
         except Exception as e:  # noqa: BLE001
-            self._window.show_error(
-                "Prep MKVs",
-                f"Could not scan {folder}:\n\n{e}",
+            win.show_error("Prep MKVs", f"Could not scan {folder}:\n\n{e}")
+            return
+        if not mkvs:
+            win.show_info("Prep MKVs", f"No .mkv files found in:\n{folder}")
+            win.append_log("Prep: no MKVs found.")
+            return
+        win.append_log(f"Found {len(mkvs)} MKV(s).")
+
+        # 2) Resolve tools.  FFmpeg + ffprobe ship bundled, so this
+        #    normally just works with no configuration.
+        allow = bool(cfg.get("opt_allow_path_tool_resolution", False))
+        ffmpeg = resolve_ffmpeg(cfg.get("ffmpeg_path"), allow_path_lookup=allow)
+        ffprobe = resolve_ffprobe(cfg.get("ffprobe_path"), allow_path_lookup=allow)
+        if not ffmpeg.path:
+            win.show_error(
+                "FFmpeg Not Found",
+                (ffmpeg.error or "FFmpeg is required to transcode.")
+                + "\n\nSet its path in Settings → Paths.",
+            )
+            return
+        if not ffprobe.path:
+            win.show_error(
+                "ffprobe Not Found",
+                (ffprobe.error or "ffprobe is required to analyze the files.")
+                + "\n\nSet its path in Settings → Paths.",
             )
             return
 
-        count = len(mkvs)
-        if count == 0:
-            self._window.show_info(
-                "Prep MKVs",
-                f"No .mkv files found in:\n{folder}",
-            )
-            self._window.append_log("Prep: no MKVs found.")
-            return
-
-        # Log every file found so the user gets verbose feedback in
-        # the log pane (parallels what the tkinter scanner does).
-        for path in mkvs:
-            self._window.append_log(f"  • {path}")
-
-        self._window.show_info(
-            "Prep MKVs",
-            f"Found {count} MKV file(s) in:\n{folder}\n\n"
-            f"The transcode queue UI is pending — see\n"
-            f"docs/handoffs/phase-3c-iii-prep-workflow.md "
-            f"for the full port plan.",
+        # 3) Quality preset.
+        tiers = {
+            "1": ("smaller_file", "Save Space"),
+            "2": ("balanced", "Best Overall"),
+            "3": ("higher_quality", "Keep More Quality"),
+        }
+        choice = win.ask_input(
+            "Transcode Quality",
+            "Re-encode to H.265.  Choose a quality preset:\n\n"
+            "  1 = Save Space (smallest file, most quality risk)\n"
+            "  2 = Best Overall (recommended)\n"
+            "  3 = Keep More Quality (safest, least shrink)",
+            "2",
         )
-        self._window.append_log(
-            f"Prep: scanned {count} MKVs.  Transcode queue UI pending "
-            "(see docs/handoffs/phase-3c-iii-prep-workflow.md)."
+        if choice is None:
+            win.append_log("Prep cancelled.")
+            return
+        tier_id, tier_label = tiers.get(str(choice).strip(), tiers["2"])
+
+        # 4) Output location + confirm.
+        output_root = suggest_transcode_output_root(folder, "ffmpeg")
+        source_mode = normalize_ffmpeg_source_mode(
+            cfg.get("opt_ffmpeg_source_mode", "safe_copy")
+        )
+        if not win.ask_yesno(
+            f"Transcode {len(mkvs)} MKV(s) to H.265 — {tier_label}?\n\n"
+            f"Output folder:\n{output_root}\n\n"
+            "Your original files are kept untouched.  Re-encoding is "
+            "slow — this can take a long time.  Proceed?"
+        ):
+            win.append_log("Prep cancelled.")
+            return
+
+        # 5) Probe each file + build a per-file recommendation job.
+        plans = build_transcode_plan(folder, mkvs, output_root)
+        jobs = []
+        for index, plan in enumerate(plans, start=1):
+            if abort is not None and abort.is_set():
+                win.append_log("Prep aborted.")
+                return
+            name = os.path.basename(plan["input_path"])
+            win.set_status(f"Analyzing {index}/{len(plans)}: {name}")
+            win.append_log(f"Analyzing {index}/{len(plans)}: {name}")
+            try:
+                analysis = probe_media_for_recommendation(
+                    plan["input_path"], ffprobe.path,
+                )
+                recs = build_ffmpeg_recommendations(analysis)
+                options = recs.get("recommendations") or []
+                rec = next(
+                    (r for r in options if r.get("id") == tier_id),
+                    options[0] if options else None,
+                )
+                if rec is None:
+                    raise RuntimeError("no recommendation produced")
+                result = build_recommendation_job(
+                    plan=plan,
+                    analysis=analysis,
+                    recommendation=rec,
+                    ffmpeg_source_mode=source_mode,
+                    ffmpeg_exe=ffmpeg.path,
+                )
+                jobs.extend(result.jobs)
+            except Exception as e:  # noqa: BLE001 — skip the bad file, keep going
+                win.append_log(f"  Skipped {name}: {e}")
+        if not jobs:
+            win.show_error(
+                "Prep MKVs",
+                "None of the files could be analyzed — nothing to transcode.",
+            )
+            return
+
+        # 6) Create output dirs + assemble the queue.
+        for directory in required_output_directories(jobs, output_root):
+            try:
+                os.makedirs(directory, exist_ok=True)
+            except Exception as e:  # noqa: BLE001
+                win.append_log(f"  Could not create {directory}: {e}")
+        handbrake = resolve_handbrake(
+            cfg.get("handbrake_path"), allow_path_lookup=allow,
+        )
+        log_dir = os.path.join(output_root, "_transcode_logs")
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+        except Exception:  # noqa: BLE001
+            log_dir = output_root
+        queue = build_transcode_queue(
+            jobs=jobs,
+            log_dir=log_dir,
+            ffmpeg_exe=ffmpeg.path,
+            ffprobe_exe=ffprobe.path,
+            handbrake_exe=handbrake.path or "HandBrakeCLI",
+            ffmpeg_source_mode=source_mode,
+            temp_root=None,
+            abort_event=abort,
+        )
+
+        # 7) Run the queue with live progress.
+        win.append_log(
+            f"Transcoding {len(jobs)} file(s) to H.265 ({tier_label}) → "
+            f"{output_root}"
+        )
+
+        def _feedback(message: object) -> None:
+            win.append_log(str(message))
+
+        def _progress(payload: dict) -> None:
+            try:
+                overall = payload.get("overall_percent")
+                if isinstance(overall, (int, float)):
+                    win.set_progress(float(overall))
+                job_index = payload.get("job_index")
+                job_total = payload.get("job_total")
+                job_pct = payload.get("job_percent") or 0.0
+                if job_index and job_total:
+                    win.set_status(
+                        f"Transcoding {job_index}/{job_total} "
+                        f"({float(job_pct):.0f}%)"
+                    )
+            except Exception:  # noqa: BLE001 — progress must never crash the run
+                pass
+
+        queue.run_all(feedback_cb=_feedback, progress_cb=_progress)
+
+        # 8) Summary.
+        win.set_progress(100.0)
+        done = len(queue.completed)
+        failed = len(queue.failed)
+        degraded = len(queue.degraded)
+        aborted = len(queue.aborted)
+        lines = ["Transcode finished.", "", f"Succeeded: {done}"]
+        if degraded:
+            lines.append(f"Needed a fallback retry: {degraded}")
+        if failed:
+            lines.append(f"Failed: {failed}")
+        if aborted:
+            lines.append(f"Aborted: {aborted}")
+        lines += ["", f"Output: {output_root}"]
+        win.show_info("Transcode Complete", "\n".join(lines))
+        win.append_log(
+            f"Transcode complete — succeeded={done} failed={failed} "
+            f"degraded={degraded} aborted={aborted}."
         )
 
     def _handle_stop_session(self) -> None:

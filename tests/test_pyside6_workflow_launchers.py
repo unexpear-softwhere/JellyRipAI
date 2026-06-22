@@ -567,11 +567,10 @@ def test_validate_tools_gate_fires_for_all_disc_workflows(
 
 
 def test_validate_tools_skipped_for_prep_mvp(qtbot, monkeypatch):
-    """``modeWarnPrep`` (Prep MKVs MVP) walks folders only — it
-    doesn't touch makemkvcon or ffprobe.  Gating it on
-    ``validate_tools`` would refuse a perfectly valid folder-only
-    operation just because tool paths happened to be misconfigured.
-    Keep the door open."""
+    """``modeWarnPrep`` (Prep MKVs) resolves its own ffmpeg/ffprobe and
+    must NOT gate on the MakeMKV-oriented ``validate_tools`` pre-flight —
+    otherwise a misconfigured makemkvcon path would block a transcode
+    that never touches MakeMKV."""
     window = MainWindow()
     qtbot.addWidget(window)
     ctrl = _StubController()
@@ -657,3 +656,112 @@ def test_validate_tools_missing_method_falls_through(qtbot):
     assert _wait_until_idle(launcher)
 
     assert ctrl.calls == ["tv"]
+
+
+# ---------------------------------------------------------------------------
+# Prep MKVs → real transcode flow (no longer a scan-only stub)
+# ---------------------------------------------------------------------------
+
+
+def test_prep_mvp_runs_real_transcode_flow(qtbot, monkeypatch, tmp_path):
+    """The Prep MKVs button now runs an actual transcode pipeline:
+    scan -> probe each file -> build a per-file H.265 recommendation
+    job -> run the queue -> summary.  Mock the heavy engine pieces
+    (tool resolution, ffprobe, the queue) and assert the launcher
+    wires them together and honours the chosen quality tier."""
+    import os as _os
+
+    import config as _config
+    import transcode.queue_builder as _qb
+    import transcode.recommendations as _recs
+    from transcode.queue_builder import QueueBuildResult
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    launcher = WorkflowLauncher(window, _StubController(), _StubEngine())
+
+    # A real folder with one .mkv so find_mkv_files (unmocked) finds it.
+    src = tmp_path / "clips"
+    src.mkdir()
+    (src / "movie.mkv").write_bytes(b"x")
+
+    # Drive the dialogs: pick the folder, choose tier 2 (balanced), confirm.
+    monkeypatch.setattr(window, "ask_directory", lambda *a, **k: str(src))
+    monkeypatch.setattr(window, "ask_input", lambda *a, **k: "2")
+    monkeypatch.setattr(window, "ask_yesno", lambda *a, **k: True)
+    infos: list = []
+    monkeypatch.setattr(window, "show_info", lambda title, msg: infos.append((title, msg)))
+    monkeypatch.setattr(window, "show_error", lambda *a, **k: None)
+    monkeypatch.setattr(window, "append_log", lambda *a, **k: None)
+    monkeypatch.setattr(window, "set_status", lambda *a, **k: None)
+    monkeypatch.setattr(window, "set_progress", lambda *a, **k: None)
+
+    class _Tool:
+        def __init__(self, path, error=""):
+            self.path = path
+            self.error = error
+
+    monkeypatch.setattr(_config, "resolve_ffmpeg", lambda *a, **k: _Tool("ffmpeg"))
+    monkeypatch.setattr(_config, "resolve_ffprobe", lambda *a, **k: _Tool("ffprobe"))
+    monkeypatch.setattr(_config, "resolve_handbrake", lambda *a, **k: _Tool("", "n/a"))
+
+    monkeypatch.setattr(
+        _recs, "probe_media_for_recommendation",
+        lambda path, exe: {"path": path, "name": _os.path.basename(path)},
+    )
+    monkeypatch.setattr(
+        _recs, "build_ffmpeg_recommendations",
+        lambda analysis: {"recommendations": [
+            {"id": "smaller_file"}, {"id": "balanced"}, {"id": "higher_quality"},
+        ]},
+    )
+
+    chosen: dict = {}
+
+    class _Job:
+        def __init__(self, path):
+            self.input_path = path
+            self.output_path = path + ".out.mkv"
+
+    def _fake_build_rec_job(*, plan, analysis, recommendation, ffmpeg_source_mode, ffmpeg_exe):
+        chosen["rec_id"] = recommendation["id"]
+        return QueueBuildResult(jobs=[_Job(plan["input_path"])], queue_detail="x")
+
+    monkeypatch.setattr(_qb, "build_recommendation_job", _fake_build_rec_job)
+    monkeypatch.setattr(_qb, "required_output_directories", lambda jobs, root: [])
+
+    class _FakeQueue:
+        def __init__(self):
+            self.completed: list = []
+            self.failed: list = []
+            self.degraded: list = []
+            self.aborted: list = []
+            self.ran_with = None
+
+        def run_all(self, feedback_cb=None, progress_cb=None):
+            self.ran_with = (feedback_cb, progress_cb)
+            self.completed.append(("job", "log"))
+            if progress_cb:
+                progress_cb({
+                    "overall_percent": 100.0, "job_index": 1,
+                    "job_total": 1, "job_percent": 100.0,
+                })
+            return []
+
+    fake_queue = _FakeQueue()
+    captured: dict = {}
+
+    def _fake_build_queue(**kwargs):
+        captured["jobs"] = list(kwargs.get("jobs") or [])
+        return fake_queue
+
+    monkeypatch.setattr(_qb, "build_transcode_queue", _fake_build_queue)
+
+    # Run the worker body directly (synchronously).
+    launcher._run_prep_mvp()
+
+    assert chosen.get("rec_id") == "balanced", "tier '2' must map to the balanced profile"
+    assert len(captured.get("jobs", [])) == 1, "one job per scanned MKV"
+    assert fake_queue.ran_with is not None, "the queue must actually be run"
+    assert infos and infos[0][0] == "Transcode Complete"
+    assert "Succeeded: 1" in infos[0][1]
