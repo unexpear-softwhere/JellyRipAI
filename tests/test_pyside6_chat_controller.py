@@ -65,6 +65,39 @@ def test_controller_constructor_wires_sidebar_signals(sidebar, cfg):
     assert controller.busy is False
 
 
+def test_base_prompt_injects_feature_knowledge(sidebar, cfg):
+    """Every chat turn carries a base system prompt teaching the
+    assistant the app's features — so it can actually explain the
+    transcoding options when asked.  Pinned so the knowledge can't be
+    silently dropped."""
+    controller = ChatController(sidebar=sidebar, cfg=cfg)  # no facts_provider
+    out = controller._with_disc_facts(
+        [{"role": "user", "content": "explain transcoding"}]
+    )
+    assert out[0]["role"] == "system"
+    base = out[0]["content"].lower()
+    for needle in (
+        "transcod", "h.265", "h.264", "save space",
+        "crf", "gpu", "handbrake", "aac",
+    ):
+        assert needle in base, f"base prompt is missing {needle!r}"
+    # The user's message is preserved after the system prompt(s).
+    assert out[-1] == {"role": "user", "content": "explain transcoding"}
+
+
+def test_base_prompt_precedes_session_facts(sidebar, cfg):
+    """With live disc facts, the base prompt comes first and the
+    SESSION_FACTS message second — both before the user's messages."""
+    controller = ChatController(
+        sidebar=sidebar, cfg=cfg,
+        facts_provider=lambda: {"disc": {"disc_title": "Peter Rabbit"}},
+    )
+    out = controller._with_disc_facts([{"role": "user", "content": "hi"}])
+    assert out[0]["role"] == "system" and "transcod" in out[0]["content"].lower()
+    assert out[1]["role"] == "system" and "SESSION_FACTS" in out[1]["content"]
+    assert out[-1]["content"] == "hi"
+
+
 # ─── Empty-prompt guard ────────────────────────────────────────────
 
 

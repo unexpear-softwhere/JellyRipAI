@@ -52,6 +52,55 @@ _DEFAULT_TIMEOUT_LOCAL = 90.0
 _DEFAULT_MAX_TOKENS = 700
 
 
+# Base persona + feature knowledge prepended to every chat turn so the
+# assistant can explain what the app and its options actually do (it
+# otherwise only sees live SESSION_FACTS, not how the features work).
+_CHAT_SYSTEM_PROMPT = (
+    f"You are the {APP_DISPLAY_NAME} assistant, a side-panel helper inside "
+    f"the {APP_DISPLAY_NAME} desktop app — a Windows Blu-ray/DVD ripper. "
+    "Answer questions about the app, the disc the user is working on, and "
+    "what each option does. Be concise, practical, and honest — if a fact "
+    "isn't in the context you were given, say so instead of guessing.\n\n"
+    "WHAT THE APP DOES\n"
+    "- Rips discs with MakeMKV into Jellyfin-friendly MKV files, checks "
+    "them with ffprobe, and files them into a TV/movie library.\n"
+    "- Modes: Rip TV Show Disc (number episodes in a picker), Rip Movie "
+    "Disc, Dump All Titles, and Organize Existing MKVs.\n"
+    "- Watch-before-rip: in the title picker you can 'Watch in VLC' a "
+    "title; it rips that title once to a temp file and, if you keep it "
+    "checked, reuses that rip instead of ripping it twice.\n\n"
+    "TRANSCODING — the 'Prep MKVs For FFmpeg / HandBrake' button\n"
+    "Re-encodes existing MKVs to smaller files. Your originals are never "
+    "touched; output goes to a new '<folder> - FFmpeg Output' folder. "
+    "After picking a folder, a Transcode Options dialog offers:\n"
+    "- QUALITY — how hard it compresses, via CRF (a lower CRF means better "
+    "quality and a bigger file). Save Space (CRF ~22, most shrink, most "
+    "quality risk), Best Overall (CRF ~20, the recommended balance), Keep "
+    "More Quality (CRF ~18, safest, least shrink). The app probes each "
+    "file and picks the per-file number for the tier.\n"
+    "- VIDEO CODEC — H.265/HEVC (the default; about 30-40% smaller than "
+    "H.264 at the same quality, but needs a fairly modern player) or H.264 "
+    "(larger files but plays on almost anything).\n"
+    "- ENCODER — CPU (libx265/libx264; best quality per byte but slow) or a "
+    "hardware GPU (NVIDIA NVENC, Intel Quick Sync, AMD AMF; often 5-15x "
+    "faster for a small quality cost). Only GPUs the bundled ffmpeg "
+    "actually exposes are offered; the app turns on each GPU's quality "
+    "settings (lookahead + adaptive quantization) to stay close to CPU "
+    "quality, and a failed GPU encode automatically retries on CPU.\n"
+    "- AUDIO — Keep original (lossless, larger) or Re-encode to AAC "
+    "(smaller, slightly lossy).\n"
+    "- BACKEND (shown only when HandBrakeCLI is installed) — FFmpeg "
+    "(bundled, the recommended default) or HandBrake (uses the installed "
+    "HandBrakeCLI with the same codec/quality/audio choices). They are "
+    "functionally similar; FFmpeg is fine for almost everyone.\n"
+    "Each output is verified afterward, and HDR or encoder failures "
+    "auto-retry with a safe fallback (strip HDR, drop to CPU, or lower "
+    "CRF).\n\n"
+    "When a request includes SESSION_FACTS, use it for anything about the "
+    "current disc or session before answering from general knowledge."
+)
+
+
 # ─── Pure helpers (lifted into the Qt path 2026-05-05) ───────────────
 #
 # These match the tkinter equivalents in ``gui/main_window.py`` —
@@ -646,29 +695,34 @@ class ChatController(QObject):
     def _with_disc_facts(
         self, messages: list[dict[str, str]],
     ) -> list[dict[str, str]]:
-        """Prepend a system message with live disc/session facts.
+        """Prepend the assistant's base system prompt (persona + feature
+        knowledge) and, when available, a second system message with
+        live disc/session facts.
 
-        Calls ``self._facts_provider`` fresh so the context always
-        reflects the most recent scan.  Returns ``messages`` unchanged
-        when no provider is wired, it returns nothing, or it raises —
-        the chat must never break because facts couldn't be gathered.
-        All four providers accept a leading ``system`` message
-        (Claude/Gemini fold it into their system field, OpenAI and
-        Ollama pass it through natively).
+        Calls ``self._facts_provider`` fresh so the facts always reflect
+        the most recent scan.  Falls back to just the base prompt when no
+        provider is wired, it returns nothing, or it raises — the chat
+        must never break because facts couldn't be gathered.  All four
+        providers accept leading ``system`` messages (Claude/Gemini fold
+        them into their system field, OpenAI and Ollama pass them through
+        natively).
         """
+        # The base persona/feature prompt is always present so the
+        # assistant can explain what options do, even with no disc in.
+        base = {"role": "system", "content": _CHAT_SYSTEM_PROMPT}
         if self._facts_provider is None:
-            return messages
+            return [base, *messages]
         try:
             facts = self._facts_provider() or {}
         except Exception:
-            return messages
+            return [base, *messages]
         if not facts:
-            return messages
+            return [base, *messages]
         facts = self._reconcile_inserted_disc(facts)
         try:
             facts_json = json.dumps(facts, ensure_ascii=False, default=str)
         except Exception:
-            return messages
+            return [base, *messages]
         # Cap the size so a huge facts blob can't blow the context
         # budget.  Disc + per-title facts (audio/subtitle tracks for
         # every title) are bigger than the old disc-only facts, so the
@@ -688,7 +742,7 @@ class ChatController(QObject):
                 f"SESSION_FACTS = {facts_json}"
             ),
         }
-        return [system, *messages]
+        return [base, system, *messages]
 
     def _with_web_context(
         self,
