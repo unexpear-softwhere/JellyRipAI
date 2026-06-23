@@ -778,3 +778,84 @@ def test_prep_mvp_runs_real_transcode_flow(qtbot, monkeypatch, tmp_path):
     assert fake_queue.ran_with is not None, "the queue must actually be run"
     assert infos and infos[0][0] == "Transcode Complete"
     assert "Succeeded: 1" in infos[0][1]
+
+
+def test_prep_mvp_handbrake_backend_builds_handbrake_jobs(qtbot, monkeypatch, tmp_path):
+    """Choosing the HandBrake backend builds backend='handbrake' jobs
+    (mapped encoder + quality), not FFmpeg recommendation jobs."""
+    import os as _os
+
+    import config as _config
+    import transcode.encoder_probe as _ep
+    import transcode.queue_builder as _qb
+    import transcode.recommendations as _recs
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    launcher = WorkflowLauncher(window, _StubController(), _StubEngine())
+
+    src = tmp_path / "clips"
+    src.mkdir()
+    (src / "movie.mkv").write_bytes(b"x")
+
+    monkeypatch.setattr(window, "ask_directory", lambda *a, **k: str(src))
+    monkeypatch.setattr(
+        window, "ask_transcode_options",
+        lambda **k: {"quality": "balanced", "codec": "h265", "hw_accel": "cpu",
+                     "audio": "copy", "backend": "handbrake"},
+    )
+    for name in ("show_info", "show_error", "append_log", "set_status", "set_progress"):
+        monkeypatch.setattr(window, name, lambda *a, **k: None)
+
+    class _Tool:
+        def __init__(self, path, error=""):
+            self.path = path
+            self.error = error
+
+    monkeypatch.setattr(_config, "resolve_ffmpeg", lambda *a, **k: _Tool("ffmpeg"))
+    monkeypatch.setattr(_config, "resolve_ffprobe", lambda *a, **k: _Tool("ffprobe"))
+    monkeypatch.setattr(_config, "resolve_handbrake", lambda *a, **k: _Tool("HandBrakeCLI"))
+    monkeypatch.setattr(_ep, "available_encoders", lambda exe: frozenset())
+    monkeypatch.setattr(
+        _recs, "probe_media_for_recommendation",
+        lambda path, exe: {"path": path, "name": _os.path.basename(path)},
+    )
+    monkeypatch.setattr(
+        _recs, "build_ffmpeg_recommendations",
+        lambda analysis: {"recommendations": [
+            {"id": "balanced", "crf": 20, "preset": "medium"}]},
+    )
+
+    def _boom(**kwargs):
+        raise AssertionError("FFmpeg job builder must not run for handbrake")
+
+    monkeypatch.setattr(_qb, "build_recommendation_job", _boom)
+    monkeypatch.setattr(_qb, "required_output_directories", lambda jobs, root: [])
+
+    captured: dict = {}
+
+    class _FakeQueue:
+        def __init__(self):
+            self.completed = [("j", "l")]
+            self.failed = []
+            self.degraded = []
+            self.aborted = []
+
+        def run_all(self, feedback_cb=None, progress_cb=None):
+            return []
+
+    fake_queue = _FakeQueue()
+
+    def _fake_build_queue(**kwargs):
+        captured["jobs"] = list(kwargs.get("jobs") or [])
+        return fake_queue
+
+    monkeypatch.setattr(_qb, "build_transcode_queue", _fake_build_queue)
+
+    launcher._run_prep_mvp()
+
+    jobs = captured.get("jobs", [])
+    assert len(jobs) == 1, "one handbrake job per scanned MKV"
+    assert jobs[0].backend == "handbrake"
+    assert jobs[0].backend_options["encoder"] == "x265"
+    assert jobs[0].backend_options["quality"] == 20

@@ -297,6 +297,9 @@ class WorkflowLauncher(QObject):
             gpu_options.append(("qsv", "Intel GPU (Quick Sync) — much faster"))
         if {"hevc_amf", "h264_amf"} & encoders:
             gpu_options.append(("amf", "AMD GPU (AMF) — much faster"))
+        handbrake = resolve_handbrake(
+            cfg.get("handbrake_path"), allow_path_lookup=allow,
+        )
 
         output_root = suggest_transcode_output_root(folder, "ffmpeg")
         source_mode = normalize_ffmpeg_source_mode(
@@ -306,6 +309,7 @@ class WorkflowLauncher(QObject):
             file_count=len(mkvs),
             output_root=output_root,
             gpu_options=gpu_options,
+            handbrake_available=bool(handbrake.path),
         )
         if not opts:
             win.append_log("Prep cancelled.")
@@ -314,9 +318,10 @@ class WorkflowLauncher(QObject):
         codec = str(opts.get("codec") or "h265")
         hw_accel = str(opts.get("hw_accel") or "cpu")
         audio_mode = str(opts.get("audio") or "copy")
+        backend = str(opts.get("backend") or "ffmpeg")
         win.append_log(
-            f"Transcode options: quality={tier_id} codec={codec} "
-            f"encoder={hw_accel} audio={audio_mode}"
+            f"Transcode options: backend={backend} quality={tier_id} "
+            f"codec={codec} encoder={hw_accel} audio={audio_mode}"
         )
 
         # 5) Probe each file + build a per-file recommendation job.
@@ -341,22 +346,49 @@ class WorkflowLauncher(QObject):
                 )
                 if rec is None:
                     raise RuntimeError("no recommendation produced")
-                # Apply the user's encode choices onto this file's
-                # recommended profile before the job is built.
-                profile_data = rec.get("profile_data") or {}
-                video_section = profile_data.setdefault("video", {})
-                video_section["codec"] = codec
-                video_section["hw_accel"] = hw_accel
-                profile_data.setdefault("audio", {})["mode"] = audio_mode
-                rec["profile_data"] = profile_data
-                result = build_recommendation_job(
-                    plan=plan,
-                    analysis=analysis,
-                    recommendation=rec,
-                    ffmpeg_source_mode=source_mode,
-                    ffmpeg_exe=ffmpeg.path,
-                )
-                jobs.extend(result.jobs)
+                if backend == "handbrake":
+                    # HandBrake job: map the recommended CRF + the user's
+                    # codec/encoder/audio onto explicit HandBrakeCLI
+                    # settings.  GPU encoders use HandBrake's "quality"
+                    # speed preset; CPU keeps the recommended x26x preset.
+                    from core.pipeline import (
+                        TranscodeJob,
+                        choose_available_output_path,
+                    )
+                    from transcode.handbrake_builder import handbrake_encoder
+                    out_path = choose_available_output_path(plan["output_path"])
+                    enc_preset = (
+                        str(rec.get("preset") or "medium")
+                        if hw_accel == "cpu" else "quality"
+                    )
+                    jobs.append(TranscodeJob(
+                        plan["input_path"], out_path, None,
+                        metadata={"source_relative_path": plan["relative_path"]},
+                        backend="handbrake",
+                        backend_options={
+                            "encoder": handbrake_encoder(codec, hw_accel),
+                            "quality": rec.get("crf"),
+                            "encoder_preset": enc_preset,
+                            "audio": audio_mode,
+                        },
+                    ))
+                else:
+                    # FFmpeg job: apply the user's encode choices onto
+                    # this file's recommended profile, then build it.
+                    profile_data = rec.get("profile_data") or {}
+                    video_section = profile_data.setdefault("video", {})
+                    video_section["codec"] = codec
+                    video_section["hw_accel"] = hw_accel
+                    profile_data.setdefault("audio", {})["mode"] = audio_mode
+                    rec["profile_data"] = profile_data
+                    result = build_recommendation_job(
+                        plan=plan,
+                        analysis=analysis,
+                        recommendation=rec,
+                        ffmpeg_source_mode=source_mode,
+                        ffmpeg_exe=ffmpeg.path,
+                    )
+                    jobs.extend(result.jobs)
             except Exception as e:  # noqa: BLE001 — skip the bad file, keep going
                 win.append_log(f"  Skipped {name}: {e}")
         if not jobs:
@@ -372,9 +404,6 @@ class WorkflowLauncher(QObject):
                 os.makedirs(directory, exist_ok=True)
             except Exception as e:  # noqa: BLE001
                 win.append_log(f"  Could not create {directory}: {e}")
-        handbrake = resolve_handbrake(
-            cfg.get("handbrake_path"), allow_path_lookup=allow,
-        )
         log_dir = os.path.join(output_root, "_transcode_logs")
         try:
             os.makedirs(log_dir, exist_ok=True)

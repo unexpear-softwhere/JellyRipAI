@@ -52,6 +52,10 @@ _AUDIO: tuple[tuple[str, str], ...] = (
     ("copy", "Keep original audio (lossless, larger)"),
     ("aac", "Re-encode audio to AAC (smaller)"),
 )
+_BACKEND: tuple[tuple[str, str], ...] = (
+    ("ffmpeg", "FFmpeg — bundled, fully featured (recommended)"),
+    ("handbrake", "HandBrake — uses your installed HandBrakeCLI"),
+)
 
 
 class _TranscodeOptionsDialog(QDialog):
@@ -63,6 +67,7 @@ class _TranscodeOptionsDialog(QDialog):
         file_count: int,
         output_root: str,
         gpu_options: Sequence[tuple[str, str]],
+        handbrake_available: bool = False,
         parent: "QWidget | None" = None,
     ) -> None:
         super().__init__(parent)
@@ -97,6 +102,8 @@ class _TranscodeOptionsDialog(QDialog):
         self._add_group(outer, "codec", "Video codec", _CODEC)
         self._add_group(outer, "hw_accel", "Encoder", encoder_options)
         self._add_group(outer, "audio", "Audio", _AUDIO)
+        if handbrake_available:
+            self._add_group(outer, "backend", "Engine backend", _BACKEND)
 
         button_row = QHBoxLayout()
         cancel = QPushButton("Cancel")
@@ -151,6 +158,11 @@ class _TranscodeOptionsDialog(QDialog):
             "codec": self._selected("codec"),
             "hw_accel": self._selected("hw_accel"),
             "audio": self._selected("audio"),
+            "backend": (
+                self._selected("backend")
+                if "backend" in self._groups
+                else "ffmpeg"
+            ),
         }
         self.accept()
 
@@ -167,14 +179,16 @@ def ask_transcode_options(
     file_count: int,
     output_root: str,
     gpu_options: Sequence[tuple[str, str]],
+    handbrake_available: bool = False,
 ) -> dict | None:
     """Show the options chooser modally.  Returns the chosen values as a
-    dict (``quality`` / ``codec`` / ``hw_accel`` / ``audio``), or ``None``
-    if the user cancels."""
+    dict (``quality`` / ``codec`` / ``hw_accel`` / ``audio`` /
+    ``backend``), or ``None`` if the user cancels."""
     dialog = _TranscodeOptionsDialog(
         file_count=file_count,
         output_root=output_root,
         gpu_options=list(gpu_options),
+        handbrake_available=handbrake_available,
         parent=parent,
     )
     exec_modeless(dialog)

@@ -217,17 +217,30 @@ class FFmpegBuilder:
             # silently DISCARD it and fall back to their defaults
             # (NVENC ≈ 2 Mbps — 4K HDR mush with no error).  Map the
             # quality number onto each encoder's own constant-quality
-            # knob instead.
+            # knob instead, AND turn on that encoder's quality-improving
+            # rate control (lookahead + adaptive quantization).  Without
+            # these, a GPU encode at a given number sits well below the
+            # CPU CRF it was calibrated against; with them it lands much
+            # closer.  All are widely supported — if an old build/driver
+            # rejects one, the encoder_unavailable / use_cpu fallback
+            # recovers on CPU.
             if vcodec.endswith("_nvenc"):
-                cmd += ["-rc", "vbr", "-cq", str(crf), "-b:v", "0"]
+                cmd += [
+                    "-rc", "vbr", "-cq", str(crf), "-b:v", "0",
+                    "-tune", "hq",
+                    "-rc-lookahead", "20",
+                    "-spatial_aq", "1",
+                    "-temporal_aq", "1",
+                ]
             elif vcodec.endswith("_qsv"):
-                cmd += ["-global_quality", str(crf)]
+                cmd += ["-global_quality", str(crf), "-look_ahead", "1"]
             elif vcodec.endswith("_amf"):
                 cmd += [
                     "-rc", "cqp",
                     "-qp_i", str(crf),
                     "-qp_p", str(crf),
                     "-qp_b", str(crf),
+                    "-quality", "quality",
                 ]
             else:
                 cmd += ["-crf", str(crf)]

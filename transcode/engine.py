@@ -190,12 +190,14 @@ class TranscodeEngine:
         effective_input_path = input_path or job.input_path
         backend = getattr(job, "backend", "ffmpeg")
         if backend == "handbrake":
+            options = getattr(job, "backend_options", {}) or {}
             builder = HandBrakeBuilder(
                 effective_input_path,
                 job.output_path,
-                getattr(job, "backend_options", {}).get("preset", "Fast 1080p30"),
+                options.get("preset", "Fast 1080p30"),
                 getattr(job, "metadata", {}),
                 executable_path=self.handbrake_exe,
+                settings=options,
             )
             return builder.build_command()
 

@@ -32,6 +32,7 @@ def test_defaults_are_first_option(qtbot):
         "codec": "h265",
         "hw_accel": "cpu",
         "audio": "copy",
+        "backend": "ffmpeg",
     }
 
 
@@ -77,4 +78,30 @@ def test_non_default_selection_round_trips(qtbot):
         "codec": "h264",
         "hw_accel": "nvenc",
         "audio": "aac",
+        "backend": "ffmpeg",
     }
+
+
+def test_backend_group_only_when_handbrake_available(qtbot):
+    # No HandBrake → no backend group, backend defaults to ffmpeg.
+    no_hb = _TranscodeOptionsDialog(
+        file_count=1, output_root="X", gpu_options=[],
+        handbrake_available=False,
+    )
+    qtbot.addWidget(no_hb)
+    assert "backend" not in no_hb._groups
+    no_hb._on_start()
+    assert no_hb.result_options["backend"] == "ffmpeg"
+
+    # HandBrake available → backend group offers ffmpeg + handbrake.
+    hb = _TranscodeOptionsDialog(
+        file_count=1, output_root="X", gpu_options=[],
+        handbrake_available=True,
+    )
+    qtbot.addWidget(hb)
+    assert [v for v, _ in hb._groups["backend"]] == ["ffmpeg", "handbrake"]
+    for value, radio in hb._groups["backend"]:
+        if value == "handbrake":
+            radio.setChecked(True)
+    hb._on_start()
+    assert hb.result_options["backend"] == "handbrake"
