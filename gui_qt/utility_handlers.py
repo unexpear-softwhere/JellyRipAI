@@ -234,17 +234,59 @@ class UtilityHandler(QObject):
         self._window.append_log("Log copied to clipboard.")
 
     def handle_utilBrowse(self) -> None:  # noqa: N802
-        """Open a folder picker and log the selected path.
+        """Open the Browse Folder media window.
 
-        Mirrors tkinter's Browse Folder chip
-        (``gui/main_window.py:1364``).  The user can pick any folder;
-        we just log it — the controller doesn't currently consume
-        this state.  Cancelling the picker → no-op.
+        Picks a folder, then opens a non-modal window that scans every
+        MKV under it (and subfolders), shows them sortable with a
+        per-file suggestion, and lets the user right-click to queue
+        space-saving transcodes that run one at a time in the
+        background.  Cancelling the picker → no-op.
         """
         folder = QFileDialog.getExistingDirectory(
             self._window,
-            "Choose a folder to open",
+            "Choose a folder of MKVs to browse",
         )
         if not folder:
             return  # user cancelled
-        self._window.append_log(f"Browsed to folder: {folder}")
+
+        from config import resolve_ffmpeg, resolve_ffprobe, resolve_handbrake
+        from gui_qt.dialogs.folder_browse import FolderBrowseWindow
+        from transcode.encoder_probe import available_encoders
+
+        ffmpeg = resolve_ffmpeg(None)
+        ffprobe = resolve_ffprobe(None)
+        if not ffmpeg.path or not ffprobe.path:
+            self._window.show_error(
+                "Browse Folder",
+                "FFmpeg/ffprobe couldn't be found, so the folder can't be "
+                "analyzed.",
+            )
+            return
+        handbrake = resolve_handbrake(None)
+
+        encoders = available_encoders(ffmpeg.path)
+        gpu_options: list = []
+        if {"hevc_nvenc", "h264_nvenc"} & encoders:
+            gpu_options.append(("nvenc", "NVIDIA GPU (NVENC) — much faster"))
+        if {"hevc_qsv", "h264_qsv"} & encoders:
+            gpu_options.append(("qsv", "Intel GPU (Quick Sync) — much faster"))
+        if {"hevc_amf", "h264_amf"} & encoders:
+            gpu_options.append(("amf", "AMD GPU (AMF) — much faster"))
+
+        window = FolderBrowseWindow(
+            folder,
+            ffmpeg_exe=ffmpeg.path,
+            ffprobe_exe=ffprobe.path,
+            handbrake_exe=handbrake.path,
+            cfg={},
+            gpu_options=gpu_options,
+            parent=self._window,
+        )
+        # Keep a reference so the non-modal window isn't garbage-collected.
+        refs = getattr(self._window, "_open_browse_windows", None)
+        if refs is None:
+            refs = []
+            self._window._open_browse_windows = refs
+        refs.append(window)
+        window.show()
+        self._window.append_log(f"Browsing {folder} for MKVs…")
