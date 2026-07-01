@@ -14,10 +14,12 @@ threads; all UI updates marshal back via Qt signals.
 from __future__ import annotations
 
 import os
+import tempfile
 import threading
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -30,6 +32,9 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
 )
+
+_THUMB_W = 128
+_THUMB_H = 72  # 16:9-ish
 
 _COL_NAME = 0
 _COL_SIZE = 1
@@ -62,6 +67,7 @@ class FolderBrowseWindow(QDialog):
     _scan_done = Signal(int)
     _status_update = Signal(str, str)
     _completed = Signal(str, str, float)  # (input_path, output_path, saved_bytes)
+    _thumb_ready = Signal(str, str)  # (path, thumbnail jpg path)
 
     def __init__(
         self,
@@ -87,6 +93,7 @@ class FolderBrowseWindow(QDialog):
         self._cfg = cfg or {}
         self._gpu_options = list(gpu_options or [])
         self._info_by_path: dict[str, dict] = {}
+        self._thumb_dir = tempfile.mkdtemp(prefix="browse_thumbs_")
 
         self._queue = None  # transcode.queue.TranscodeQueue, created lazily
         self._queue_lock = threading.Lock()
@@ -106,6 +113,7 @@ class FolderBrowseWindow(QDialog):
         self._table.setObjectName("folderBrowseTable")
         self._table.setHorizontalHeaderLabels(list(_HEADERS))
         self._table.setSortingEnabled(True)
+        self._table.setIconSize(QSize(_THUMB_W, _THUMB_H))  # room for thumbnails
         self._table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
@@ -134,6 +142,7 @@ class FolderBrowseWindow(QDialog):
         self._scan_done.connect(self._on_scan_done)
         self._status_update.connect(self._on_status_update)
         self._completed.connect(self._on_completed)
+        self._thumb_ready.connect(self._on_thumb_ready)
 
         try:
             from gui_qt.ui_polish import apply_pointing_cursors
@@ -208,6 +217,29 @@ class FolderBrowseWindow(QDialog):
             f"{count} MKV(s) · {human_size(total)} total. "
             "Right-click a file to queue a transcode."
         )
+        # Fill in Explorer-style thumbnails in the background once the list
+        # is populated, so rows appear fast and the pictures stream in after.
+        if self._info_by_path and not self._abort.is_set():
+            threading.Thread(target=self._thumb_worker, daemon=True).start()
+
+    def _thumb_worker(self) -> None:
+        from engine.thumbnails import generate_thumbnail
+        for i, path in enumerate(list(self._info_by_path.keys())):
+            if self._abort.is_set():
+                break
+            out = os.path.join(self._thumb_dir, f"thumb_{i}.jpg")
+            try:
+                if generate_thumbnail(path, out, self._ffmpeg, width=_THUMB_W):
+                    self._thumb_ready.emit(path, out)
+            except Exception:  # noqa: BLE001 — a bad file just gets no thumb
+                continue
+
+    def _on_thumb_ready(self, path: str, thumb_path: str) -> None:
+        row = self._row_for_path(path)
+        if row >= 0:
+            item = self._table.item(row, _COL_NAME)
+            if item is not None:
+                item.setIcon(QIcon(QPixmap(thumb_path)))
 
     # ── row lookup / status ──────────────────────────────────────────
     def _row_for_path(self, path: str) -> int:

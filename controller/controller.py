@@ -126,6 +126,13 @@ class RipperController(LegacyControllerMixin):
         self.queue: JobQueue = JobQueue()
         self.engine: Any = engine
         self.ui: Any = ui
+        # Route rip progress + live log to the UI (both were discarded
+        # inside the engine's run_job — bar frozen, log silent mid-rip).
+        try:
+            self.engine._rip_progress_cb = self._rip_progress
+            self.engine._rip_log_cb = self.log
+        except Exception:
+            pass
         self.gui: Any = ui
         self.session_log: List[str] = []
         self.start_time: datetime = datetime.now()
@@ -1074,6 +1081,32 @@ class RipperController(LegacyControllerMixin):
 
     def log(self, message: str) -> None:
         self.session_helpers.log(message)
+
+    def _rip_progress(self, percent) -> None:
+        """Route a rip's live (file-size) percent to the bar, and reconstruct
+        the "X.X GB / Y.Y GB · NN%" label from percent × the rip's total.
+        Single-arg so legacy callbacks stay compatible.  Wired onto the engine
+        in __init__ (was a discarded no-op).
+
+        Prefer ``_rip_total_bytes`` (sum of the *selected* titles for this
+        rip) over ``_last_scan_total_bytes`` (every title on the disc) so a
+        one-episode rip shows its own size, not the whole disc's."""
+        try:
+            total = (
+                getattr(self.engine, "_rip_total_bytes", 0)
+                or getattr(self.engine, "_last_scan_total_bytes", None)
+            )
+            if total:
+                pct = max(0.0, min(100.0, float(percent)))
+                current = int(pct / 100.0 * int(total))
+                self.gui.set_progress(
+                    percent, current_bytes=current, total_bytes=int(total)
+                )
+            else:
+                self.gui.set_progress(percent)
+        except Exception:  # noqa: BLE001 — progress must never break a rip
+            pass
+
     def _stabilize_file(self, path: str, timeout_seconds: int, min_stable_polls: int) -> tuple[bool, bool]:
         """Wait for file to be stable: N equal reads AND 3+ seconds of no growth.
 

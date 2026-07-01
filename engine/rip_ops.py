@@ -3,11 +3,80 @@ Rip subprocess lifecycle logic for RipperEngine.
 """
 import os
 import re
+import threading
+import time
 from utils.parsing import parse_cli_args
 from shared.runtime import RIP_ATTEMPT_FLAGS
 
+
+def _rip_dir_bytes(rip_path: str) -> int:
+    """Total size of the .mkv files currently in ``rip_path`` (0 on error)."""
+    done = 0
+    try:
+        for name in os.listdir(rip_path):
+            if name.lower().endswith(".mkv"):
+                try:
+                    done += os.path.getsize(os.path.join(rip_path, name))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return done
+
+
+def rip_size_poller(
+    rip_path, total_bytes, on_progress, on_log, stop_event, abort_event
+):
+    """Drive the progress bar from the output file *growing on disk* — works
+    even when MakeMKV emits no progress ticks (e.g. region-mismatched discs).
+
+    Polls once a second; reports ``done/total`` as a single-arg percent
+    (capped at 99 so the caller's final 100 marks completion).  Every ~10%
+    it also emits a log line, so the visible log shows progress on discs
+    where MakeMKV's own "%" lines never appear.
+    """
+    last_logged = -10
+    while not stop_event.is_set() and not abort_event.is_set():
+        done = _rip_dir_bytes(rip_path)
+        if total_bytes > 0 and done > 0:
+            pct = min(int(done / total_bytes * 100), 99)
+            try:
+                on_progress(pct)
+            except Exception:  # noqa: BLE001 — progress must never break a rip
+                pass
+            if pct >= last_logged + 10:
+                last_logged = pct
+                try:
+                    on_log(
+                        f"Ripping: {done / (1024 ** 3):.1f} / "
+                        f"{total_bytes / (1024 ** 3):.1f} GB ({pct}%)"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+        stop_event.wait(1.0)
+
 # The following functions are extracted from RipperEngine for modularization.
 # They require the RipperEngine instance (self) to be passed as the first argument.
+
+
+def size_weighted_progress(
+    title_bytes: list, idx: int, pct: float
+) -> tuple[float, int, int]:
+    """Overall rip progress weighted by each title's byte size.
+
+    Given the per-title expected sizes, the index of the title currently
+    ripping, and that title's percent-done, return
+    ``(overall_pct, current_bytes, total_bytes)`` — so a big episode
+    advances the bar more than a tiny extra.  ``total_bytes`` is 0 when the
+    sizes are unknown; the caller then falls back to title-count weighting.
+    """
+    total = sum(b for b in title_bytes if b > 0)
+    if total <= 0:
+        return 0.0, 0, 0
+    cum_before = sum(title_bytes[:idx])
+    current = cum_before + title_bytes[idx] * (pct / 100.0)
+    return current / total * 100.0, int(current), int(total)
+
 
 def rip_preview_title(self, rip_path, title_id, preview_seconds, on_log):
     makemkvcon  = self._get_makemkvcon()
@@ -79,57 +148,78 @@ def rip_all_titles(self, rip_path, on_progress, on_log):
             grouped.setdefault(tid, []).append(path)
         self.last_title_file_map = grouped
 
-    for attempt_num, flags in enumerate(attempts, start=1):
-        if self.abort_event.is_set():
-            return False
-        if not self._wait_for_drive_ready(
-            on_log,
-            context=f"all-title rip attempt {attempt_num}/{len(attempts)}",
-        ):
+    # File-size progress: drive the bar from the output growing on disk, so a
+    # Dump All shows progress even when MakeMKV emits no ticks.  The poller
+    # owns the bar; _run_rip_process gets a no-op so the two don't fight.
+    self._rip_total_bytes = int(getattr(self, "_last_scan_total_bytes", 0) or 0)
+    _poll_stop = threading.Event()
+    if self._rip_total_bytes > 0:
+        threading.Thread(
+            target=rip_size_poller,
+            args=(
+                rip_path, self._rip_total_bytes, on_progress, on_log,
+                _poll_stop, self.abort_event,
+            ),
+            daemon=True,
+        ).start()
+
+    def _rip_progress_noop(_pct):
+        return None
+
+    try:
+        for attempt_num, flags in enumerate(attempts, start=1):
+            if self.abort_event.is_set():
+                return False
+            if not self._wait_for_drive_ready(
+                on_log,
+                context=f"all-title rip attempt {attempt_num}/{len(attempts)}",
+            ):
+                if attempt_num > 1:
+                    self._clean_new_mkv_files(rip_path, before, on_log)
+                on_log("Drive did not become ready before rip launch.")
+                return False
             if attempt_num > 1:
                 self._clean_new_mkv_files(rip_path, before, on_log)
-            on_log("Drive did not become ready before rip launch.")
-            return False
-        if attempt_num > 1:
-            self._clean_new_mkv_files(rip_path, before, on_log)
-            before = self._snapshot_mkv_files(rip_path)
-        on_log(
-            f"Rip attempt {attempt_num}/{len(attempts)} "
-            f"(flags: {' '.join(flags)})"
-        )
-        cmd = (
-            [makemkvcon] + global_args +
-            ["-r", "mkv", disc_target, "all", rip_path] +
-            flags + rip_args
-        )
-        success = self._run_rip_process(
-            cmd, on_progress, on_log
-        )
-        if self.abort_event.is_set():
-            return False
-        if success:
-            after = self._snapshot_mkv_files(rip_path)
-            new_files = after - before
-            if new_files:
-                _record_title_file_map(new_files)
-                return True
-            else:
-                on_log(
-                    "ERROR: MakeMKV reported success (exit code 0), "
-                    "but no MKV files were produced. "
-                    "This may indicate a disc read/write error."
-                )
-                self._log_rip_dir_contents(rip_path, before, on_log)
-                success = False
-        self._log_forced_failure_with_outputs(
-            rip_path, before, on_log
-        )
-        on_log(f"Attempt {attempt_num} failed.")
-        if attempt_num < len(attempts):
-            on_log("Retrying with different settings...")
+                before = self._snapshot_mkv_files(rip_path)
+            on_log(
+                f"Rip attempt {attempt_num}/{len(attempts)} "
+                f"(flags: {' '.join(flags)})"
+            )
+            cmd = (
+                [makemkvcon] + global_args +
+                ["-r", "mkv", disc_target, "all", rip_path] +
+                flags + rip_args
+            )
+            success = self._run_rip_process(
+                cmd, _rip_progress_noop, on_log
+            )
+            if self.abort_event.is_set():
+                return False
+            if success:
+                after = self._snapshot_mkv_files(rip_path)
+                new_files = after - before
+                if new_files:
+                    _record_title_file_map(new_files)
+                    return True
+                else:
+                    on_log(
+                        "ERROR: MakeMKV reported success (exit code 0), "
+                        "but no MKV files were produced. "
+                        "This may indicate a disc read/write error."
+                    )
+                    self._log_rip_dir_contents(rip_path, before, on_log)
+                    success = False
+            self._log_forced_failure_with_outputs(
+                rip_path, before, on_log
+            )
+            on_log(f"Attempt {attempt_num} failed.")
+            if attempt_num < len(attempts):
+                on_log("Retrying with different settings...")
 
-    on_log("All rip attempts failed.")
-    return False
+        on_log("All rip attempts failed.")
+        return False
+    finally:
+        _poll_stop.set()
 
 def rip_selected_titles(self, rip_path, title_ids, on_progress, on_log):
     makemkvcon  = self._get_makemkvcon()
@@ -155,11 +245,32 @@ def rip_selected_titles(self, rip_path, title_ids, on_progress, on_log):
     self.last_title_file_map = {}
     self.last_degraded_titles = []
 
+    # Per-title expected byte sizes from the last scan.  Their sum is the
+    # rip's total, which drives a file-size progress bar: a background poller
+    # watches the output grow on disk and reports done/total.  This moves the
+    # bar even on discs where MakeMKV emits no progress ticks at all (the
+    # symptom that made the old bar sit frozen at 0%).
+    title_bytes = [
+        int(self._last_scan_title_bytes.get(int(t), 0)) for t in title_ids
+    ]
+    self._rip_total_bytes = sum(b for b in title_bytes if b > 0)
+    _poll_stop = threading.Event()
+    if self._rip_total_bytes > 0:
+        threading.Thread(
+            target=rip_size_poller,
+            args=(
+                rip_path, self._rip_total_bytes, on_progress, on_log,
+                _poll_stop, self.abort_event,
+            ),
+            daemon=True,
+        ).start()
+
     for idx, tid in enumerate(title_ids):
         if self.abort_event.is_set():
             on_log("Rip aborted.")
             return False, failed_titles
 
+        # Per-title line — shown live once run_job forwards on_log.
         on_log(
             f"Ripping title {tid+1} "
             f"({idx+1}/{len(title_ids)})..."
@@ -200,9 +311,13 @@ def rip_selected_titles(self, rip_path, title_ids, on_progress, on_log):
                 flags + rip_args
             )
 
+            # The file-size poller (above) owns the bar now, so MakeMKV's own
+            # progress ticks don't need to drive it — passing them through too
+            # would just make the bar jitter between two sources.  We still
+            # hand _run_rip_process a callback: its PRGV path logs a live
+            # "Ripping: X%" line through on_log when the disc does emit ticks.
             def scaled_progress(pct, _idx=idx):
-                overall = ((_idx + pct / 100) / len(title_ids)) * 100
-                on_progress(int(overall))
+                return None
 
             success = self._run_rip_process(
                 cmd, scaled_progress, on_log
@@ -279,6 +394,7 @@ def rip_selected_titles(self, rip_path, title_ids, on_progress, on_log):
             )
             failed_titles.append(tid + 1)
 
+    _poll_stop.set()
     on_progress(100)
     all_ok = not self.abort_event.is_set() and not bool(failed_titles)
     return all_ok, failed_titles

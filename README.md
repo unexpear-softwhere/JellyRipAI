@@ -10,9 +10,9 @@ should be treated as non-final.
 
 ## Project Status
 
-- Current unstable line: `ai-v1.0.26` (latest unstable AI pre-release)
-- AI release page: [ai-v1.0.26](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.26)
-- MAIN release page: [v1.0.26](https://github.com/unexpear/JellyRip/releases/tag/v1.0.26) (non-AI baseline, separate repo)
+- Current unstable line: `ai-v1.0.27` (latest unstable AI pre-release)
+- AI release page: [ai-v1.0.27](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.27)
+- MAIN release page: [v1.0.27](https://github.com/unexpear/JellyRip/releases/tag/v1.0.27) (non-AI baseline, separate repo)
 - Project site: [unexpear-softwhere.github.io/JellyRipAI](https://unexpear-softwhere.github.io/JellyRipAI/)
 - Platform target: Windows
 - Runtime target: Python 3.13+
@@ -53,9 +53,9 @@ Branch-specific documentation for the assist line:
 
 ### From GitHub release
 
-(recommended, currently `ai-v1.0.26` unstable AI pre-release)
+(recommended, currently `ai-v1.0.27` unstable AI pre-release)
 
-1. Go to the [current unstable AI release page](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.26).
+1. Go to the [current unstable AI release page](https://github.com/unexpear-softwhere/JellyRipAI/releases/tag/ai-v1.0.27).
 2. Download `JellyRipAIInstaller.exe` (installer) or `JellyRipAI-portable.zip`
    (portable - unzip anywhere and run `JellyRipAI.exe` inside the folder).
 3. If SmartScreen/Defender flags the file, whitelist the download folder
@@ -196,7 +196,7 @@ through GitHub Releases rather than committed to the repository.
 ### Full release pipeline
 
 ```bash
-release.bat 1.0.26
+release.bat 1.0.27
 ```
 
 This runs tests, checks version consistency, builds both executables,

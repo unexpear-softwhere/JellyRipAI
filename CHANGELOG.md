@@ -2,6 +2,31 @@
 
 <!-- markdownlint-disable MD013 -->
 
+## [1.0.27] - 2026-07-01
+
+Unstable pre-release — a feedback pass on ripping: progress you can watch,
+cleaner logs, and thumbnails while browsing a folder.
+
+### Added
+
+- **Thumbnails in the Browse Folder window.**  Scanning a folder now shows a
+  video-frame preview for each MKV, like a file browser, so you can tell
+  titles apart at a glance.
+
+### Fixed
+
+- **The rip progress bar moves again.**  It's now driven by the output file
+  growing on disk — weighted by each title's size — so it climbs steadily
+  even on difficult discs (e.g. region-mismatched ones) where MakeMKV emits
+  no progress ticks at all.  The old bar could sit frozen at 0%.
+
+### Changed
+
+- **The live rip log is readable.**  MakeMKV messages now show their resolved
+  text (e.g. "Region setting … does not match …") instead of the raw
+  `%1 …` format template, and the bar's progress is echoed to the log as a
+  "Ripping: X.X / Y.Y GB (NN%)" line.
+
 ## [1.0.26] - 2026-06-14
 
 Unstable pre-release — a workflow + UI pass on the TV ripping flow, plus
