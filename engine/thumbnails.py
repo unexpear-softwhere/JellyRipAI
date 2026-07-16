@@ -28,18 +28,27 @@ def generate_thumbnail(
     *,
     width: int = DEFAULT_WIDTH,
     timeout: float = 30.0,
+    seeks: "tuple[str, ...] | None" = None,
 ) -> bool:
-    """Extract one frame from ``video_path`` to ``out_path`` (JPG).
+    """Extract one representative frame from ``video_path`` (JPG).
 
     * fast keyframe seek (``-ss`` before ``-i``);
+    * ``thumbnail=48`` scans ~2s of frames after the seek and keeps the
+      most representative one — dodging the black frames, studio logos,
+      and fade-ins a blind single-frame grab lands on (which made a
+      row of episode thumbnails look random);
     * ``-update 1`` writes a single image cleanly (no ``%d`` warning);
     * ``scale=iw*sar:ih`` un-squishes anamorphic DVD frames (720x480
       stored, 16:9 displayed) before scaling to ``width``.
 
+    ``seeks`` overrides the seek ladder — partial mini-rip samples only
+    hold the first minute or so, so their callers pass shallower,
+    consistent offsets instead of the full-file default.
+
     Returns ``True`` if a non-empty file was produced, else ``False``.
     Never raises for a bad input / missing ffmpeg — returns ``False``.
     """
-    for seek in _SEEK_CANDIDATES:
+    for seek in (seeks or _SEEK_CANDIDATES):
         try:
             subprocess.run(
                 [
@@ -48,7 +57,10 @@ def generate_thumbnail(
                     "-i", video_path,
                     "-frames:v", "1",
                     "-update", "1",
-                    "-vf", f"scale=iw*sar:ih,scale={int(width)}:-2",
+                    "-vf", (
+                        "thumbnail=48,"
+                        f"scale=iw*sar:ih,scale={int(width)}:-2"
+                    ),
                     out_path,
                 ],
                 capture_output=True,

@@ -36,13 +36,14 @@ by the classifier.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPalette
+from PySide6.QtCore import QEvent, QSize, QTimer, Qt, Signal
+from PySide6.QtGui import QIcon, QPalette, QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QComboBox,
     QDialog,
     QHBoxLayout,
     QHeaderView,
@@ -67,8 +68,9 @@ _COL_DURATION = 1
 _COL_SIZE = 2
 _COL_CHAPTERS = 3
 _COL_STATUS = 4
-_COL_NUM = 5        # editable episode number (TV only; hidden for movies)
-_COL_NAME = 6       # editable episode name (TV only; hidden for movies)
+_COL_AUDIO = 5      # per-title audio-track multi-select dropdown
+_COL_NUM = 6        # editable episode number (TV only; hidden for movies)
+_COL_NAME = 7       # editable episode name (TV only; hidden for movies)
 
 # The two right-hand columns the user fills in per title (TV only).
 _EDITABLE_COLS: tuple[int, ...] = (_COL_NUM, _COL_NAME)
@@ -79,9 +81,16 @@ _HEADERS: tuple[str, ...] = (
     "Size",
     "Chapters",
     "Status",
+    "Audio",
     "Ep #",
     "Episode name",
 )
+
+# Explorer-style thumbnail size for the Title column (matches the
+# Browse Folder window).  Rows are sized up so the image actually
+# shows — a default-height row clips it to an invisible sliver.
+_THUMB_W = 128
+_THUMB_H = 72
 
 
 class _EditableColumnsDelegate(QStyledItemDelegate):
@@ -92,10 +101,37 @@ class _EditableColumnsDelegate(QStyledItemDelegate):
     become editable.  Returning no editor elsewhere keeps every other
     column read-only."""
 
+    # (row, column, forward) — emitted when Tab/Backtab is pressed in an
+    # editor, so the dialog can move editing DOWN/UP the same column (the
+    # "type a number, Tab, type the next" flow).  Restored after adding
+    # the Audio column's cell widgets broke Qt's default tab-editing.
+    tab_navigate = Signal(int, int, bool)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._editing_row = -1
+        self._editing_col = -1
+
     def createEditor(self, parent, option, index):  # noqa: N802 (Qt)
         if index.column() not in _EDITABLE_COLS:
             return None
+        self._editing_row = index.row()
+        self._editing_col = index.column()
         return super().createEditor(parent, option, index)
+
+    def eventFilter(self, editor, event):  # noqa: N802 (Qt)
+        if event.type() == QEvent.Type.KeyPress and event.key() in (
+            Qt.Key.Key_Tab, Qt.Key.Key_Backtab,
+        ):
+            forward = event.key() == Qt.Key.Key_Tab
+            self.commitData.emit(editor)
+            self.closeEditor.emit(editor)
+            if self._editing_row >= 0:
+                self.tab_navigate.emit(
+                    self._editing_row, self._editing_col, forward
+                )
+            return True
+        return super().eventFilter(editor, event)
 
     def paint(self, painter, option, index):  # noqa: N802 (Qt)
         super().paint(painter, option, index)
@@ -186,6 +222,152 @@ def _classification_text(title: dict[str, Any]) -> str:
     return str(title.get("classification") or title.get("status") or "")
 
 
+def _audio_track_label(track: Mapping[str, Any], index: int) -> str:
+    """Readable one-line label for one audio track in the dropdown,
+    e.g. "English · AC3 · 5.1".  Pure helper — testable without Qt."""
+    lang = str(track.get("lang_name") or track.get("lang") or "").strip()
+    codec = str(track.get("codec") or "").strip()
+    ch = str(track.get("channels") or "").strip()
+    parts = [lang or f"Track {index + 1}"]
+    if codec:
+        parts.append(codec)
+    if ch:
+        parts.append(f"{ch}ch")
+    return " · ".join(parts)
+
+
+class _AudioTracksCombo(QComboBox):
+    """Per-title, multi-select audio-track chooser shaped like a
+    dropdown.  Item 0 is a "Keep all audio" master toggle; the rest are
+    the title's scanned audio tracks, each checkable and CHECKED by
+    default — uncheck the ones you don't want.  Clicking an item toggles
+    it without closing the popup (that's what makes it multi-select);
+    the read-only line edit shows a running summary ("All audio (2)",
+    "1 of 2 tracks", …).
+    """
+
+    def __init__(
+        self, tracks: "Sequence[Mapping[str, Any]]", parent=None
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("audioTracksCombo")
+        self.total_tracks = len(tracks)
+        self.setEditable(True)
+        self.lineEdit().setReadOnly(True)
+        self.lineEdit().setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.lineEdit().setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumWidth(150)
+
+        model = QStandardItemModel(self)
+        master = QStandardItem("Keep all audio")
+        master.setFlags(
+            Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
+        )
+        master.setData(Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+        model.appendRow(master)
+        for i, tr in enumerate(tracks):
+            it = QStandardItem(_audio_track_label(tr, i))
+            it.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
+            )
+            it.setData(Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+            model.appendRow(it)
+        self.setModel(model)
+        self._model = model
+
+        # Open on a click ANYWHERE on the box (an editable combo would
+        # otherwise only open from the tiny arrow — reads as "nothing
+        # happens"), and toggle items in the popup without it closing.
+        self.lineEdit().installEventFilter(self)
+        self.view().viewport().installEventFilter(self)
+        self._update_text()
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt)
+        et = event.type()
+        # Click the read-only box → open (or close) the dropdown.  Do it
+        # on the RELEASE so this same click's release doesn't also land
+        # in the just-opened popup and toggle the first item.
+        if obj is self.lineEdit() and et == QEvent.Type.MouseButtonRelease:
+            if self.view().isVisible():
+                self.hidePopup()
+            else:
+                self.showPopup()
+            return True
+        # Click an item in the popup → toggle its check, popup stays open
+        # (that's what makes it multi-select).
+        if (
+            obj is self.view().viewport()
+            and et == QEvent.Type.MouseButtonRelease
+        ):
+            idx = self.view().indexAt(event.position().toPoint())
+            if idx.isValid():
+                self._toggle_row(idx.row())
+            return True
+        return super().eventFilter(obj, event)
+
+    def _toggle_row(self, row: int) -> None:
+        item = self._model.item(row)
+        if item is None:
+            return
+        new = (
+            Qt.CheckState.Unchecked
+            if item.checkState() == Qt.CheckState.Checked
+            else Qt.CheckState.Checked
+        )
+        if row == 0:  # master → check/uncheck every track
+            for r in range(self._model.rowCount()):
+                self._model.item(r).setCheckState(new)
+        else:
+            item.setCheckState(new)
+            self._refresh_master()
+        self._update_text()
+
+    def _refresh_master(self) -> None:
+        master = self._model.item(0)
+        if master is None:
+            return
+        all_on = all(
+            self._model.item(r).checkState() == Qt.CheckState.Checked
+            for r in range(1, self._model.rowCount())
+        )
+        master.setCheckState(
+            Qt.CheckState.Checked if all_on else Qt.CheckState.Unchecked
+        )
+
+    def checked_indices(self) -> list[int]:
+        """0-based indices (scan order) of the tracks left checked."""
+        return [
+            r - 1
+            for r in range(1, self._model.rowCount())
+            if self._model.item(r).checkState() == Qt.CheckState.Checked
+        ]
+
+    def set_checked_indices_for_test(self, indices) -> None:
+        """Test helper — leave exactly these track indices checked."""
+        want = {int(i) for i in indices}
+        for r in range(1, self._model.rowCount()):
+            self._model.item(r).setCheckState(
+                Qt.CheckState.Checked
+                if (r - 1) in want
+                else Qt.CheckState.Unchecked
+            )
+        self._refresh_master()
+        self._update_text()
+
+    def _update_text(self) -> None:
+        kept = self.checked_indices()
+        n = self.total_tracks
+        if len(kept) == n:
+            text = f"All audio ({n})"
+        elif not kept:
+            text = "No audio"
+        elif len(kept) == 1:
+            text = self._model.item(kept[0] + 1).text()
+        else:
+            text = f"{len(kept)} of {n} tracks"
+        self.lineEdit().setText(text)
+
+
 class _DiscTreeDialog(QDialog):
     """Modal selection dialog over disc titles."""
 
@@ -198,6 +380,7 @@ class _DiscTreeDialog(QDialog):
         *,
         window_title: "str | None" = None,
         intro_text: "str | None" = None,
+        thumbnails: "Mapping[int, str] | None" = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("discTreeDialog")
@@ -215,6 +398,23 @@ class _DiscTreeDialog(QDialog):
         # ``preview_callback`` is accepted for signature compatibility
         # with the tkinter version; MVP doesn't wire it (3e territory).
         self._preview_callback = preview_callback
+        # ``thumbnails`` maps title id → jpg path, PRE-RESOLVED by the
+        # caller (sampled/cached before the dialog is created).  Icons
+        # are set while rows are built, so the window appears with every
+        # available image already in place and never changes afterward —
+        # no background loading the user can watch trickle in.
+        self._thumbnails: dict[int, str] = {}
+        for k, v in (thumbnails or {}).items():
+            try:
+                self._thumbnails[int(k)] = str(v)
+            except (TypeError, ValueError):
+                continue
+        # Per-title audio-track dropdowns, one QComboBox per title id
+        # (built in _populate from each title's scanned ``audio_tracks``).
+        # Read back at OK as {title_id: kept 0-based indices} for titles
+        # the user trimmed — see ``audio_selections``.
+        self._audio_combos: dict[str, _AudioTracksCombo] = {}
+        self.audio_selections_value: dict[int, list[int]] = {}
 
         # ``result_value`` is the public output: list of title IDs
         # as strings (matches tkinter; controller calls int() on each).
@@ -275,12 +475,20 @@ class _DiscTreeDialog(QDialog):
         self._tree.setRootIsDecorated(False)
         self._tree.setUniformRowHeights(True)
         self._tree.setAlternatingRowColors(False)
+        if self._thumbnails:
+            self._tree.setIconSize(QSize(_THUMB_W, _THUMB_H))
 
         # Header sizing — title column stretches, others fit content.
         header_view = self._tree.header()
         header_view.setSectionResizeMode(_COL_TITLE, QHeaderView.ResizeMode.Stretch)
         for col in (_COL_DURATION, _COL_SIZE, _COL_CHAPTERS, _COL_STATUS):
             header_view.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        # Audio column holds a dropdown widget per row — give it a fixed,
+        # comfortable width (ResizeToContents ignores cell widgets).
+        header_view.setSectionResizeMode(
+            _COL_AUDIO, QHeaderView.ResizeMode.Interactive
+        )
+        header_view.resizeSection(_COL_AUDIO, 190)
 
         # Per-title episode info (TV only): the Ep # and name columns
         # are editable inline.  The number you set here pre-fills the
@@ -290,7 +498,9 @@ class _DiscTreeDialog(QDialog):
         # by title/year instead.  A delegate keeps editing confined to
         # those two columns.
         self._is_tv = bool(is_tv)
-        self._tree.setItemDelegate(_EditableColumnsDelegate(self._tree))
+        self._delegate = _EditableColumnsDelegate(self._tree)
+        self._delegate.tab_navigate.connect(self._on_editor_tab)
+        self._tree.setItemDelegate(self._delegate)
         self._tree.setEditTriggers(
             QAbstractItemView.EditTrigger.DoubleClicked
             | QAbstractItemView.EditTrigger.SelectedClicked
@@ -405,6 +615,16 @@ class _DiscTreeDialog(QDialog):
             item.setText(_COL_SIZE, str(t.get("size", "") or ""))
             item.setText(_COL_CHAPTERS, str(t.get("chapters", "") or ""))
             item.setText(_COL_STATUS, _classification_text(t))
+            if self._thumbnails:
+                # Rows sized for the thumbnail (identical hint on every
+                # row — the tree uses uniform row heights); the icon is
+                # set right here, so the window opens fully populated.
+                item.setSizeHint(_COL_TITLE, QSize(0, _THUMB_H + 8))
+                jpg = self._thumbnails.get(int(tid)) if tid.isdigit() else None
+                if jpg:
+                    pixmap = QPixmap(jpg)
+                    if not pixmap.isNull():
+                        item.setIcon(_COL_TITLE, QIcon(pixmap))
 
             # Stash the title ID as user-data on the column-0 item.
             item.setData(_COL_TITLE, Qt.ItemDataRole.UserRole, tid)
@@ -416,6 +636,21 @@ class _DiscTreeDialog(QDialog):
                 else Qt.CheckState.Unchecked
             )
             item.setCheckState(_COL_TITLE, check_state)
+
+            # Per-title audio-track dropdown (multi-select) — built from
+            # the scan's audio_tracks, all checked by default, uncheck to
+            # drop.  Titles with no audio tracks get no dropdown.
+            audio_tracks = list(t.get("audio_tracks") or [])
+            if audio_tracks:
+                combo = _AudioTracksCombo(audio_tracks)
+                # Click-only focus keeps the dropdowns OUT of the Tab
+                # chain, so tabbing through Ep#/name cells doesn't snag
+                # on them.
+                combo.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+                self._tree.setItemWidget(item, _COL_AUDIO, combo)
+                self._audio_combos[tid] = combo
+                base_h = item.sizeHint(_COL_TITLE).height()
+                item.setSizeHint(_COL_AUDIO, QSize(0, max(base_h, 30)))
 
             # TV: make the row editable so the Ep # and name cells open
             # an inline editor (the delegate confines editing to those
@@ -430,6 +665,11 @@ class _DiscTreeDialog(QDialog):
                     item.setText(_COL_NAME, seed)
 
             self._items_by_id[tid] = item
+
+        # Cell widgets (the audio dropdowns) need each row to size to its
+        # own content, so drop uniform-row-heights when any are present.
+        if self._audio_combos:
+            self._tree.setUniformRowHeights(False)
 
     # ------------------------------------------------------------------
     # Click handler — toggle checkbox when row is clicked anywhere
@@ -451,6 +691,25 @@ class _DiscTreeDialog(QDialog):
             else Qt.CheckState.Checked
         )
         item.setCheckState(_COL_TITLE, new_state)
+
+    def _on_editor_tab(self, row: int, col: int, forward: bool) -> None:
+        """Tab / Shift+Tab in an Ep#/name editor moves editing DOWN / UP
+        the SAME column and opens the next editor — so episode numbers
+        can be typed straight down the list (type a number, Tab, type
+        the next).  Clamps at the ends; no-op if the column is hidden."""
+        if self._tree.isColumnHidden(col):
+            return
+        next_row = row + (1 if forward else -1)
+        if not (0 <= next_row < self._tree.topLevelItemCount()):
+            return
+        item = self._tree.topLevelItem(next_row)
+        if item is None:
+            return
+        self._tree.setCurrentItem(item, col)
+        # Defer so the just-closed editor is fully torn down before the
+        # next one opens (opening synchronously inside the close can be
+        # dropped by the view).
+        QTimer.singleShot(0, lambda: self._tree.editItem(item, col))
 
     def _select_all(self) -> None:
         """Check every row (Select All button)."""
@@ -643,12 +902,29 @@ class _DiscTreeDialog(QDialog):
                 continue
         return out
 
+    def audio_selections(self) -> dict[int, list[int]]:
+        """Per-title audio keep-lists for titles the user TRIMMED (kept
+        fewer than all tracks), keyed by integer title id → 0-based kept
+        indices.  Titles left at "keep all" are omitted, so an empty
+        dict means every rip keeps all its audio (the default)."""
+        out: dict[int, list[int]] = {}
+        for tid, combo in self._audio_combos.items():
+            kept = combo.checked_indices()
+            if len(kept) == combo.total_tracks:
+                continue  # kept everything → no trim needed
+            try:
+                out[int(tid)] = kept
+            except (TypeError, ValueError):
+                continue
+        return out
+
     def _on_ok(self) -> None:
         # Commit any in-progress inline edit before reading values.
         self._tree.setCurrentItem(self._tree.currentItem())
         self.result_value = self._selected_ids()
         self.episode_names_value = self.episode_names()
         self.episode_numbers_value = self.episode_numbers()
+        self.audio_selections_value = self.audio_selections()
         self.accept()
 
     def _on_cancel(self) -> None:
@@ -670,15 +946,19 @@ def run_disc_tree(
     *,
     window_title: "str | None" = None,
     intro_text: "str | None" = None,
-) -> tuple[list[str] | None, dict[int, str], dict[int, int]]:
+    thumbnails: "Mapping[int, str] | None" = None,
+) -> tuple[list[str] | None, dict[int, str], dict[int, int], dict[int, list[int]]]:
     """Show the selector modally and return the selected title IDs plus
-    the per-title episode names AND numbers the user typed.
+    the per-title episode names, numbers, and audio-track trims.
 
-    ``(ids, names, numbers)`` — ``ids`` is ``None`` on cancel (names and
-    numbers ``{}`` then); ``names`` maps integer title id → episode name
-    and ``numbers`` maps integer title id → episode number, for the TV
-    rows the user filled in (both empty for movies).  ``show_disc_tree``
-    is the back-compatible wrapper that returns only the ids.
+    ``(ids, names, numbers, audio)`` — ``ids`` is ``None`` on cancel
+    (the maps are ``{}`` then); ``names`` maps integer title id →
+    episode name and ``numbers`` maps integer title id → episode number,
+    for the TV rows the user filled in (both empty for movies);
+    ``audio`` maps integer title id → kept 0-based audio indices, ONLY
+    for titles the user trimmed (empty means every rip keeps all audio).
+    ``show_disc_tree`` is the back-compatible wrapper that returns only
+    the ids.
     """
     dialog = _DiscTreeDialog(
         disc_titles=disc_titles,
@@ -687,12 +967,14 @@ def run_disc_tree(
         parent=parent,
         window_title=window_title,
         intro_text=intro_text,
+        thumbnails=thumbnails,
     )
     exec_modeless(dialog)
     ids = dialog.result_value
     names = dict(getattr(dialog, "episode_names_value", {}) or {}) if ids is not None else {}
     numbers = dict(getattr(dialog, "episode_numbers_value", {}) or {}) if ids is not None else {}
-    return ids, names, numbers
+    audio = dict(getattr(dialog, "audio_selections_value", {}) or {}) if ids is not None else {}
+    return ids, names, numbers, audio
 
 
 def show_disc_tree(
@@ -703,6 +985,7 @@ def show_disc_tree(
     *,
     window_title: "str | None" = None,
     intro_text: "str | None" = None,
+    thumbnails: "Mapping[int, str] | None" = None,
 ) -> list[str] | None:
     """Show the disc-tree selector modally.
 
@@ -714,8 +997,9 @@ def show_disc_tree(
     opens but has no rows; the user can only Cancel or hit OK with
     nothing selected (returns ``[]``).  Mirrors tkinter behavior.
     """
-    ids, _names, _numbers = run_disc_tree(
+    ids, _names, _numbers, _audio = run_disc_tree(
         parent, disc_titles, is_tv, preview_callback,
         window_title=window_title, intro_text=intro_text,
+        thumbnails=thumbnails,
     )
     return ids

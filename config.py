@@ -88,6 +88,31 @@ def _makemkvcon_candidate_names() -> list[str]:
     return ["makemkvcon.exe", "makemkvcon64.exe"]
 
 
+def _prefer_makemkvcon64(path: "str | PathLike[str] | None") -> str:
+    """Upgrade a configured 32-bit ``makemkvcon.exe`` to the 64-bit
+    ``makemkvcon64.exe`` sitting beside it, when present.
+
+    MakeMKV ships both; the 32-bit console prints a deprecation warning
+    on every rip ("You are running a 32-bit (x86) version…") and is the
+    older build.  A saved config that still points at the 32-bit exe
+    (an older default or a manual pick) is silently moved to the 64-bit
+    one so the app runs the modern build.  Anything else — a custom
+    name, no 64-bit sibling, non-Windows — is left untouched.
+    """
+    text = str(path or "")
+    try:
+        if (
+            platform.system() == "Windows"
+            and os.path.basename(text).lower() == "makemkvcon.exe"
+        ):
+            sibling = os.path.join(os.path.dirname(text), "makemkvcon64.exe")
+            if os.path.isfile(sibling):
+                return sibling
+    except Exception:
+        pass
+    return text
+
+
 def _makemkvcon_common_paths() -> list[str]:
     if platform.system() != "Windows":
         return []
@@ -436,6 +461,12 @@ def _load_raw_config() -> tuple[ConfigDict, list[StartupConfigIssue]]:
 def _merge_config(raw: Mapping[str, object]) -> ConfigDict:
     cfg: ConfigDict = dict(DEFAULTS)
     cfg.update(raw)
+    # Prefer 64-bit MakeMKV: a saved config that still points at the
+    # 32-bit makemkvcon.exe is upgraded to makemkvcon64.exe when it
+    # exists next to it (avoids MakeMKV's 32-bit deprecation warning).
+    _mk = cfg.get("makemkvcon_path")
+    if isinstance(_mk, str) and _mk:
+        cfg["makemkvcon_path"] = _prefer_makemkvcon64(_mk)
     theme_overrides = cfg.get("opt_theme_overrides", {})
     if isinstance(theme_overrides, Mapping):
         cfg["opt_theme_overrides"] = {
@@ -791,6 +822,8 @@ def resolve_makemkvcon(
     *,
     allow_path_lookup: bool = False,
 ) -> ResolvedTool:
+    if configured_path:
+        configured_path = _prefer_makemkvcon64(configured_path)
     detected_candidates: list[tuple[str, str]] = []
     registry_candidate = _locate_makemkvcon_registry()
     if registry_candidate:

@@ -76,7 +76,7 @@ from shared.disc_memory import (
     compare_disc_memory_records,
 )
 
-from config import resolve_ffprobe, resolve_makemkvcon
+from config import resolve_ffmpeg, resolve_ffprobe, resolve_makemkvcon
 from utils.helpers import (
     MakeMKVDrive,
     clean_name,
@@ -357,6 +357,20 @@ class RipperEngine:
         self._ffprobe_source = resolved.source
         return resolved.path
 
+    def _get_ffmpeg(self) -> str:
+        cached = getattr(self, "_resolved_ffmpeg", None)
+        current = _norm_tool_path(self.cfg.get("ffmpeg_path", ""))
+        if cached and getattr(self, "_resolved_ffmpeg_src", None) == current:
+            return cached
+        resolved = resolve_ffmpeg(
+            current,
+            allow_path_lookup=self._allow_path_tool_resolution(),
+        )
+        self._resolved_ffmpeg = resolved.path
+        self._resolved_ffmpeg_src = current
+        self._ffmpeg_source = resolved.source
+        return resolved.path
+
     def _selected_drive_index(self) -> int:
         return safe_int(self.cfg.get("opt_drive_index", 0))
 
@@ -598,6 +612,14 @@ class RipperEngine:
         # UI (size-aware bar + per-title log line).  No-op until wired.
         self._rip_progress_cb = None
         self._rip_log_cb = None
+        # Per-title audio-track keep-lists from the picker's per-title
+        # audio dropdowns: {title_id: [0-based audio stream indices to
+        # keep]}.  A title ABSENT from the map keeps ALL its audio (the
+        # default), so an empty map means "rip everything, untouched".
+        # Applied by remuxing each ripped title down to the kept tracks
+        # (see strip_audio_tracks).  Set per picker answer via
+        # set_rip_audio_keep(); reset each time so it can't leak discs.
+        self._rip_audio_keep: dict[int, list[int]] = {}
         self.last_disc_info = {}
         self.last_classification: list = []
         # The controller sets this before a scan so the title classifier
@@ -2096,7 +2118,232 @@ class RipperEngine:
 
         return timed_out or proc.returncode == 0
 
+    def _run_sample_process(
+        self,
+        cmd,
+        watch_dir,
+        *,
+        min_bytes,
+        max_seconds,
+        cancel_event=None,
+    ) -> bool:
+        """Run a disposable mini-rip just long enough to capture a frame.
 
+        Used by the picker's background thumbnails: MakeMKV rips a title
+        into ``watch_dir`` and the loop terminates the process as soon
+        as ``min_bytes`` of MKV exist there — enough for a thumbnail —
+        or ``max_seconds`` pass (a generous cap: drives stuck in region
+        workarounds can spend a minute-plus before writing anything).
+
+        ``cancel_event`` (plus the session ``abort_event``) stops the rip
+        within a poll tick so the drive frees immediately when the user
+        answers the picker.  stdout goes to DEVNULL — nothing reads it,
+        and an undrained pipe would eventually block MakeMKV.
+
+        Returns True if any MKV bytes were produced.
+        """
+        from engine.rip_ops import _rip_dir_bytes
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                **_POPEN_FLAGS
+            )
+        except Exception:
+            return False
+        self.current_process = proc
+
+        start = time.time()
+        try:
+            while proc.poll() is None:
+                cancelled = self.abort_event.is_set() or (
+                    cancel_event is not None and cancel_event.is_set()
+                )
+                done = time.time() - start >= max_seconds
+                enough = _rip_dir_bytes(watch_dir) >= min_bytes
+                if cancelled or done or enough:
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                    break
+                time.sleep(0.5)
+        finally:
+            self.current_process = None
+        return _rip_dir_bytes(watch_dir) > 0
+
+    def set_rip_audio_keep(self, keep_map) -> int:
+        """Record the picker's per-title audio-keep lists for upcoming
+        rips.  ``keep_map`` is ``{title_id: [0-based audio indices]}``;
+        only titles the user trimmed need appear (a title left at "keep
+        all" is simply omitted).  Always REPLACES the previous map — an
+        empty/None map clears it, so a later disc can't inherit a trim.
+        Returns the number of titles that will be trimmed.
+        """
+        cleaned: dict[int, list[int]] = {}
+        for tid, keep in (keep_map or {}).items():
+            try:
+                key = int(tid)
+            except (TypeError, ValueError):
+                continue
+            idxs = sorted({int(i) for i in (keep or []) if int(i) >= 0})
+            cleaned[key] = idxs  # may be [] → drop all audio for this title
+        self._rip_audio_keep = cleaned
+        return len(cleaned)
+
+    def strip_audio_tracks(self, file_path, keep_indices, on_log=None) -> bool:
+        """Remux ``file_path`` in place keeping only the given 0-based
+        audio stream indices (video, subtitles, chapters preserved).
+
+        Safe by construction: writes a sibling temp, and only replaces
+        the original if ffmpeg exits cleanly and the temp is non-trivial.
+        On ANY failure the original (all tracks) is left untouched — a
+        trim can never corrupt or destroy a good rip.  Returns True when
+        the file was rewritten.
+        """
+        def _log(msg):
+            if on_log:
+                try:
+                    on_log(msg)
+                except Exception:  # noqa: BLE001
+                    pass
+
+        try:
+            if not file_path or not os.path.isfile(file_path):
+                return False
+            ffmpeg = self._get_ffmpeg()
+            if not ffmpeg:
+                _log("Audio trim skipped: ffmpeg not found.")
+                return False
+            # Clamp to the audio streams that actually exist, preserving
+            # order.  If the kept set already covers every audio stream,
+            # there's nothing to strip.
+            total = self._count_audio_streams(file_path)
+            keep = [i for i in keep_indices if 0 <= i < total]
+            if total <= 0 or len(keep) >= total:
+                return False
+
+            base = os.path.basename(file_path)
+            tmp = file_path + ".audiotrim.mkv"
+            maps: list[str] = ["-map", "0:v?"]
+            for i in keep:
+                maps += ["-map", f"0:a:{i}"]
+            maps += ["-map", "0:s?", "-map_chapters", "0"]
+            cmd = (
+                [ffmpeg, "-nostdin", "-y", "-i", file_path]
+                + maps
+                + ["-c", "copy", tmp]
+            )
+            kept_txt = (
+                f"{len(keep)} of {total} audio track(s)"
+                if keep else "no audio (all tracks dropped)"
+            )
+            _log(f"Trimming audio in {base} → keeping {kept_txt}...")
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    **_POPEN_FLAGS,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log(f"Audio trim failed to launch ({exc}); kept all tracks.")
+                self._safe_unlink(tmp)
+                return False
+            if (
+                proc.returncode == 0
+                and os.path.isfile(tmp)
+                and os.path.getsize(tmp) > 1024
+            ):
+                try:
+                    os.replace(tmp, file_path)
+                    _log(f"Audio trimmed in {base}.")
+                    return True
+                except OSError as exc:
+                    _log(f"Audio trim couldn't replace {base} ({exc}); kept all.")
+                    self._safe_unlink(tmp)
+                    return False
+            _log(
+                f"Audio trim produced no valid output for {base} "
+                "(exit "
+                f"{proc.returncode}); kept all tracks."
+            )
+            self._safe_unlink(tmp)
+            return False
+        except Exception as exc:  # noqa: BLE001 — never break a good rip
+            _log(f"Audio trim error ({exc}); kept all tracks.")
+            return False
+
+    def _count_audio_streams(self, file_path) -> int:
+        """Number of audio streams in ``file_path`` via ffprobe (0 on
+        any error — the caller then skips trimming, keeping all tracks)."""
+        try:
+            ffprobe = self._get_ffprobe()
+            if not ffprobe:
+                return 0
+            proc = subprocess.run(
+                [
+                    ffprobe, "-v", "error",
+                    "-select_streams", "a",
+                    "-show_entries", "stream=index",
+                    "-of", "csv=p=0",
+                    file_path,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                # ffprobe's output is UTF-8 (filenames echo into it);
+                # pin it so text=True doesn't locale-decode on Windows.
+                encoding="utf-8",
+                errors="replace",
+                **_POPEN_FLAGS,
+            )
+            return len([ln for ln in proc.stdout.splitlines() if ln.strip()])
+        except Exception:  # noqa: BLE001
+            return 0
+
+    @staticmethod
+    def _safe_unlink(path) -> None:
+        try:
+            if path and os.path.isfile(path):
+                os.remove(path)
+        except OSError:
+            pass
+
+    def rip_thumbnail_sample(
+        self,
+        rip_path,
+        title_id,
+        *,
+        # 12 MB ≈ the first ~15-25s of a DVD title — the smallest sample
+        # that reliably decodes a frame at the extractor's fixed ~10s
+        # seek.  Kept deliberately small: MakeMKV's per-title launch
+        # cost dominates the wall time, so extra bytes only slow the
+        # pass down ("takes too long" feedback, 2026-07-01).
+        min_bytes=12 * 1024 * 1024,
+        max_seconds=150,
+        cancel_event=None,
+    ) -> bool:
+        """Mini-rip one title into ``rip_path`` for thumbnail extraction
+        (delegated to rip_ops; see :meth:`_run_sample_process`)."""
+        from engine import rip_ops
+        return rip_ops.rip_thumbnail_sample(
+            self, rip_path, title_id,
+            min_bytes=min_bytes,
+            max_seconds=max_seconds,
+            cancel_event=cancel_event,
+        )
 
     def _get_rip_attempts(self):
         """Resolve retry strategy flags based on config toggles."""

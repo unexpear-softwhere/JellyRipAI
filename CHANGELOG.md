@@ -2,6 +2,38 @@
 
 <!-- markdownlint-disable MD013 -->
 
+## [1.0.28] - 2026-07-16
+
+Unstable pre-release — more say over what gets ripped: pick which audio
+tracks to keep per title, keyboard-friendly episode numbering, a 64-bit
+MakeMKV, and a messenger-style chat sidebar.
+
+### Added
+
+- **Per-title audio track selection.**  Every title in the "Select Titles
+  to Rip" picker now has an audio dropdown listing the tracks the scan
+  found.  Keep them all (the default — a normal rip) or untick the ones
+  you don't want; trimmed titles are remuxed after the rip to drop the
+  unchecked tracks.  If a trim ever fails, the full all-tracks file is
+  kept, so a rip can never be lost to it.
+
+### Changed
+
+- **The AI chat sidebar uses chat bubbles.**  The assistant transcript is
+  now rounded messenger-style bubbles — your messages on the right, the
+  assistant's on the left, each with the sender's name above it — and they
+  follow the active theme's colours instead of a flat text panel.
+- **MakeMKV runs 64-bit.**  When a 64-bit `makemkvcon64.exe` sits next to
+  a configured 32-bit `makemkvcon.exe`, JellyRip AI now uses the 64-bit
+  one automatically, so MakeMKV stops warning that the 32-bit build is
+  deprecated.
+
+### Fixed
+
+- **Tab moves down the picker again.**  While numbering episodes you can
+  press Tab to jump straight to the next row's number/name cell and keep
+  typing — a regression introduced by adding the audio column.
+
 ## [1.0.27] - 2026-07-01
 
 Unstable pre-release — a feedback pass on ripping: progress you can watch,

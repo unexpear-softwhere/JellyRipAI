@@ -984,10 +984,25 @@ class RipperController(LegacyControllerMixin):
         disc_titles: Sequence[DiscTitle],
         is_tv: bool,
     ) -> tuple[list[int] | None, int | None]:
+        # Picker thumbnails (Settings → Everyday → Workflow).  When on,
+        # every title is sampled BEFORE the picker opens — part of the
+        # scan step, in title order, with per-title progress in the log
+        # — and the finished images are handed to the dialog as a
+        # PRE-RESOLVED map.  The window therefore appears with every
+        # available image already in place and never changes afterward;
+        # the per-disc cache makes repeat opens instant.
+        thumbs: dict[int, str] = {}
+        if bool(self.engine.cfg.get("opt_picker_thumbnails", False)):
+            try:
+                self.pregenerate_picker_thumbnails(disc_titles)
+                thumbs = self.collect_picker_thumbnails(disc_titles)
+            except Exception:  # noqa: BLE001 — nicety must never block
+                thumbs = {}
         selected_ids_raw = self.gui.show_disc_tree(
             disc_titles,
             is_tv,
             self.preview_title,
+            thumbnails=thumbs,
         )
         # Capture the per-title episode names the user typed in the
         # picker (TV only).  Stored keyed by title id; the move step
@@ -1009,6 +1024,23 @@ class RipperController(LegacyControllerMixin):
             )
         except Exception:
             self._picker_episode_numbers = {}
+        # Apply the picker's per-title audio trims to the upcoming rip.
+        # Each ripped title is remuxed down to its kept tracks; titles
+        # left at "keep all" are untouched.  Always REPLACES the map, so
+        # a trim can't leak from one disc to the next.
+        try:
+            audio_keep = dict(self.gui.consume_audio_selections() or {})
+        except Exception:
+            audio_keep = {}
+        try:
+            trimmed = self.engine.set_rip_audio_keep(audio_keep)
+            if trimmed:
+                self.log(
+                    f"Audio: {trimmed} title(s) will keep only the "
+                    "tracks you left checked in the picker."
+                )
+        except Exception:  # noqa: BLE001 — default keeps all tracks
+            pass
         if selected_ids_raw is None:
             self.log("Cancelled.")
             return None, None
@@ -6094,13 +6126,16 @@ class RipperController(LegacyControllerMixin):
                 and titles_list
             ):
                 organize_titles = []
+                _org_file_by_id: dict[int, str] = {}
                 for _of, _odur, _omb in titles_list:
                     _otid = self._title_id_from_filename(_of)
+                    _oid = (
+                        _otid if _otid is not None
+                        else len(organize_titles)
+                    )
+                    _org_file_by_id[int(_oid)] = str(_of)
                     organize_titles.append({
-                        "id": (
-                            _otid if _otid is not None
-                            else len(organize_titles)
-                        ),
+                        "id": _oid,
                         "name": os.path.basename(_of),
                         "output_name": os.path.basename(_of),
                         "duration": (
@@ -6116,6 +6151,32 @@ class RipperController(LegacyControllerMixin):
                     "the picker (leave a title blank to file it as an "
                     "extra)."
                 )
+
+                # Same Settings toggle as the pre-rip picker.  These
+                # titles are already local files, so their frames are
+                # extracted HERE (a second or two each, or instant from
+                # the per-disc cache the pre-rip pass filled) and handed
+                # to the dialog pre-resolved — it opens with every image
+                # in place instead of loading them in afterward.
+                _org_thumbs: dict[int, str] = {}
+                if bool(
+                    self.engine.cfg.get("opt_picker_thumbnails", False)
+                ):
+                    for _tid, _f in _org_file_by_id.items():
+                        try:
+                            _jpg = self._thumb_cache_path(_tid)
+                            if (
+                                os.path.isfile(_jpg)
+                                and os.path.getsize(_jpg) > 0
+                            ):
+                                _org_thumbs[_tid] = _jpg
+                            else:
+                                _got = self._thumb_from_file(_f, _jpg)
+                                if _got:
+                                    _org_thumbs[_tid] = _got
+                        except Exception:  # noqa: BLE001 — nicety only
+                            continue
+
                 org_ids = self.gui.show_disc_tree(
                     organize_titles, True, None,
                     window_title="Organize — Number & Name Episodes",
@@ -6123,6 +6184,7 @@ class RipperController(LegacyControllerMixin):
                         "These titles are already ripped — set each "
                         "title's episode number and name."
                     ),
+                    thumbnails=_org_thumbs,
                 )
                 if not org_ids:
                     self.log("Cancelled.")

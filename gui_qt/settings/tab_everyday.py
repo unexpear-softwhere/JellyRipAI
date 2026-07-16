@@ -18,6 +18,7 @@ Exposes the cfg keys most users adjust frequently:
     - ``opt_extras_folder_mode``              — single vs per-category extras folders
     - ``opt_bonus_folder_name``               — top-level bonus-content folder name
 * **Workflow**
+    - ``opt_picker_thumbnails``               — sample per-title thumbnails for the picker
     - ``opt_smart_rip_mode``                  — auto-pick titles based on classifier
     - ``opt_smart_min_minutes``               — duration floor for smart-rip auto-pick
     - ``opt_session_failure_report``          — generate end-of-run failure report
@@ -183,6 +184,12 @@ class EverydayTab(QWidget):
         form5.setContentsMargins(0, 0, 0, 0)
         form5.setSpacing(8)
         outer.addWidget(self._section_label("Workflow"))
+        self._add_checkbox(
+            form5, "opt_picker_thumbnails",
+            "Show video thumbnails in the disc picker "
+            "(samples each title after the scan — first pass takes time)",
+            default=False,
+        )
         self._add_checkbox(
             form5, "opt_smart_rip_mode",
             "Smart rip mode (auto-pick titles based on classifier)",

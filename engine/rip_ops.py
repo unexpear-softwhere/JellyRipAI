@@ -55,6 +55,24 @@ def rip_size_poller(
                     pass
         stop_event.wait(1.0)
 
+def _maybe_strip_title_audio(self, tid, files, on_log):
+    """If the picker trimmed this title's audio, remux each ripped file
+    down to the kept tracks.  No-op when the title kept all audio (it's
+    absent from the keep map), so default rips are untouched."""
+    keep = getattr(self, "_rip_audio_keep", None) or {}
+    try:
+        key = int(tid)
+    except (TypeError, ValueError):
+        return
+    if key not in keep:
+        return
+    for f in list(files or []):
+        try:
+            self.strip_audio_tracks(f, keep[key], on_log)
+        except Exception:  # noqa: BLE001 — a trim must never break the rip
+            pass
+
+
 # The following functions are extracted from RipperEngine for modularization.
 # They require the RipperEngine instance (self) to be passed as the first argument.
 
@@ -76,6 +94,57 @@ def size_weighted_progress(
     cum_before = sum(title_bytes[:idx])
     current = cum_before + title_bytes[idx] * (pct / 100.0)
     return current / total * 100.0, int(current), int(total)
+
+
+def rip_thumbnail_sample(
+    self,
+    rip_path,
+    title_id,
+    *,
+    min_bytes,
+    max_seconds,
+    cancel_event=None,
+):
+    """Quiet mini-rip of one title, just enough bytes for a thumbnail.
+
+    Same command shape as ``rip_preview_title`` (robot mode ``-r`` +
+    first-attempt flags) but silent — no on_log, because the picker may
+    run ten of these in the background and the session log shouldn't
+    fill with rip chatter.  ``rip_path`` should be a fresh per-title
+    temp dir; the engine loop stops the process once ``min_bytes`` of
+    MKV exist there (see ``_run_sample_process``).
+    """
+    makemkvcon  = self._get_makemkvcon()
+    disc_target = self.get_disc_target()
+    _quiet = lambda _m: None  # noqa: E731 — CLI-arg warnings stay silent too
+    # The previous sample is stopped by KILLING MakeMKV mid-read, and
+    # the drive needs a settle window before the next launch — without
+    # this probe, back-to-back samples fail instantly every few titles
+    # (the "spotty thumbnails" field failure, 2026-07-01: t02/t07/t10
+    # missing while their neighbors sampled fine).  Same guard the real
+    # rip uses before every MakeMKV launch.
+    if not self._wait_for_drive_ready(_quiet, context="thumbnail sample"):
+        return False
+    global_args = parse_cli_args(
+        self.cfg.get("opt_makemkv_global_args", ""), _quiet,
+        "MakeMKV global args",
+    )
+    rip_args = parse_cli_args(
+        self.cfg.get("opt_makemkv_rip_args", ""), _quiet,
+        "MakeMKV rip args",
+    )
+    os.makedirs(rip_path, exist_ok=True)
+    cmd = (
+        [makemkvcon] + global_args +
+        ["-r", "mkv", disc_target, str(title_id), rip_path] +
+        RIP_ATTEMPT_FLAGS[0] + rip_args
+    )
+    return self._run_sample_process(
+        cmd, rip_path,
+        min_bytes=min_bytes,
+        max_seconds=max_seconds,
+        cancel_event=cancel_event,
+    )
 
 
 def rip_preview_title(self, rip_path, title_id, preview_seconds, on_log):
@@ -329,6 +398,7 @@ def rip_selected_titles(self, rip_path, title_ids, on_progress, on_log):
             if success:
                 if new_files:
                     self.last_title_file_map[int(tid)] = list(new_files)
+                    _maybe_strip_title_audio(self, tid, new_files, on_log)
                     title_success = True
                     break
                 else:
@@ -377,6 +447,7 @@ def rip_selected_titles(self, rip_path, title_ids, on_progress, on_log):
                         f"output file(s) — treating as degraded success."
                     )
                     self.last_title_file_map[int(tid)] = list(new_files)
+                    _maybe_strip_title_audio(self, tid, new_files, on_log)
                     self.last_degraded_titles.append(int(tid) + 1)
                     title_success = True
                     break

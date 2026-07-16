@@ -165,9 +165,16 @@ def _prepare_startup_environment() -> None:
     # Sweep any leftover watch/preview clips from a prior run (a
     # full-title watch the user never continued past, or a failed
     # preview) so disposable clips never pile up in local temp.
+    # The picker-thumbnail cache is swept the same way — it only
+    # serves the current run's pickers, and a hard kill can leave
+    # a ~24 MB mini-rip sample dir behind.
     try:
-        from controller.legacy_compat import purge_preview_temp
+        from controller.legacy_compat import (
+            purge_preview_temp,
+            purge_thumbs_temp,
+        )
         purge_preview_temp()
+        purge_thumbs_temp()
     except Exception:
         pass
 

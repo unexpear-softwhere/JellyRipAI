@@ -28,7 +28,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-__version__ = "1.0.27"
+__version__ = "1.0.28"
 APP_VARIANT = "ai"
 APP_DISPLAY_NAME = "JellyRip AI"
 APP_EXE_BASENAME = "JellyRipAI"
@@ -216,6 +216,12 @@ DEFAULTS: dict[str, ConfigScalar] = {
     "opt_log_trim_lines": 200000,
     "opt_smart_rip_mode": False,
     "opt_smart_min_minutes": 20,
+    # Disc-picker thumbnails: after the scan, sample each title (quiet
+    # MakeMKV mini-rips, cached per disc) so the picker opens with a
+    # video frame beside every row.  Adds time between scan and picker
+    # — first pass only — so it's toggleable.  OFF by default for now
+    # (feature parked; the code stays, flip on in Settings to try it).
+    "opt_picker_thumbnails": False,
     # Watch-before-rip: offer a TV-disc gate that opens the title
     # picker with a Watch-in-VLC button — the full title rips to a
     # disposable local-temp file, plays, and is deleted after.

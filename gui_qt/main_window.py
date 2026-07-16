@@ -1064,11 +1064,12 @@ class MainWindow(QMainWindow):
 
         Thread-safe."""
         def _call() -> "list[str] | None":
-            ids, names, numbers = _run_disc_tree(
+            ids, names, numbers, audio = _run_disc_tree(
                 self, disc_titles, is_tv, preview_callback, **kwargs,
             )
             self._last_episode_names = dict(names or {})
             self._last_episode_numbers = dict(numbers or {})
+            self._last_audio_selections = dict(audio or {})
             return ids
         return run_on_main(self._invoker, _call)
 
@@ -1090,6 +1091,16 @@ class MainWindow(QMainWindow):
         numbers = dict(getattr(self, "_last_episode_numbers", {}) or {})
         self._last_episode_numbers = {}
         return numbers
+
+    def consume_audio_selections(self) -> "dict[int, list[int]]":
+        """Return (and reset) the per-title audio-track trims from the
+        most recent ``show_disc_tree`` — {title id: kept 0-based audio
+        indices}, only for titles the user trimmed (empty = keep all
+        audio everywhere).  One-shot, like the episode name/number
+        consumers, so a later disc can't inherit a trim."""
+        audio = dict(getattr(self, "_last_audio_selections", {}) or {})
+        self._last_audio_selections = {}
+        return audio
 
     def show_temp_manager(
         self,

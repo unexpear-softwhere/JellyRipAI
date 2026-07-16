@@ -2,7 +2,7 @@
 ; Compile with: ISCC installer\JellyRip.iss
 
 #define MyAppName "JellyRip AI"
-#define MyAppVersion "1.0.27"
+#define MyAppVersion "1.0.28"
 #define MyAppPublisher "unexpear"
 #define MyAppURL "https://github.com/unexpear-softwhere/JellyRipAI"
 #define MyAppExeName "JellyRipAI.exe"

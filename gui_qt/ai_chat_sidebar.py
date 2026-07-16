@@ -48,18 +48,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QKeyEvent, QTextCursor
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QFont, QKeyEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDockWidget,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
-    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -226,11 +227,29 @@ class ChatSidebar(QDockWidget):
 
         body_layout.addLayout(mode_row)
 
-        # ── Transcript: QTextBrowser with markdown rendering ──────
-        self._transcript = QTextBrowser()
+        # ── Transcript: a scroll of chat bubbles ──────────────────
+        # Standard-chat look: each message is a rounded bubble (a real
+        # widget, so QSS border-radius applies — a QTextBrowser's rich
+        # text can't round corners), with the sender's name attached
+        # just above it.  User bubbles sit on the right, the assistant's
+        # on the left.
+        self._transcript = QScrollArea()
         self._transcript.setObjectName("chatTranscript")
-        self._transcript.setOpenExternalLinks(True)
-        self._transcript.setReadOnly(True)
+        self._transcript.setWidgetResizable(True)
+        self._transcript.setFrameShape(QFrame.Shape.NoFrame)
+        self._transcript.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        vp = self._transcript.viewport()
+        if vp is not None:
+            vp.setAutoFillBackground(False)
+        self._transcript_host = QWidget()
+        self._transcript_host.setObjectName("chatTranscriptHost")
+        self._bubbles = QVBoxLayout(self._transcript_host)
+        self._bubbles.setContentsMargins(2, 2, 2, 2)
+        self._bubbles.setSpacing(12)
+        self._bubbles.addStretch(1)  # keep bubbles pinned to the top
+        self._transcript.setWidget(self._transcript_host)
         body_layout.addWidget(self._transcript, stretch=1)
 
         # ── Input field ────────────────────────────────────────────
@@ -269,10 +288,13 @@ class ChatSidebar(QDockWidget):
 
         self.setWidget(body)
 
-        # Track the live in-progress assistant message for streaming.
-        # When set, ``append_assistant_message(text, is_streaming=True)``
-        # appends to this position rather than adding a new bubble.
-        self._streaming_position: int | None = None
+        # Message log (label, text, role) — the source of truth for
+        # Copy Chat and for wiping on New Chat.  Plus the live streaming
+        # bubble: while set, streaming chunks accumulate into it instead
+        # of starting a new bubble.
+        self._messages: "list[tuple[str, str, str]]" = []
+        self._streaming_body: "QLabel | None" = None
+        self._streaming_text: str = ""
 
     # ── Model picker ───────────────────────────────────────────────
 
@@ -360,25 +382,30 @@ class ChatSidebar(QDockWidget):
         """
         if not text:
             return
-        if is_streaming and self._streaming_position is not None:
-            # Append to the live block.
-            cursor = self._transcript.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            cursor.insertMarkdown(text)
+        if is_streaming and self._streaming_body is not None:
+            # Accumulate into the live bubble (QLabel needs the full
+            # text each time, so we keep a running copy).
+            self._streaming_text += text
+            self._streaming_body.setText(self._streaming_text)
+            if self._messages:
+                lbl, _old, role = self._messages[-1]
+                self._messages[-1] = (lbl, self._streaming_text, role)
             self._scroll_to_end()
             return
 
-        self._append_block("Assistant", text, role="assistant")
+        row = self._append_block("Assistant", text, role="assistant")
         if is_streaming:
-            # Mark the current end so further streaming chunks land here.
-            self._streaming_position = self._transcript.document().characterCount() - 1
+            self._streaming_body = getattr(row, "_body", None)
+            self._streaming_text = text
         else:
-            self._streaming_position = None
+            self._streaming_body = None
+            self._streaming_text = ""
 
     def finalize_streaming(self) -> None:
         """Clear the streaming marker so the next assistant message
-        starts a fresh block."""
-        self._streaming_position = None
+        starts a fresh bubble."""
+        self._streaming_body = None
+        self._streaming_text = ""
 
     def set_status(self, text: str, *, state: str = "ready") -> None:
         """Update the status label text + ``state`` QSS property.
@@ -408,17 +435,27 @@ class ChatSidebar(QDockWidget):
 
     def clear_transcript(self) -> None:
         """Empty the transcript — used by "New Chat"."""
-        self._transcript.clear()
-        self._streaming_position = None
+        for i in reversed(range(self._bubbles.count())):
+            widget = self._bubbles.itemAt(i).widget()
+            if widget is not None:  # leave the trailing stretch spacer
+                self._bubbles.takeAt(i)
+                widget.deleteLater()
+        self._messages.clear()
+        self._streaming_body = None
+        self._streaming_text = ""
         self.set_status(_DEFAULT_STATUS, state="ready")
 
     def transcript_text(self) -> str:
         """Return the transcript as plain text (for Copy Chat)."""
-        return self._transcript.toPlainText()
+        return "\n\n".join(
+            f"{label}: {text}" for label, text, _role in self._messages
+        )
 
     def transcript_markdown(self) -> str:
         """Return the transcript as markdown."""
-        return self._transcript.toMarkdown()
+        return "\n\n".join(
+            f"**{label}**\n\n{text}" for label, text, _role in self._messages
+        )
 
     # ── Internal helpers ───────────────────────────────────────────
 
@@ -443,42 +480,81 @@ class ChatSidebar(QDockWidget):
         """Move keyboard focus to the input field."""
         self._input.setFocus()
 
-    def _append_block(self, label: str, text: str, *, role: str) -> None:
-        """Insert one role-labeled message block into the transcript.
-
-        Format::
-
-            **You**
-
-            <user message rendered as markdown>
-
-            ---
-
-            **Assistant**
-
-            <assistant message rendered as markdown>
-
-            ---
-        """
-        cursor = self._transcript.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.End)
-
-        # Insert a thin divider before non-first blocks.
-        if self._transcript.document().characterCount() > 1:
-            cursor.insertHtml('<hr style="margin:8px 0;border:0;border-top:1px solid #44556680;">')
-
-        cursor.insertHtml(
-            f'<p style="margin:0 0 4px 0;"><b>{label}</b></p>'
-        )
-        # Body rendered as markdown so ``**bold**``, code fences,
-        # lists, and links all render natively.
-        cursor.insertMarkdown(text)
+    def _append_block(self, label: str, text: str, *, role: str) -> QWidget:
+        """Add one message bubble (sender name attached above it) and
+        return its row widget — the row carries the body ``QLabel`` as
+        ``._body`` so streaming can keep updating it."""
+        row = self._make_bubble(label, text, role)
+        # Insert before the trailing stretch so bubbles stack downward.
+        self._bubbles.insertWidget(self._bubbles.count() - 1, row)
+        self._messages.append((label, text, role))
         self._scroll_to_end()
+        return row
+
+    def _make_bubble(self, label: str, text: str, role: str) -> QWidget:
+        """Build one chat row: the sender name attached just above a
+        rounded message bubble, aligned to the sender's side (user on
+        the right, assistant on the left).
+
+        The bubble carries objectName ``chatBubbleBody`` + a
+        ``bubbleRole`` property so the active theme's QSS colors it (sent
+        = info accent, received = card surface) — no baked-in colors, so
+        it tracks whatever theme is applied."""
+        is_user = role == "user"
+
+        name = QLabel(label)
+        name.setObjectName("chatBubbleSender")
+
+        body = QLabel()
+        body.setObjectName("chatBubbleBody")
+        body.setProperty("bubbleRole", "user" if is_user else "assistant")
+        body.setTextFormat(Qt.TextFormat.MarkdownText)
+        body.setText(text)
+        body.setWordWrap(True)
+        body.setMaximumWidth(340)
+        body.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.LinksAccessibleByMouse
+        )
+        body.setOpenExternalLinks(True)
+
+        column = QVBoxLayout()
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(2)  # name sits attached just above the bubble
+        side = (
+            Qt.AlignmentFlag.AlignRight if is_user
+            else Qt.AlignmentFlag.AlignLeft
+        )
+        column.addWidget(name, 0, side)
+        column.addWidget(body, 0, side)
+
+        col_host = QWidget()
+        col_host.setLayout(column)
+
+        row = QWidget()
+        row.setObjectName("chatBubbleRow")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(0)
+        if is_user:
+            row_layout.addStretch(1)
+            row_layout.addWidget(col_host)
+        else:
+            row_layout.addWidget(col_host)
+            row_layout.addStretch(1)
+
+        row._body = body  # type: ignore[attr-defined]
+        return row
 
     def _scroll_to_end(self) -> None:
-        sb = self._transcript.verticalScrollBar()
-        if sb is not None:
-            sb.setValue(sb.maximum())
+        # Defer to after the layout settles so the scrollbar's maximum
+        # reflects the just-added bubble.
+        def _do() -> None:
+            bar = self._transcript.verticalScrollBar()
+            if bar is not None:
+                bar.setValue(bar.maximum())
+
+        QTimer.singleShot(0, _do)
 
     # ── Close hook ─────────────────────────────────────────────────
 

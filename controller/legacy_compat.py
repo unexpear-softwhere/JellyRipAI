@@ -42,7 +42,7 @@ from controller.session_paths import (
     log_session_paths,
     validate_session_paths,
 )
-from config import resolve_vlc
+from config import resolve_ffmpeg, resolve_vlc
 from shared.runtime import __version__
 from utils.helpers import clean_name, make_temp_title
 from utils.media import select_largest_file
@@ -60,6 +60,17 @@ def _preview_root() -> str:
     return os.path.join(tempfile.gettempdir(), _PREVIEW_TEMP_SUBDIR, "preview")
 
 
+def _thumbs_root() -> str:
+    """Local-temp home for picker thumbnails, keyed per disc.
+
+    A SIBLING of the preview dir on purpose: ``purge_preview_temp``
+    sweeps only ``preview/``, so cached thumbnails survive across runs —
+    reopening the picker for a known disc shows its thumbnails
+    instantly instead of re-reading the drive.
+    """
+    return os.path.join(tempfile.gettempdir(), _PREVIEW_TEMP_SUBDIR, "thumbs")
+
+
 def purge_preview_temp() -> None:
     """Best-effort sweep of leftover preview clips from a prior run.
 
@@ -72,6 +83,23 @@ def purge_preview_temp() -> None:
     """
     try:
         root = _preview_root()
+        if os.path.isdir(root):
+            shutil.rmtree(root, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def purge_thumbs_temp() -> None:
+    """Best-effort sweep of the picker-thumbnail cache at startup.
+
+    Thumbnails exist to serve the CURRENT run's pickers (pre-rip and
+    organize); across runs they're just accumulating temp files — a
+    few KB per jpg, but also any mini-rip sample dir a hard kill left
+    behind (those are ~24 MB each).  Clearing the whole thumbs root at
+    launch guarantees nothing builds up, mirroring the preview purge.
+    """
+    try:
+        root = _thumbs_root()
         if os.path.isdir(root):
             shutil.rmtree(root, ignore_errors=True)
     except Exception:
@@ -1027,6 +1055,251 @@ class LegacyControllerMixin:
         # Anything still registered was watched but left unchecked.
         self.discard_watched_rips()
         return reused
+
+    def _thumb_cache_path(self, title_id: int) -> str:
+        """Cache location for one title's picker thumbnail.
+
+        Keyed by the scanned disc's label so a re-opened picker (or the
+        organize pass after the rip) reuses frames instead of touching
+        the drive again.  Falls back to a generic bucket when the scan
+        didn't capture a label.
+        """
+        label = str(
+            (getattr(self.engine, "last_disc_info", {}) or {}).get("title")
+            or "disc"
+        )
+        safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", label).strip("_") or "disc"
+        return os.path.join(_thumbs_root(), safe, f"t{int(title_id):02d}.jpg")
+
+    # Fixed seek ladders so every title's frame comes from the same
+    # depth (consistent-looking rows instead of random frames).  Full
+    # local files (organize/watched-rip) can afford ~45s in — past most
+    # cold-opens/logos.  Mini-rip SAMPLES are kept tiny for speed
+    # (~12 MB ≈ 15-25s of DVD), so they seek a shallow ladder instead;
+    # the representative-frame filter still dodges black/logo frames.
+    _THUMB_SEEKS: tuple[str, ...] = ("00:00:45", "00:00:20", "00:00:05")
+    _SAMPLE_SEEKS: tuple[str, ...] = ("00:00:10", "00:00:03")
+
+    def _thumb_from_file(
+        self,
+        video_path: str,
+        out_jpg: str,
+        seeks: "tuple[str, ...] | None" = None,
+    ) -> "str | None":
+        """Extract one frame from a local file into ``out_jpg``.
+        Returns the jpg path, or None.  Never raises, never logs —
+        thumbnails are a background nicety."""
+        try:
+            from engine.thumbnails import generate_thumbnail
+
+            ffmpeg = resolve_ffmpeg(None).path
+            if not ffmpeg or not video_path or not os.path.isfile(video_path):
+                return None
+            os.makedirs(os.path.dirname(out_jpg), exist_ok=True)
+            if generate_thumbnail(
+                video_path, out_jpg, ffmpeg,
+                width=128, seeks=(seeks or self._THUMB_SEEKS),
+            ):
+                return out_jpg
+        except Exception:
+            pass
+        return None
+
+    def thumbnail_title(
+        self, title_id: int, cancel_event: "threading.Event | None" = None
+    ) -> "str | None":
+        """Produce a picker thumbnail for one disc title (or None).
+
+        Titles aren't files yet at picker time and commercial discs are
+        encrypted, so the frame comes from a quiet MakeMKV mini-rip: rip
+        into local temp only until enough bytes exist for a frame, kill
+        the process, extract with ffmpeg, cache the jpg per disc+title.
+
+        Order of preference:
+          1. cached jpg from an earlier attempt (instant);
+          2. a kept watched-rip of this title (local file, no drive);
+          3. mini-rip sample (the drive).
+
+        Skips (returns None) when a watch preview holds the drive, when
+        cancelled, or on any failure — silently: this must never disturb
+        the rip workflow or spam the log.
+        """
+        try:
+            tid = int(title_id)
+            out_jpg = self._thumb_cache_path(tid)
+            if os.path.isfile(out_jpg) and os.path.getsize(out_jpg) > 0:
+                return out_jpg
+
+            # Watched rip already on local disk → no drive access needed.
+            with self._watched_rip_lock():
+                watched = dict(getattr(self, "_watched_rips", None) or {})
+            src = watched.get(tid)
+            if src and os.path.isfile(src):
+                got = self._thumb_from_file(src, out_jpg)
+                if got:
+                    return got
+
+            if cancel_event is not None and cancel_event.is_set():
+                return None
+            # Never fight the Watch-in-VLC flow for the drive.
+            if not self._preview_lock.acquire(blocking=False):
+                return None
+            sample_dir = None
+            try:
+                if self.engine.abort_event.is_set():
+                    return None
+                os.makedirs(_thumbs_root(), exist_ok=True)
+                sample_dir = tempfile.mkdtemp(
+                    prefix=f"sample_t{tid:02d}_", dir=_thumbs_root()
+                )
+                self.engine.rip_thumbnail_sample(
+                    sample_dir, tid, cancel_event=cancel_event
+                )
+                files = self._safe_glob(
+                    os.path.join(sample_dir, "**", "*.mkv"),
+                    recursive=True,
+                    context="Scanning thumbnail sample",
+                )
+                sample = select_largest_file(files) if files else None
+                if not sample:
+                    return None
+                return self._thumb_from_file(
+                    sample, out_jpg, seeks=self._SAMPLE_SEEKS
+                )
+            finally:
+                self._preview_lock.release()
+                if sample_dir:
+                    # The sample process was just KILLED — its handle on
+                    # the partial MKV can outlive it for a beat, which
+                    # would silently defeat a single rmtree and leak a
+                    # ~24 MB dir.  One short-delay retry catches that;
+                    # the startup purge sweeps anything that still slips.
+                    shutil.rmtree(sample_dir, ignore_errors=True)
+                    if os.path.isdir(sample_dir):
+                        time.sleep(0.5)
+                        shutil.rmtree(sample_dir, ignore_errors=True)
+        except Exception:
+            return None
+
+    def _missing_thumbnail_ids(self, ids: "Sequence[int]") -> list[int]:
+        """The subset of ``ids`` with no cached thumbnail on disk."""
+        out: list[int] = []
+        for tid in ids:
+            jpg = self._thumb_cache_path(tid)
+            try:
+                if os.path.isfile(jpg) and os.path.getsize(jpg) > 0:
+                    continue
+            except OSError:
+                pass
+            out.append(tid)
+        return out
+
+    def pregenerate_picker_thumbnails(
+        self, disc_titles: "Sequence[Mapping[str, Any]]"
+    ) -> None:
+        """Sample every picker thumbnail up front, as part of the scan
+        step, so the picker opens with all of its images already there
+        (instead of trickling in while the user waits on them).
+
+        Serial and blocking by design — the drive is idle between scan
+        and picker, and each title logs its progress so the wait is
+        visible.  After the first pass the cache is RE-CHECKED and any
+        misses are retried (up to 3 passes total): a sample can fail
+        transiently when the drive is still settling from the previous
+        one, so a single pass came out spotty in the field.  Cached
+        titles are skipped, so this only costs time the first pass over
+        a disc; honors Stop Session between titles.
+        """
+        ids: list[int] = []
+        for t in disc_titles or []:
+            try:
+                ids.append(int(t.get("id")))
+            except (TypeError, ValueError):
+                continue
+        # Sample in TITLE order (1, 2, 3, …) — ``disc_titles`` arrives in
+        # the scan's ranked order (best-scored first), which made the
+        # log read "title 5, title 6, title 4, title 2…" in the field.
+        # Title order matches the picker rows the images are for.
+        ids.sort()
+        if not ids:
+            return
+        if not self._missing_thumbnail_ids(ids):
+            self.log("Thumbnails: all cached from an earlier pass.")
+            return
+
+        _PASSES = 3
+        for attempt in range(1, _PASSES + 1):
+            missing = self._missing_thumbnail_ids(ids)
+            if not missing:
+                break
+            if attempt == 1:
+                self.log(
+                    f"Thumbnails: sampling {len(missing)} title(s) so "
+                    "the picker opens with images (first pass per disc; "
+                    "turn off in Settings → Everyday → Workflow)..."
+                )
+            else:
+                self.log(
+                    f"Thumbnails: retrying {len(missing)} missed "
+                    f"title(s) (pass {attempt}/{_PASSES})..."
+                )
+            for i, tid in enumerate(missing, start=1):
+                if self.engine.abort_event.is_set():
+                    self.log("Thumbnails: stopped (session aborted).")
+                    return
+                try:
+                    self.gui.set_status(
+                        f"Thumbnails: sampling title {tid + 1} "
+                        f"({i}/{len(missing)}, pass {attempt})..."
+                    )
+                except Exception:
+                    pass
+                if self.thumbnail_title(tid):
+                    self.log(
+                        f"Thumbnails: title {tid + 1} ready "
+                        f"({i}/{len(missing)})."
+                    )
+                else:
+                    self.log(
+                        f"Thumbnails: title {tid + 1} not sampled "
+                        f"({i}/{len(missing)}) — will retry."
+                    )
+
+        # Completeness check — the picker opens right after this, so
+        # say plainly whether everything is in place.
+        still_missing = self._missing_thumbnail_ids(ids)
+        if still_missing:
+            names = ", ".join(str(tid + 1) for tid in still_missing)
+            self.log(
+                f"Thumbnails: {len(ids) - len(still_missing)}/{len(ids)} "
+                f"in place; title(s) {names} couldn't be sampled — "
+                "they'll show without an image."
+            )
+        else:
+            self.log(f"Thumbnails: all {len(ids)} in place.")
+
+    def collect_picker_thumbnails(
+        self, disc_titles: "Sequence[Mapping[str, Any]]"
+    ) -> dict[int, str]:
+        """Cached thumbnail paths for these titles, keyed by title id.
+
+        Read-only cache lookup (no drive, no sampling) — the map the
+        picker dialog is handed so it opens with its images already in
+        place.  Titles with no cached frame are simply absent.
+        """
+        out: dict[int, str] = {}
+        for t in disc_titles or []:
+            try:
+                tid = int(t.get("id"))
+            except (TypeError, ValueError):
+                continue
+            jpg = self._thumb_cache_path(tid)
+            try:
+                if os.path.isfile(jpg) and os.path.getsize(jpg) > 0:
+                    out[tid] = jpg
+            except OSError:
+                continue
+        return out
 
     def preview_title(
         self, title_id: int, preview_seconds: int | None = None

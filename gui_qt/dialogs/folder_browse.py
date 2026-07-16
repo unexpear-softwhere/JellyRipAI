@@ -114,6 +114,11 @@ class FolderBrowseWindow(QDialog):
         self._table.setHorizontalHeaderLabels(list(_HEADERS))
         self._table.setSortingEnabled(True)
         self._table.setIconSize(QSize(_THUMB_W, _THUMB_H))  # room for thumbnails
+        # Rows must be tall enough to actually SHOW a 128x72 thumbnail.  The
+        # default ~30px row clips the icon to an invisible sliver — which
+        # reads as "no thumbnails at all", especially on dark DVD frames.
+        self._table.verticalHeader().setDefaultSectionSize(_THUMB_H + 8)
+        self._table.verticalHeader().setVisible(False)  # no row-number gutter
         self._table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )

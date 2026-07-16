@@ -751,3 +751,46 @@ QToolTip {
     border: 1px solid #30363d;
     padding: 4px 8px;
 }
+
+/* ---- AI chat bubbles ------------------------------------------------ */
+/* Messenger-style transcript: the sender's message sits in a rounded
+ * bubble with the sender-side bottom corner squared (the "tail").  Sent
+ * (user) = the info accent + its readable foreground; received
+ * (assistant) = the card surface with a hairline border so it reads
+ * even when card is close to bg.  Colors come from the theme tokens so
+ * bubbles track whatever theme is active. */
+
+QScrollArea#chatTranscript,
+QWidget#chatTranscriptHost {
+    background: transparent;
+    border: none;
+}
+
+QLabel#chatBubbleSender {
+    color: #8b949e;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 0 7px;
+}
+
+QLabel#chatBubbleBody {
+    border-radius: 17px;
+    padding: 8px 13px;
+    background-color: #161b22;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+}
+
+QLabel#chatBubbleBody[bubbleRole="assistant"] {
+    background-color: #161b22;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+    border-bottom-left-radius: 5px;
+}
+
+QLabel#chatBubbleBody[bubbleRole="user"] {
+    background-color: #1f6feb;
+    color: #ffffff;
+    border: 1px solid #1f6feb;
+    border-bottom-right-radius: 5px;
+}
